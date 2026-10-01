@@ -9,7 +9,7 @@ export async function startDashboard(client: Client) {
   const app = Fastify({ logger: false });
 
   await app.register(cors, {
-    origin: '*',
+    origin: process.env.DASHBOARD_URL || false, // Exact origin or disable
   });
 
   // Serve the React frontend in production

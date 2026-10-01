@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../services/api';
-import { Youtube, Plus, Edit2, Trash2, Bell, Check, X } from 'lucide-react';
+import { Youtube, Plus, Edit2, Trash2, Check, X, Bell } from 'lucide-react';
 
 export default function YouTube() {
   const [channels, setChannels] = useState<any[]>([]);
@@ -8,14 +8,15 @@ export default function YouTube() {
   const [error, setError] = useState<string | null>(null);
   
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [urlInput, setUrlInput] = useState('');
   const [formData, setFormData] = useState({
     id: '',
-    guild_id: '',
     discord_channel_id: '',
     channel_name: '',
     mention_role_id: '',
     custom_message: '',
-    enabled: 1
+    enabled: 1,
+    channel_url: ''
   });
 
   useEffect(() => {
@@ -33,8 +34,27 @@ export default function YouTube() {
     }
   };
 
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setUrlInput(val);
+    
+    // Attempt to resolve UC... ID
+    const match = val.match(/(?:channel\/|UC)([a-zA-Z0-9_-]{22})/);
+    if (match) {
+      const id = match[1].startsWith('UC') ? match[1] : \`UC\${match[1]}\`;
+      setFormData({ ...formData, id, channel_url: \`https://youtube.com/channel/\${id}\` });
+    } else {
+      setFormData({ ...formData, id: '', channel_url: val });
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.id) {
+      alert('Could not resolve YouTube Channel ID. Please provide a direct channel ID or URL containing UC...');
+      return;
+    }
+    
     try {
       if (channels.find(c => c.id === formData.id)) {
         await api.patch(\`/youtube/channels/\${formData.id}\`, formData);
@@ -67,6 +87,15 @@ export default function YouTube() {
     }
   };
 
+  const handleTest = async (id: string) => {
+    try {
+      await api.post(\`/youtube/channels/\${id}/test\`, {});
+      alert('Test notification sent successfully!');
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   if (loading) return <div className="text-gray-400">Loading channels...</div>;
   if (error) return <div className="text-red-500">{error}</div>;
 
@@ -75,7 +104,8 @@ export default function YouTube() {
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold flex items-center gap-2"><Youtube className="text-red-500" /> YouTube Channels</h2>
         <button onClick={() => {
-          setFormData({ id: '', guild_id: '', discord_channel_id: '', channel_name: '', mention_role_id: '', custom_message: '', enabled: 1 });
+          setUrlInput('');
+          setFormData({ id: '', discord_channel_id: '', channel_name: '', mention_role_id: '', custom_message: '', enabled: 1, channel_url: '' });
           setIsModalOpen(true);
         }} className="flex items-center gap-2 bg-[#5865F2] hover:bg-[#4752C4] px-4 py-2 rounded transition-colors text-sm font-medium">
           <Plus size={16} /> Add Channel
@@ -86,7 +116,6 @@ export default function YouTube() {
         <div className="bg-[#151921] border border-gray-800 rounded-lg p-12 text-center">
           <Youtube className="mx-auto text-gray-600 mb-4" size={48} />
           <h3 className="text-xl font-bold text-gray-300">No YouTube channels configured.</h3>
-          <p className="text-gray-500 mt-2">Add a channel to start receiving Discord notifications when new videos are uploaded.</p>
         </div>
       ) : (
         <div className="bg-[#151921] border border-gray-800 rounded-lg overflow-hidden">
@@ -103,16 +132,23 @@ export default function YouTube() {
             <tbody className="divide-y divide-gray-800 text-sm">
               {channels.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-800/20 transition-colors">
-                  <td className="p-4 font-medium">{c.channel_name}</td>
-                  <td className="p-4 text-gray-400">{c.id}</td>
-                  <td className="p-4 text-gray-400">{c.discord_channel_id}</td>
+                  <td className="p-4 font-medium"><a href={c.channel_url} target="_blank" className="hover:underline">{c.channel_name}</a></td>
+                  <td className="p-4 text-gray-400 font-mono text-xs">{c.id}</td>
+                  <td className="p-4 text-gray-400 font-mono text-xs">{c.discord_channel_id}</td>
                   <td className="p-4">
                     <button onClick={() => handleToggle(c.id, c.enabled)} className={\`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium \${c.enabled ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}\`}>
                       {c.enabled ? <><Check size={12}/> Enabled</> : <><X size={12}/> Disabled</>}
                     </button>
                   </td>
                   <td className="p-4 text-right space-x-2">
-                    <button onClick={() => { setFormData(c); setIsModalOpen(true); }} className="p-2 text-gray-400 hover:text-white bg-gray-800 rounded transition-colors" title="Edit">
+                    <button onClick={() => handleTest(c.id)} className="p-2 text-blue-400 hover:text-white bg-blue-500/10 rounded transition-colors" title="Test Notification">
+                      <Bell size={16} />
+                    </button>
+                    <button onClick={() => { 
+                      setFormData(c); 
+                      setUrlInput(c.channel_url || c.id);
+                      setIsModalOpen(true); 
+                    }} className="p-2 text-gray-400 hover:text-white bg-gray-800 rounded transition-colors" title="Edit">
                       <Edit2 size={16} />
                     </button>
                     <button onClick={() => handleDelete(c.id)} className="p-2 text-red-500 hover:text-red-400 bg-red-500/10 rounded transition-colors" title="Delete">
@@ -135,22 +171,22 @@ export default function YouTube() {
             </div>
             <form onSubmit={handleSave} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">YouTube Channel ID (e.g. UCX6OQ3DkcsbYNE6H8uQQuVA)</label>
-                <input required type="text" value={formData.id} onChange={e => setFormData({...formData, id: e.target.value})} disabled={!!channels.find(c => c.id === formData.id)} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white disabled:opacity-50" />
+                <label className="block text-sm font-medium text-gray-400 mb-1">YouTube URL or Channel ID</label>
+                <input required type="text" value={urlInput} onChange={handleUrlChange} disabled={!!channels.find(c => c.id === formData.id)} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white disabled:opacity-50" placeholder="https://youtube.com/channel/UC..." />
+                {!formData.id && urlInput.length > 0 && (
+                  <p className="text-xs text-red-400 mt-1">Could not resolve UC... ID. Please provide the exact ID.</p>
+                )}
+                {formData.id && (
+                  <p className="text-xs text-green-400 mt-1">Resolved ID: {formData.id}</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Display Name</label>
                 <input required type="text" value={formData.channel_name} onChange={e => setFormData({...formData, channel_name: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-1">Discord Guild ID</label>
-                  <input required type="text" value={formData.guild_id} onChange={e => setFormData({...formData, guild_id: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-400 mb-1">Discord Channel ID</label>
-                  <input required type="text" value={formData.discord_channel_id} onChange={e => setFormData({...formData, discord_channel_id: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" />
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Discord Channel ID</label>
+                <input required type="text" value={formData.discord_channel_id} onChange={e => setFormData({...formData, discord_channel_id: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Role Mention ID (Optional)</label>
@@ -163,7 +199,7 @@ export default function YouTube() {
               
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-800">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-[#5865F2] hover:bg-[#4752C4] text-white rounded transition-colors font-medium">Save Channel</button>
+                <button type="submit" disabled={!formData.id} className="px-4 py-2 bg-[#5865F2] hover:bg-[#4752C4] text-white rounded transition-colors font-medium disabled:opacity-50">Save Channel</button>
               </div>
             </form>
           </div>

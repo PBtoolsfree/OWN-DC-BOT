@@ -5,6 +5,7 @@ async function fetchApi(endpoint: string, options: RequestInit = {}) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'x-csrf-token': '1', // Required by our CSRF protection
       ...options.headers,
     },
   });
