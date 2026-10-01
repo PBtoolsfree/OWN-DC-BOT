@@ -1,5 +1,5 @@
 # Build frontend
-FROM node:22-alpine AS web-builder
+FROM node:22-bookworm-slim AS web-builder
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci || npm install
@@ -7,7 +7,7 @@ COPY web/ .
 RUN npm run build
 
 # Build backend
-FROM node:22-alpine AS backend-builder
+FROM node:22-bookworm-slim AS backend-builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci || npm install
@@ -15,13 +15,13 @@ COPY . .
 RUN npm run build
 
 # Production image
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
 
 # Copy backend dependencies
 COPY package*.json ./
-RUN npm ci --only=production || npm install --production
+RUN npm ci --omit=dev || npm install --omit=dev
 
 # Copy built backend
 COPY --from=backend-builder /app/dist ./dist
