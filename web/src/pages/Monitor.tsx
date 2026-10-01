@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../services/api';
-import { Activity, Server, Database, Youtube, Cpu, Clock, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Activity, Server, Youtube, Cpu, Clock, CheckCircle, AlertTriangle } from 'lucide-react';
 
 export default function Monitor() {
   const [data, setData] = useState<any>(null);

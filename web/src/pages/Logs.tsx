@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../services/api';
-import { ScrollText, ChevronLeft, ChevronRight, Filter } from 'lucide-react';
+import { ScrollText, ChevronLeft, ChevronRight } from 'lucide-react';
 
 export default function Logs() {
   const [logs, setLogs] = useState<any[]>([]);
