@@ -55,7 +55,7 @@ export const requireAuth = async (request: any, reply: any) => {
 
 export async function authRoutes(app: FastifyInstance) {
   const OAUTH_SCOPES = 'identify';
-  const REDIRECT_URI = \`\${process.env.DASHBOARD_URL}/api/auth/discord/callback\`;
+  const REDIRECT_URI = `${process.env.DASHBOARD_URL}/api/auth/discord/callback`;
 
   app.get('/api/auth/discord', async (request, reply) => {
     const state = randomBytes(16).toString('hex');
@@ -113,7 +113,7 @@ export async function authRoutes(app: FastifyInstance) {
       const tokenData = await tokenResponse.json() as any;
       
       const userResponse = await fetch('https://discord.com/api/users/@me', {
-        headers: { Authorization: \`Bearer \${tokenData.access_token}\` }
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
       });
       
       if (!userResponse.ok) {

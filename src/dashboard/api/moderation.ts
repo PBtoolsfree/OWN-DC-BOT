@@ -60,7 +60,7 @@ export async function moderationRoutes(app: FastifyInstance) {
 
       for (const [key, value] of Object.entries(data)) {
         if (value !== undefined) {
-          updates.push(\`\${key} = ?\`);
+          updates.push(`${key} = ?`);
           args.push(value);
         }
       }
@@ -69,7 +69,7 @@ export async function moderationRoutes(app: FastifyInstance) {
         args.push(id);
         args.push(guildId);
         await rawClient.execute({
-          sql: \`UPDATE moderation_rules SET \${updates.join(', ')} WHERE id = ? AND guild_id = ?\`,
+          sql: `UPDATE moderation_rules SET ${updates.join(', ')} WHERE id = ? AND guild_id = ?`,
           args
         });
       }

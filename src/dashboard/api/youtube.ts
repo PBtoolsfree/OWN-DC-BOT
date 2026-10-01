@@ -113,7 +113,7 @@ export async function youtubeRoutes(app: FastifyInstance, client: Client) {
 
       for (const [key, value] of Object.entries(data)) {
         if (value !== undefined) {
-          updates.push(\`\${key} = ?\`);
+          updates.push(`${key} = ?`);
           args.push(value);
         }
       }
@@ -122,7 +122,7 @@ export async function youtubeRoutes(app: FastifyInstance, client: Client) {
         args.push(id);
         args.push(guildId);
         await rawClient.execute({
-          sql: \`UPDATE youtube_channels SET \${updates.join(', ')} WHERE id = ? AND guild_id = ?\`,
+          sql: `UPDATE youtube_channels SET ${updates.join(', ')} WHERE id = ? AND guild_id = ?`,
           args
         });
       }
@@ -156,14 +156,14 @@ export async function youtubeRoutes(app: FastifyInstance, client: Client) {
       const textChannel = channel as TextChannel;
       
       const embed = new EmbedBuilder()
-        .setTitle(\`Test Notification: \${channelData.channel_name}\`)
+        .setTitle(`Test Notification: ${channelData.channel_name}`)
         .setDescription('This is a test notification from the PB HERO Dashboard to verify your configuration.')
         .setURL(channelData.channel_url as string)
         .setColor('#FF0000');
 
       let content = channelData.custom_message as string || '';
       if (channelData.mention_role_id) {
-        content = \`<@&\${channelData.mention_role_id}> \${content}\`.trim();
+        content = `<@&${channelData.mention_role_id}> ${content}`.trim();
       }
 
       await textChannel.send({
