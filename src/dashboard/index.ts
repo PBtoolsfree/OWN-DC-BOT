@@ -24,20 +24,24 @@ export async function startDashboard(client: Client) {
     });
   }
 
-  // API Routes
-  app.get('/api/health', async (request, reply) => {
-    return {
-      status: 'healthy',
-      botStatus: client.isReady() ? 'online' : 'offline',
-      uptime: process.uptime()
-    };
+  await app.register(import('@fastify/cookie'), {
+    secret: process.env.SESSION_SECRET || 'fallback-secret-key-1234567890',
   });
 
-  app.get('/api/stats', async (request, reply) => {
-    return {
-      guildCount: client.guilds.cache.size,
-      ping: client.ws.ping
-    };
+  const { authRoutes } = await import('./api/auth');
+  const { overviewRoutes } = await import('./api/overview');
+  const { youtubeRoutes } = await import('./api/youtube');
+  const { moderationRoutes } = await import('./api/moderation');
+
+  await app.register(authRoutes);
+  await app.register(async (instance) => {
+    await overviewRoutes(instance, client);
+  });
+  await app.register(youtubeRoutes);
+  await app.register(moderationRoutes);
+
+  app.get('/api/health', async () => {
+    return { status: 'healthy', botStatus: client.isReady() ? 'online' : 'offline', uptime: process.uptime() };
   });
 
   const port = parseInt(process.env.DASHBOARD_PORT || '3000');
