@@ -23,7 +23,6 @@ function App() {
           <Route path="permissions" element={<Permissions />} />
           <Route path="settings" element={<Settings />} />
           <Route path="logs" element={<Logs />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
