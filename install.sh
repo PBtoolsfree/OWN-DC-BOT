@@ -37,8 +37,15 @@ else
     read -p "Dashboard Domain (e.g., panel.example.com or IP): " DASHBOARD_DOMAIN
     read -p "Dashboard Port [3000]: " DASHBOARD_PORT
     DASHBOARD_PORT=${DASHBOARD_PORT:-3000}
-    read -p "YouTube Poll Interval (seconds) [120]: " YOUTUBE_POLL_INTERVAL
-    YOUTUBE_POLL_INTERVAL=${YOUTUBE_POLL_INTERVAL:-120}
+    while true; do
+        read -p "YouTube Poll Interval (seconds) [120]: " YOUTUBE_POLL_INTERVAL_SECONDS
+        YOUTUBE_POLL_INTERVAL_SECONDS=${YOUTUBE_POLL_INTERVAL_SECONDS:-120}
+        if [[ "$YOUTUBE_POLL_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] && [ "$YOUTUBE_POLL_INTERVAL_SECONDS" -ge 30 ] && [ "$YOUTUBE_POLL_INTERVAL_SECONDS" -le 600 ]; then
+            break
+        else
+            echo "Error: Poll interval must be a number between 30 and 600."
+        fi
+    done
     read -p "Enable Moderation? [Y/n]: " MODERATION_ENABLED
     if [[ "$MODERATION_ENABLED" =~ ^[Nn]$ ]]; then
         MODERATION_ENABLED="false"
@@ -58,7 +65,7 @@ DISCORD_PRIMARY_GUILD_ID=$DISCORD_PRIMARY_GUILD_ID
 DASHBOARD_PORT=$DASHBOARD_PORT
 DASHBOARD_URL=http://$DASHBOARD_DOMAIN
 SESSION_SECRET=$SESSION_SECRET
-YOUTUBE_POLL_INTERVAL_SECONDS=$YOUTUBE_POLL_INTERVAL
+YOUTUBE_POLL_INTERVAL_SECONDS=$YOUTUBE_POLL_INTERVAL_SECONDS
 MODERATION_ENABLED=$MODERATION_ENABLED
 MODERATION_LOG_CHANNEL_ID=$MODERATION_LOG_CHANNEL_ID
 DATABASE_URL=file:/app/data/database.sqlite

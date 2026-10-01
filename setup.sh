@@ -192,7 +192,14 @@ else
         PROTOCOL="http"
     fi
     
-    prompt_input "YouTube Poll Interval in seconds [120]: " YOUTUBE_POLL_INTERVAL_SECONDS "120"
+    while true; do
+        prompt_input "YouTube Poll Interval in seconds [120]: " YOUTUBE_POLL_INTERVAL_SECONDS "120"
+        if [[ "$YOUTUBE_POLL_INTERVAL_SECONDS" =~ ^[0-9]+$ ]] && [ "$YOUTUBE_POLL_INTERVAL_SECONDS" -ge 30 ] && [ "$YOUTUBE_POLL_INTERVAL_SECONDS" -le 600 ]; then
+            break
+        else
+            log_error "Poll interval must be a number between 30 and 600."
+        fi
+    done
     
     if prompt_confirm "Enable Moderation features by default?" "Y"; then
         MODERATION_ENABLED="true"
