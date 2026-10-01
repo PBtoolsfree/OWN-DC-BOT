@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/libsql';
 import { createClient } from '@libsql/client';
 
 export let db: ReturnType<typeof drizzle>;
+export let rawClient: ReturnType<typeof createClient>;
 
 export async function initDatabase() {
   const client = createClient({
@@ -9,6 +10,7 @@ export async function initDatabase() {
   });
   
   db = drizzle(client);
+  rawClient = client;
   
   // Basic migrations for now
   await client.execute(`
@@ -19,7 +21,19 @@ export async function initDatabase() {
       channel_url TEXT,
       channel_name TEXT,
       last_video_id TEXT,
-      enabled INTEGER DEFAULT 1
+      enabled INTEGER DEFAULT 1,
+      mention_role_id TEXT,
+      custom_message TEXT
+    )
+  `);
+
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS youtube_notifications (
+      guild_id TEXT NOT NULL,
+      youtube_channel_id TEXT NOT NULL,
+      video_id TEXT NOT NULL,
+      notified_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (guild_id, youtube_channel_id, video_id)
     )
   `);
 

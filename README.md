@@ -47,6 +47,7 @@ Login requires Discord OAuth2, restricted to the `DISCORD_OWNER_ID`.
 
 ## Why no YouTube Data API?
 To avoid rate limits and quota issues, this bot uses YouTube's public Atom Feeds (XML) and robust polling mechanisms.
+*(Note: Because the YouTube Data API is not used, detecting the difference between a normal video upload and a livestream state has limitations. All new videos and livestreams are pushed identically through the Atom feed.)*
 
 ## Troubleshooting
 - `sudo bash health-check.sh`: Checks system health.
