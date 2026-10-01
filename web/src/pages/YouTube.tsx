@@ -41,8 +41,8 @@ export default function YouTube() {
     // Attempt to resolve UC... ID
     const match = val.match(/(?:channel\/|UC)([a-zA-Z0-9_-]{22})/);
     if (match) {
-      const id = match[1].startsWith('UC') ? match[1] : \`UC\${match[1]}\`;
-      setFormData({ ...formData, id, channel_url: \`https://youtube.com/channel/\${id}\` });
+      const id = match[1].startsWith('UC') ? match[1] : `UC${match[1]}`;
+      setFormData({ ...formData, id, channel_url: `https://youtube.com/channel/${id}` });
     } else {
       setFormData({ ...formData, id: '', channel_url: val });
     }
@@ -57,7 +57,7 @@ export default function YouTube() {
     
     try {
       if (channels.find(c => c.id === formData.id)) {
-        await api.patch(\`/youtube/channels/\${formData.id}\`, formData);
+        await api.patch(`/youtube/channels/${formData.id}`, formData);
       } else {
         await api.post('/youtube/channels', formData);
       }
@@ -71,7 +71,7 @@ export default function YouTube() {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this channel?')) return;
     try {
-      await api.delete(\`/youtube/channels/\${id}\`);
+      await api.delete(`/youtube/channels/${id}`);
       fetchChannels();
     } catch (err: any) {
       alert(err.message);
@@ -80,7 +80,7 @@ export default function YouTube() {
 
   const handleToggle = async (id: string, enabled: number) => {
     try {
-      await api.patch(\`/youtube/channels/\${id}\`, { enabled: enabled === 1 ? 0 : 1 });
+      await api.patch(`/youtube/channels/${id}`, { enabled: enabled === 1 ? 0 : 1 });
       fetchChannels();
     } catch (err: any) {
       alert(err.message);
@@ -89,7 +89,7 @@ export default function YouTube() {
 
   const handleTest = async (id: string) => {
     try {
-      await api.post(\`/youtube/channels/\${id}/test\`, {});
+      await api.post(`/youtube/channels/${id}/test`, {});
       alert('Test notification sent successfully!');
     } catch (err: any) {
       alert(err.message);
@@ -136,7 +136,7 @@ export default function YouTube() {
                   <td className="p-4 text-gray-400 font-mono text-xs">{c.id}</td>
                   <td className="p-4 text-gray-400 font-mono text-xs">{c.discord_channel_id}</td>
                   <td className="p-4">
-                    <button onClick={() => handleToggle(c.id, c.enabled)} className={\`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium \${c.enabled ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}\`}>
+                    <button onClick={() => handleToggle(c.id, c.enabled)} className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${c.enabled ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
                       {c.enabled ? <><Check size={12}/> Enabled</> : <><X size={12}/> Disabled</>}
                     </button>
                   </td>

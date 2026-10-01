@@ -36,8 +36,8 @@ export default function Overview() {
 
   const cards = [
     { label: 'Bot Status', value: data.botStatus, icon: Server, color: data.botStatus === 'Online' ? 'text-green-500' : 'text-red-500' },
-    { label: 'Gateway Ping', value: \`\${data.gatewayPing}ms\`, icon: Activity, color: 'text-blue-500' },
-    { label: 'Uptime', value: \`\${Math.floor(data.uptime / 3600)}h \${Math.floor((data.uptime % 3600) / 60)}m\`, icon: Activity, color: 'text-purple-500' },
+    { label: 'Gateway Ping', value: `${data.gatewayPing}ms`, icon: Activity, color: 'text-blue-500' },
+    { label: 'Uptime', value: `${Math.floor(data.uptime / 3600)}h ${Math.floor((data.uptime % 3600) / 60)}m`, icon: Activity, color: 'text-purple-500' },
     { label: 'Database Status', value: data.databaseStatus, icon: Database, color: 'text-green-500' },
     { label: 'YouTube Channels', value: data.youtubeChannelsCount, icon: Youtube, color: 'text-red-500' },
     { label: 'Notifications Sent', value: data.youtubeNotificationsSent, icon: Bell, color: 'text-yellow-500' },
@@ -55,7 +55,7 @@ export default function Overview() {
             <div key={i} className="bg-[#151921] border border-gray-800 rounded-lg p-6 shadow-xl flex items-start justify-between">
               <div>
                 <h3 className="text-gray-400 text-sm font-medium">{card.label}</h3>
-                <p className={\`text-2xl font-bold mt-2 \${card.color}\`}>{card.value}</p>
+                <p className={`text-2xl font-bold mt-2 ${card.color}`}>{card.value}</p>
               </div>
               <div className="p-3 bg-gray-800/50 rounded-lg">
                 <Icon className={card.color} size={24} />

@@ -38,11 +38,11 @@ export default function Monitor() {
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-gray-400">Discord Gateway</span>
-              <span className={\`font-medium \${data.discordGateway === 'Connected' ? 'text-green-500' : 'text-red-500'}\`}>{data.discordGateway}</span>
+              <span className={`font-medium ${data.discordGateway === 'Connected' ? 'text-green-500' : 'text-red-500'}`}>{data.discordGateway}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Bot Service</span>
-              <span className={\`font-medium \${data.botStatus === 'Running' ? 'text-green-500' : 'text-red-500'}\`}>{data.botStatus}</span>
+              <span className={`font-medium ${data.botStatus === 'Running' ? 'text-green-500' : 'text-red-500'}`}>{data.botStatus}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Dashboard API</span>
@@ -74,7 +74,7 @@ export default function Monitor() {
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-gray-400">Worker Status</span>
-              <span className={\`font-medium \${data.youtubeMonitor === 'Active' ? 'text-green-500' : 'text-red-500'}\`}>{data.youtubeMonitor}</span>
+              <span className={`font-medium ${data.youtubeMonitor === 'Active' ? 'text-green-500' : 'text-red-500'}`}>{data.youtubeMonitor}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-400">Tracked Channels</span>

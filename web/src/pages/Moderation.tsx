@@ -34,7 +34,7 @@ export default function Moderation() {
 
   const handleDelete = async (id: number) => {
     try {
-      await api.delete(\`/moderation/rules/\${id}\`);
+      await api.delete(`/moderation/rules/${id}`);
       fetchRules();
     } catch (err: any) {
       alert(err.message);
@@ -73,7 +73,7 @@ export default function Moderation() {
                 <td className="p-4 text-gray-400">{r.guild_id}</td>
                 <td className="p-4 text-gray-400 font-mono text-xs max-w-xs truncate">{r.config}</td>
                 <td className="p-4">
-                  <span className={\`flex items-center w-fit gap-1 px-2 py-1 rounded-full text-xs font-medium \${r.enabled ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}\`}>
+                  <span className={`flex items-center w-fit gap-1 px-2 py-1 rounded-full text-xs font-medium ${r.enabled ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
                     {r.enabled ? <><Check size={12}/> Enabled</> : <><X size={12}/> Disabled</>}
                   </span>
                 </td>

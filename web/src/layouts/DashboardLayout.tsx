@@ -50,9 +50,9 @@ export default function DashboardLayout() {
               <Link
                 key={item.path}
                 to={item.path}
-                className={\`flex items-center space-x-3 px-4 py-3 rounded transition-colors \${
+                className={`flex items-center space-x-3 px-4 py-3 rounded transition-colors ${
                   isActive ? 'bg-[#5865F2] text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-                }\`}
+                }`}
               >
                 <Icon size={20} />
                 <span>{item.name}</span>

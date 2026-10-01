@@ -16,7 +16,7 @@ export default function Logs() {
   const fetchLogs = async (p: number) => {
     setLoading(true);
     try {
-      const data = await api.get(\`/logs?page=\${p}\`);
+      const data = await api.get(`/logs?page=${p}`);
       setLogs(data.logs);
       setTotal(data.total);
     } catch (err: any) {
