@@ -18,15 +18,13 @@ A complete, production-ready personal Discord bot with a web dashboard, YouTube 
 ## Oracle Cloud Setup
 1. Create an Ubuntu/Debian instance.
 2. Open ports 22 (SSH), 80 (HTTP), and 443 (HTTPS) in the Oracle Cloud Security List.
-3. If using UFW/iptables, ensure those ports are allowed locally.
-4. Clone this repository to your instance.
 
 ## Installation
-Run the automated installer:
+Run the automated setup script directly in your terminal:
 ```bash
-sudo bash install.sh
+sudo bash <(curl -s https://raw.githubusercontent.com/PBtoolsfree/DC-BOT-/main/setup.sh)
 ```
-Follow the interactive prompts to configure your bot token, owner ID, and domains.
+The script will automatically install dependencies, clone the repository, and guide you through the bot configuration.
 
 ## Discord Developer Portal Setup
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
