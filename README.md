@@ -45,6 +45,13 @@ The script will automatically install dependencies, clone the repository, and gu
 Access your dashboard via the domain or IP you configured during installation. 
 Login requires Discord OAuth2, restricted to the `DISCORD_OWNER_ID`.
 
+## Configuration
+The bot uses a `.env` file for configuration. Notable options:
+- `YOUTUBE_POLL_INTERVAL_SECONDS`: The interval at which the bot checks YouTube channels for new videos.
+  - **Default**: `120`
+  - **Minimum**: `30`
+  - **Maximum**: `600`
+
 ## Why no YouTube Data API?
 To avoid rate limits and quota issues, this bot uses YouTube's public Atom Feeds (XML) and robust polling mechanisms.
 *(Note: Because the YouTube Data API is not used, detecting the difference between a normal video upload and a livestream state has limitations. All new videos and livestreams are pushed identically through the Atom feed.)*

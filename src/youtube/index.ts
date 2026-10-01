@@ -3,7 +3,11 @@ import { logger } from '../index';
 import { rawClient } from '../database';
 import { XMLParser } from 'fast-xml-parser';
 
-const POLL_INTERVAL = parseInt(process.env.YOUTUBE_POLL_INTERVAL_SECONDS || '120') * 1000;
+let pollIntervalSeconds = Number.parseInt(process.env.YOUTUBE_POLL_INTERVAL_SECONDS ?? '120', 10);
+if (!Number.isFinite(pollIntervalSeconds) || pollIntervalSeconds < 30 || pollIntervalSeconds > 600) {
+  pollIntervalSeconds = 120;
+}
+const POLL_INTERVAL = pollIntervalSeconds * 1000;
 
 const parser = new XMLParser({
   ignoreAttributes: false,

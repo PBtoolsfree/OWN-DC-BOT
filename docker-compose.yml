@@ -8,7 +8,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     ports:
-      - "${DASHBOARD_PORT:-3000}:3000"
+      - "127.0.0.1:${DASHBOARD_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 30s
