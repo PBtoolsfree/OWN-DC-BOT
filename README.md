@@ -22,7 +22,7 @@ A complete, production-ready personal Discord bot with a web dashboard, YouTube 
 ## Installation
 Run the automated setup script directly in your terminal:
 ```bash
-sudo bash <(curl -s https://raw.githubusercontent.com/PBtoolsfree/DC-BOT-/main/setup.sh)
+curl -s https://raw.githubusercontent.com/PBtoolsfree/DC-BOT-/main/setup.sh | sudo bash
 ```
 The script will automatically install dependencies, clone the repository, and guide you through the bot configuration.
 
