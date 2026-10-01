@@ -17,7 +17,11 @@ A complete, production-ready personal Discord bot with a web dashboard, YouTube 
 
 ## Oracle Cloud Setup
 1. Create an Ubuntu/Debian instance.
+   - **Recommended**: Ubuntu 24.04 LTS
+   - **Supported**: Ubuntu 22.04 LTS, Ubuntu 24.04 LTS, Ubuntu 26.04 LTS
+   - *(Note: Ubuntu 20.04 is explicitly NOT supported by the automated installer)*
 2. Open ports 22 (SSH), 80 (HTTP), and 443 (HTTPS) in the Oracle Cloud Security List.
+3. Configure your local Linux firewall for ports 22, 80, and 443 (no inbound Discord port is required).
 
 ## Installation
 Run the automated setup script directly in your terminal:
