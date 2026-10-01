@@ -100,7 +100,10 @@ export async function overviewRoutes(app: FastifyInstance, client: Client) {
     const dbSettings = res.rows.reduce((acc: any, row: any) => ({ ...acc, [row.key as string]: row.value }), {});
     
     return {
-      YOUTUBE_POLL_INTERVAL_SECONDS: parseInt(dbSettings.YOUTUBE_POLL_INTERVAL_SECONDS || process.env.YOUTUBE_POLL_INTERVAL_SECONDS || '120', 10),
+      YOUTUBE_POLL_INTERVAL_SECONDS: (() => {
+        const parsed = parseInt(dbSettings.YOUTUBE_POLL_INTERVAL_SECONDS || process.env.YOUTUBE_POLL_INTERVAL_SECONDS || '120', 10);
+        return Number.isFinite(parsed) && parsed >= 30 && parsed <= 600 ? parsed : 120;
+      })(),
       MODERATION_ENABLED: (dbSettings.MODERATION_ENABLED ?? process.env.MODERATION_ENABLED) === 'true',
       MODERATION_LOG_CHANNEL_ID: dbSettings.MODERATION_LOG_CHANNEL_ID || process.env.MODERATION_LOG_CHANNEL_ID || '',
       DISCORD_PRIMARY_GUILD_ID: process.env.DISCORD_PRIMARY_GUILD_ID || '',
@@ -110,7 +113,7 @@ export async function overviewRoutes(app: FastifyInstance, client: Client) {
 
   const { z } = require('zod');
   const settingsSchema = z.object({
-    YOUTUBE_POLL_INTERVAL_SECONDS: z.number().min(30).max(3600),
+    YOUTUBE_POLL_INTERVAL_SECONDS: z.number().min(30).max(600),
     MODERATION_ENABLED: z.boolean(),
     MODERATION_LOG_CHANNEL_ID: z.string().optional()
   });

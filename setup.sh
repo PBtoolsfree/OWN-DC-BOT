@@ -161,7 +161,7 @@ else
 fi
 
 mkdir -p data backup logs secrets
-
+chown -R 1000:1000 data backup logs secrets
 # Step 5: Configuration
 if [ -f .env ]; then
     log_info ".env file found. Loading existing configuration..."
@@ -219,7 +219,7 @@ SESSION_SECRET=$SESSION_SECRET
 YOUTUBE_POLL_INTERVAL_SECONDS=$YOUTUBE_POLL_INTERVAL_SECONDS
 MODERATION_ENABLED=$MODERATION_ENABLED
 MODERATION_LOG_CHANNEL_ID=$MODERATION_LOG_CHANNEL_ID
-DATABASE_URL=sqlite:///app/data/database.sqlite
+DATABASE_URL=file:/app/data/database.sqlite
 EOF
     chmod 600 .env
     log_success "Configuration saved securely!"
@@ -232,8 +232,12 @@ if [[ "$SETUP_NGINX" =~ ^[Yy]$ ]]; then
     
     NGINX_CONF="/etc/nginx/sites-available/pb-hero"
     
-    if [ ! -f "$NGINX_CONF" ]; then
-        cat <<EOF > "$NGINX_CONF"
+    if [ -f "$NGINX_CONF" ]; then
+        log_info "Backing up existing Nginx configuration..."
+        cp "$NGINX_CONF" "${NGINX_CONF}.backup_$(date +%s)"
+    fi
+
+    cat <<EOF > "$NGINX_CONF"
 server {
     server_name $DASHBOARD_DOMAIN;
 
@@ -250,14 +254,20 @@ server {
     }
 }
 EOF
-        ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
-    fi
+    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
     
     if nginx -t; then
         systemctl reload nginx
         log_info "Requesting SSL Certificate via Certbot..."
         certbot --nginx -d "$DASHBOARD_DOMAIN" --non-interactive --agree-tos -m "admin@$DASHBOARD_DOMAIN" || log_warning "Certbot SSL failed. Check your DNS. Falling back to HTTP."
     else
+        log_error "Nginx configuration test failed!"
+        if ls "${NGINX_CONF}.backup_"* 1> /dev/null 2>&1; then
+            log_info "Restoring previous configuration..."
+            LATEST_BACKUP=$(ls -t "${NGINX_CONF}.backup_"* | head -1)
+            cp "$LATEST_BACKUP" "$NGINX_CONF"
+            nginx -t && systemctl reload nginx
+        fi
         die "Nginx configuration test failed. Aborting."
     fi
 fi
