@@ -11,6 +11,7 @@ import Logs from './pages/Logs';
 
 function App() {
   return (
+    // Main routing setup for the Dashboard Phase-1
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
