@@ -247,8 +247,15 @@ if [[ "$SETUP_NGINX" =~ ^[Yy]$ ]]; then
     cat <<EOF > "$NGINX_CONF"
 server {
     server_name $DASHBOARD_DOMAIN;
+    
+    root $INSTALL_DIR/web/dist;
+    index index.html;
 
     location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -288,7 +295,18 @@ ufw allow 443/tcp || true
 
 # Step 8: Build and Start Project
 log_info "Building and starting PB HERO Bot with Docker Compose..."
-docker compose up -d --build
+docker compose build --no-cache
+docker compose up -d
+
+if [[ "$SETUP_NGINX" =~ ^[Yy]$ ]]; then
+    log_info "Extracting frontend build for Nginx..."
+    docker create --name temp-pb pb-hero-bot:latest
+    rm -rf "$INSTALL_DIR/web/dist"
+    mkdir -p "$INSTALL_DIR/web/dist"
+    docker cp temp-pb:/app/web/dist/. "$INSTALL_DIR/web/dist/"
+    docker rm temp-pb
+    chown -R www-data:www-data "$INSTALL_DIR/web/dist"
+fi
 
 log_info "Running Health Check..."
 echo "-----------------------------------------"
