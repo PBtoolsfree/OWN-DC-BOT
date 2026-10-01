@@ -7,13 +7,14 @@ export async function startBot(): Promise<Client> {
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent,
-      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.MessageContent
     ]
   });
 
   client.on('ready', () => {
     logger.info(`Logged in as ${client.user?.tag}!`);
+    logger.info(`Configured Intents: ${client.options.intents.bitfield}`);
+    logger.info(`Note: Message Content Intent MUST be enabled in the Discord Developer Portal.`);
   });
 
   client.on('messageCreate', async (message) => {

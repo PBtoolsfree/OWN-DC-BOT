@@ -10,6 +10,14 @@ export async function handleModeration(message: Message) {
   for (const word of bannedWords) {
     if (content.includes(word)) {
       try {
+        if (message.guild && message.author.id) {
+          // Explicitly fetch the member instead of relying on cache
+          const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+          if (member && member.permissions.has('ManageMessages')) {
+            break; // Skip moderation for admins/mods
+          }
+        }
+        
         await message.delete();
         logger.info(`Deleted message from ${message.author.tag} due to banned word: ${word}`);
         

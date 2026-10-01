@@ -33,7 +33,7 @@ The script will automatically install dependencies, clone the repository, and gu
 ## Discord Developer Portal Setup
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create a new application and add a Bot.
-3. Enable the **Message Content Intent**, **Server Members Intent**, and **Presence Intent** under the Bot tab.
+3. Enable the **Message Content Intent** under the Bot tab. *(Note: Guild Members Intent and Presence Intent are NOT required for Phase 1)*
 4. Copy your Bot Token, Client ID, and Client Secret.
 
 ## Commands
