@@ -241,7 +241,7 @@ server {
         proxy_pass http://127.0.0.1:3000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_addrs;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         
         proxy_http_version 1.1;
@@ -258,7 +258,7 @@ EOF
         log_info "Requesting SSL Certificate via Certbot..."
         certbot --nginx -d "$DASHBOARD_DOMAIN" --non-interactive --agree-tos -m "admin@$DASHBOARD_DOMAIN" || log_warning "Certbot SSL failed. Check your DNS. Falling back to HTTP."
     else
-        log_error "Nginx configuration test failed. Skipping Nginx reload."
+        die "Nginx configuration test failed. Aborting."
     fi
 fi
 
