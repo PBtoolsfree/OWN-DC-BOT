@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   AlertTriangle,
   Plus,
@@ -56,12 +56,13 @@ export const WarningsActions: React.FC = () => {
   const [ladderHistoryDays, setLadderHistoryDays] = useState(0);
   const [ladderReasonTemplate, setLadderReasonTemplate] = useState('');
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (searchOverride?: string) => {
     setLoading(true);
     setError(null);
     try {
+      const q = typeof searchOverride === 'string' ? searchOverride : userSearch;
       const [warnsRes, escRes, statsRes] = await Promise.all([
-        moderationApi.getWarnings({ active_only: activeOnly, user_id: userSearch || undefined }),
+        moderationApi.getWarnings({ active_only: activeOnly, user_id: q || undefined }),
         moderationApi.getEscalationRules(),
         moderationApi.getWarningsStats(),
       ]);
@@ -73,11 +74,12 @@ export const WarningsActions: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeOnly]);
 
   useEffect(() => {
     fetchData();
-  }, [activeOnly]);
+  }, [fetchData]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
