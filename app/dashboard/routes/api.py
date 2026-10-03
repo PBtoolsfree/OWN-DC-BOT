@@ -550,12 +550,57 @@ async def list_policies(username: str = Depends(require_auth)):
         await session.close()
 
 
+# ─── Guild Info ─────────────────────────────────────────────────────────────
+
+@router.get("/guild")
+async def get_guild_info(username: str = Depends(require_auth)):
+    """Get single-server guild information."""
+    from app.main import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if bot else None
+    return {
+        "guild_id": str(settings.DISCORD_GUILD_ID),
+        "name": guild.name if guild else "PB HERO Server",
+        "member_count": guild.member_count if guild else 0,
+        "is_configured": settings.is_configured(),
+        "single_server": True,
+    }
+
+
+# ─── Policy Profiles ─────────────────────────────────────────────────────────
+
+@router.get("/policies/profiles")
+async def list_profiles(username: str = Depends(require_auth)):
+    """List policy profiles/presets."""
+    session = await get_session_direct()
+    try:
+        profiles = await PolicyProfileRepo.get_all(session)
+        return [{
+            "id": p.id,
+            "name": p.name,
+            "description": p.description,
+            "is_builtin": p.is_builtin,
+            "allow_text": p.allow_text.value if hasattr(p.allow_text, 'value') else str(p.allow_text),
+            "allow_links": p.allow_links.value if hasattr(p.allow_links, 'value') else str(p.allow_links),
+            "allow_images": p.allow_images.value if hasattr(p.allow_images, 'value') else str(p.allow_images),
+            "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, 'value') else str(p.allow_videos),
+            "allow_files": p.allow_files.value if hasattr(p.allow_files, 'value') else str(p.allow_files),
+            "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, 'value') else str(p.allow_stickers),
+            "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, 'value') else str(p.allow_everyone),
+            "allow_here": p.allow_here.value if hasattr(p.allow_here, 'value') else str(p.allow_here),
+            "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, 'value') else str(p.allow_role_mentions),
+            "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, 'value') else str(p.allow_user_mentions),
+        } for p in profiles]
+    finally:
+        await session.close()
+
+
 @router.get("/policies/{channel_id}")
-async def get_channel_policy(channel_id: str, username: str = Depends(require_auth)):
+async def get_channel_policy(channel_id: int, username: str = Depends(require_auth)):
     """Get policy for a specific channel."""
     session = await get_session_direct()
     try:
-        p = await ChannelPolicyRepo.get_for_channel(session, int(channel_id))
+        p = await ChannelPolicyRepo.get_for_channel(session, channel_id)
         if not p:
             return None
         return {
@@ -587,7 +632,7 @@ async def get_channel_policy(channel_id: str, username: str = Depends(require_au
 
 
 @router.post("/policies/{channel_id}")
-async def save_policy(channel_id: str, request: Request, username: str = Depends(require_auth)):
+async def save_policy(channel_id: int, request: Request, username: str = Depends(require_auth)):
     """Save or update a channel policy."""
     data = await request.json()
 
@@ -612,8 +657,8 @@ async def save_policy(channel_id: str, request: Request, username: str = Depends
 
         policy_fields["updated_by"] = username
 
-        await ChannelPolicyRepo.upsert(session, int(channel_id), **policy_fields)
-        await AuditLogRepo.log(session, username, "policy_updated", channel_id)
+        await ChannelPolicyRepo.upsert(session, channel_id, **policy_fields)
+        await AuditLogRepo.log(session, username, "policy_updated", str(channel_id))
         await session.commit()
 
         # Refresh moderation engine cache
@@ -631,15 +676,15 @@ async def save_policy(channel_id: str, request: Request, username: str = Depends
 
 
 @router.delete("/policies/{channel_id}")
-async def delete_policy(channel_id: str, username: str = Depends(require_auth)):
+async def delete_policy(channel_id: int, username: str = Depends(require_auth)):
     """Delete a channel policy."""
     session = await get_session_direct()
     try:
-        deleted = await ChannelPolicyRepo.delete_policy(session, int(channel_id))
+        deleted = await ChannelPolicyRepo.delete_policy(session, channel_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Policy not found")
 
-        await AuditLogRepo.log(session, username, "policy_deleted", channel_id)
+        await AuditLogRepo.log(session, username, "policy_deleted", str(channel_id))
         await session.commit()
 
         from app.main import get_bot_instance
@@ -653,34 +698,6 @@ async def delete_policy(channel_id: str, username: str = Depends(require_auth)):
     except Exception as e:
         await session.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        await session.close()
-
-
-# ─── Policy Profiles ─────────────────────────────────────────────────────────
-
-@router.get("/policies/profiles")
-async def list_profiles(username: str = Depends(require_auth)):
-    """List policy profiles/presets."""
-    session = await get_session_direct()
-    try:
-        profiles = await PolicyProfileRepo.get_all(session)
-        return [{
-            "id": p.id,
-            "name": p.name,
-            "description": p.description,
-            "is_builtin": p.is_builtin,
-            "allow_text": p.allow_text.value if hasattr(p.allow_text, 'value') else str(p.allow_text),
-            "allow_links": p.allow_links.value if hasattr(p.allow_links, 'value') else str(p.allow_links),
-            "allow_images": p.allow_images.value if hasattr(p.allow_images, 'value') else str(p.allow_images),
-            "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, 'value') else str(p.allow_videos),
-            "allow_files": p.allow_files.value if hasattr(p.allow_files, 'value') else str(p.allow_files),
-            "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, 'value') else str(p.allow_stickers),
-            "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, 'value') else str(p.allow_everyone),
-            "allow_here": p.allow_here.value if hasattr(p.allow_here, 'value') else str(p.allow_here),
-            "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, 'value') else str(p.allow_role_mentions),
-            "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, 'value') else str(p.allow_user_mentions),
-        } for p in profiles]
     finally:
         await session.close()
 
