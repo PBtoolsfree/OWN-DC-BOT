@@ -17,8 +17,13 @@ from app.config import get_settings
 from app.dashboard.app import create_dashboard_app
 from app.dashboard.auth import hash_password
 from app.database.engine import close_engine, get_session_direct, init_engine
-from app.database.models import Base
-from app.database.repositories import AdminUserRepo, PolicyProfileRepo, YouTubeTemplateRepo
+from app.database.repositories import (
+    AdminUserRepo,
+    AutomodRuleRepo,
+    PolicyProfileRepo,
+    WarningEscalationRepo,
+    YouTubeTemplateRepo,
+)
 from app.logging_config import setup_logging
 from app.runtime_state import (
     BotState,
@@ -47,14 +52,23 @@ async def init_database(create_admin_user: bool = True) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Initialize default policy profiles
+    # Initialize default policy profiles (15 text + 10 voice presets = 25 built-in presets)
     session = await get_session_direct()
     try:
         profiles = await PolicyProfileRepo.get_all(session)
-        if not profiles:
+        builtin_count = sum(1 for p in profiles if getattr(p, "is_builtin", False))
+        if not profiles or builtin_count < 25:
             await PolicyProfileRepo.create_defaults(session)
             await session.commit()
-            logger.info("Created default policy profiles")
+            logger.info("Created or updated default policy profiles (25 presets)")
+
+        # Initialize default automod rules
+        await AutomodRuleRepo.create_defaults(session)
+        await session.commit()
+
+        # Initialize default warning escalation ladder
+        await WarningEscalationRepo.create_defaults(session)
+        await session.commit()
 
         # Initialize default YouTube notification templates
         await YouTubeTemplateRepo.create_defaults(session)
