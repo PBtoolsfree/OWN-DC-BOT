@@ -30,7 +30,9 @@ def upgrade() -> None:
         ]
         for col_name in voice_cols:
             if col_name not in cp_cols:
-                op.add_column("channel_policies", sa.Column(col_name, sa.String(16), server_default="inherit", nullable=True))
+                op.add_column("channel_policies", sa.Column(col_name, sa.String(16), server_default="INHERIT", nullable=True))
+        for col_name in voice_cols:
+            conn.execute(sa.text(f"UPDATE channel_policies SET {col_name}='INHERIT' WHERE {col_name}='inherit'"))
 
     # 2. Update policy_profiles table with policy_type and voice policies
     if "policy_profiles" in tables:
@@ -44,14 +46,16 @@ def upgrade() -> None:
         ]
         for col_name in voice_allow_cols:
             if col_name not in pp_cols:
-                op.add_column("policy_profiles", sa.Column(col_name, sa.String(16), server_default="allow", nullable=True))
+                op.add_column("policy_profiles", sa.Column(col_name, sa.String(16), server_default="ALLOW", nullable=True))
+            conn.execute(sa.text(f"UPDATE policy_profiles SET {col_name}='ALLOW' WHERE {col_name}='allow'"))
 
         voice_deny_cols = [
             "allow_priority_speaker", "allow_mute_members", "allow_deafen_members", "allow_move_members"
         ]
         for col_name in voice_deny_cols:
             if col_name not in pp_cols:
-                op.add_column("policy_profiles", sa.Column(col_name, sa.String(16), server_default="deny", nullable=True))
+                op.add_column("policy_profiles", sa.Column(col_name, sa.String(16), server_default="DENY", nullable=True))
+            conn.execute(sa.text(f"UPDATE policy_profiles SET {col_name}='DENY' WHERE {col_name}='deny'"))
 
     # 3. Update moderation_cases with case_id, rule, etc.
     if "moderation_cases" in tables:

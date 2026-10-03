@@ -77,6 +77,19 @@ class PolicyValue(str, enum.Enum):
     DENY = "deny"
     INHERIT = "inherit"
 
+    allow = "allow"
+    deny = "deny"
+    inherit = "inherit"
+
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            val_lower = value.lower()
+            for member in cls:
+                if member.value.lower() == val_lower or member.name.lower() == val_lower:
+                    return member
+        return None
+
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
