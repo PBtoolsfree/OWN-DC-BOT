@@ -99,9 +99,15 @@ async def run_server() -> None:
         bot = PBHeroBot(settings)
         set_bot_instance(bot)
 
+    async def _run_bot_safe():
+        try:
+            await bot.start(settings.DISCORD_BOT_TOKEN)
+        except Exception as e:
+            logger.error("Discord bot connection notice: %s. Dashboard remains active.", e)
+
     tasks = [asyncio.create_task(server.serve())]
     if bot:
-        tasks.append(asyncio.create_task(bot.start(settings.DISCORD_BOT_TOKEN)))
+        tasks.append(asyncio.create_task(_run_bot_safe()))
     else:
         logger.warning("DISCORD_BOT_TOKEN is not configured; running dashboard only")
 
