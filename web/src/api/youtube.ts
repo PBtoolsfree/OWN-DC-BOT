@@ -40,8 +40,14 @@ export const youtubeApi = {
     apiClient.post<{
       success: boolean;
       is_live: boolean;
+      is_upcoming?: boolean;
+      is_premiere?: boolean;
       status: string;
-      title?: string;
-      video_id?: string;
+      title?: string | null;
+      video_id?: string | null;
+      channel_id?: string;
+      scheduled_start?: string | null;
+      viewer_count?: number | null;
+      error?: string | null;
     }>(`/youtube/test-live/${id}`, {}),
 };

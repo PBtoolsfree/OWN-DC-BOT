@@ -142,10 +142,17 @@ export default function YouTubeChannelDetails() {
     try {
       toast.info('Checking YouTube live detector...');
       const res = await youtubeApi.testLive(id);
-      if (res.is_live) {
-        toast.success(`Stream is LIVE: "${res.title || 'Live Stream'}"`);
+      if (res.is_live || res.status === 'live') {
+        const streamInfo = res.video_id ? ` [${res.video_id}]` : '';
+        toast.success(`LIVE: "${res.title || 'Live Stream'}"${streamInfo}`);
+      } else if (res.status === 'upcoming' || res.is_upcoming) {
+        const streamInfo = res.video_id ? ` [${res.video_id}]` : '';
+        toast.info(`UPCOMING: "${res.title || 'Scheduled Stream'}"${streamInfo}`);
+      } else if (res.status === 'unknown' || res.error) {
+        toast.warning(`UNKNOWN: ${res.error || 'Live status could not be determined.'}`);
       } else {
-        toast.info('Channel is currently offline (no active stream detected).');
+        const videoInfo = res.title ? ` (Latest: "${res.title}")` : '';
+        toast.info(`OFFLINE: Channel is currently offline.${videoInfo}`);
       }
     } catch (err: any) {
       toast.error(err.message || 'Live check failed');

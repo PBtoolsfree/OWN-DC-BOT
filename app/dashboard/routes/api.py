@@ -7,6 +7,7 @@ Every route validates the logged-in admin session server-side.
 
 import json
 import logging
+import re
 from datetime import datetime
 
 import discord
@@ -503,15 +504,45 @@ async def update_youtube_channel(channel_id: str, request: Request, username: st
 @router.post("/youtube/test-live/{channel_id}")
 async def test_youtube_live(channel_id: str, username: str = Depends(require_auth)):
     """Test YouTube channel live status detection."""
-    from app.youtube.live_detector import check_live_status
-    live_info = await check_live_status(channel_id)
-    return {
-        "success": True,
-        "is_live": live_info.get("is_live", False),
-        "status": live_info.get("status", "offline"),
-        "title": live_info.get("title"),
-        "video_id": live_info.get("video_id"),
-    }
+    channel_id = channel_id.strip()
+    if not channel_id.startswith("UC") or not re.match(r"^UC[\w-]+$", channel_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid YouTube channel ID format. Must start with 'UC'.",
+        )
+
+    from app.youtube.live_detector import check_channel_live_status
+
+    try:
+        live_result = await check_channel_live_status(channel_id)
+        return {
+            "success": live_result.status != "unknown" and live_result.error is None,
+            "is_live": live_result.is_live,
+            "is_upcoming": live_result.is_upcoming,
+            "is_premiere": live_result.is_premiere,
+            "status": live_result.status,
+            "title": live_result.title,
+            "video_id": live_result.video_id,
+            "channel_id": live_result.channel_id,
+            "scheduled_start": live_result.scheduled_start,
+            "viewer_count": live_result.viewer_count,
+            "error": live_result.error,
+        }
+    except Exception as e:
+        logger.error("Error during test_youtube_live for %s: %s", channel_id, str(e), exc_info=True)
+        return {
+            "success": False,
+            "is_live": False,
+            "is_upcoming": False,
+            "is_premiere": False,
+            "status": "unknown",
+            "title": None,
+            "video_id": None,
+            "channel_id": channel_id,
+            "scheduled_start": None,
+            "viewer_count": None,
+            "error": str(e),
+        }
 
 
 # ─── Channel Policies ────────────────────────────────────────────────────────
