@@ -126,7 +126,22 @@ class PBHeroBot(commands.Bot):
         await self.youtube_scheduler.start()
         logger.info("YouTube scheduler started")
 
+        from app.runtime_state import BotState, set_bot_state
+        set_bot_state(BotState.READY)
         logger.info("PB HERO Bot is ready!")
+
+    async def on_disconnect(self) -> None:
+        """Gateway disconnect handler."""
+        from app.runtime_state import BotState, set_bot_state
+        logger.warning("Discord bot disconnected from gateway")
+        if not self.is_closed():
+            set_bot_state(BotState.STARTING)
+
+    async def on_resumed(self) -> None:
+        """Gateway session resume handler."""
+        from app.runtime_state import BotState, set_bot_state
+        logger.info("Discord bot session resumed")
+        set_bot_state(BotState.READY)
 
     async def on_message(self, message: discord.Message) -> None:
         """Process messages for policy enforcement."""
@@ -156,10 +171,13 @@ class PBHeroBot(commands.Bot):
 
     async def close(self) -> None:
         """Graceful shutdown."""
+        from app.runtime_state import BotState, set_bot_state
+        set_bot_state(BotState.STOPPING)
         logger.info("Shutting down PB HERO Bot...")
 
         if self.youtube_scheduler:
             await self.youtube_scheduler.stop()
 
         await super().close()
+        set_bot_state(BotState.STOPPED)
         logger.info("PB HERO Bot shut down complete")

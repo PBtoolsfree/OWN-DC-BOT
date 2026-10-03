@@ -20,20 +20,15 @@ from app.database.engine import close_engine, get_session_direct, init_engine
 from app.database.models import Base
 from app.database.repositories import AdminUserRepo, PolicyProfileRepo
 from app.logging_config import setup_logging
+from app.runtime_state import (
+    BotState,
+    clear_bot_instance,
+    get_bot_instance,
+    set_bot_instance,
+    set_bot_state,
+)
 
 logger = logging.getLogger("pbhero.main")
-_bot_instance: Optional[PBHeroBot] = None
-
-
-def get_bot_instance() -> Optional[PBHeroBot]:
-    """Get the active Discord bot instance."""
-    return _bot_instance
-
-
-def set_bot_instance(bot: Optional[PBHeroBot]) -> None:
-    """Set the active Discord bot instance."""
-    global _bot_instance
-    _bot_instance = bot
 
 
 async def init_database(create_admin_user: bool = True) -> None:
@@ -98,17 +93,20 @@ async def run_server() -> None:
     if settings.DISCORD_BOT_TOKEN:
         bot = PBHeroBot(settings)
         set_bot_instance(bot)
+        set_bot_state(BotState.STARTING)
 
     async def _run_bot_safe():
         try:
             await bot.start(settings.DISCORD_BOT_TOKEN)
         except Exception as e:
+            set_bot_state(BotState.ERROR)
             logger.error("Discord bot connection notice: %s. Dashboard remains active.", e)
 
     tasks = [asyncio.create_task(server.serve())]
     if bot:
         tasks.append(asyncio.create_task(_run_bot_safe()))
     else:
+        set_bot_state(BotState.STOPPED)
         logger.warning("DISCORD_BOT_TOKEN is not configured; running dashboard only")
 
     try:
@@ -116,8 +114,10 @@ async def run_server() -> None:
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("Shutting down services...")
     finally:
+        set_bot_state(BotState.STOPPING)
         if bot and not bot.is_closed():
             await bot.close()
+        clear_bot_instance()
         server.should_exit = True
         await close_engine()
         logger.info("PB HERO stopped")

@@ -134,19 +134,18 @@ async def system_status(username: str = Depends(require_auth)):
     db_ok = await test_connection()
 
     # Get bot reference if available
-    from app.main import get_bot_instance
+    from app.runtime_state import get_bot_instance, is_bot_ready
     bot = get_bot_instance()
 
-    bot_connected = False
+    bot_connected = is_bot_ready()
     bot_latency = 0
     guild_name = "Unknown"
     guild_members = 0
     yt_running = False
     yt_healthy = False
 
-    if bot:
-        bot_connected = bot.is_ready()
-        bot_latency = round(bot.latency * 1000) if bot.is_ready() else 0
+    if bot and bot_connected:
+        bot_latency = round(bot.latency * 1000)
         guild = bot.guild
         if guild:
             guild_name = guild.name
@@ -164,7 +163,7 @@ async def system_status(username: str = Depends(require_auth)):
             "latency_ms": bot_latency,
             "guild_name": guild_name,
             "guild_members": guild_members,
-            "uptime": bot.uptime if bot else 0,
+            "uptime": bot.uptime if (bot and bot_connected) else 0,
         },
         "database": {"connected": db_ok},
         "youtube": {"running": yt_running, "healthy": yt_healthy},
@@ -204,7 +203,7 @@ async def system_reload(username: str = Depends(require_auth)):
     """Reload configuration and refresh caches."""
     session = await get_session_direct()
     try:
-        from app.main import get_bot_instance
+        from app.runtime_state import get_bot_instance
         bot = get_bot_instance()
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()
@@ -245,7 +244,7 @@ async def system_test_db(username: str = Depends(require_auth)):
 @router.post("/system/test-youtube")
 async def system_test_youtube(username: str = Depends(require_auth)):
     """Test YouTube monitor subsystem status."""
-    from app.main import get_bot_instance
+    from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
     scheduler = getattr(bot, "youtube_scheduler", None) if bot else None
     if scheduler:
@@ -555,7 +554,7 @@ async def list_policies(username: str = Depends(require_auth)):
 @router.get("/guild")
 async def get_guild_info(username: str = Depends(require_auth)):
     """Get single-server guild information."""
-    from app.main import get_bot_instance
+    from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
     guild = bot.guild if bot else None
     return {
@@ -662,7 +661,7 @@ async def save_policy(channel_id: int, request: Request, username: str = Depends
         await session.commit()
 
         # Refresh moderation engine cache
-        from app.main import get_bot_instance
+        from app.runtime_state import get_bot_instance
         bot = get_bot_instance()
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()
@@ -687,7 +686,7 @@ async def delete_policy(channel_id: int, username: str = Depends(require_auth)):
         await AuditLogRepo.log(session, username, "policy_deleted", str(channel_id))
         await session.commit()
 
-        from app.main import get_bot_instance
+        from app.runtime_state import get_bot_instance
         bot = get_bot_instance()
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()
@@ -714,7 +713,7 @@ async def simulate_policy(request: Request, username: str = Depends(require_auth
     has_attachment = data.get("has_attachment", False)
     attachment_type = data.get("attachment_type", "image")
 
-    from app.main import get_bot_instance
+    from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
     if bot and bot.moderation_engine:
         result = await bot.moderation_engine.simulate_policy(
@@ -772,7 +771,7 @@ async def list_blocked(username: str = Depends(require_auth), limit: int = 100):
 @router.get("/channels")
 async def list_discord_channels(username: str = Depends(require_auth)):
     """List all channels from the configured guild."""
-    from app.main import get_bot_instance
+    from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
     if not bot or not bot.guild:
         return []
@@ -820,7 +819,7 @@ async def list_discord_channels(username: str = Depends(require_auth)):
 @router.get("/channels/roles")
 async def list_guild_roles(username: str = Depends(require_auth)):
     """List all roles from the configured guild."""
-    from app.main import get_bot_instance
+    from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
     if not bot or not bot.guild:
         return []
@@ -919,7 +918,7 @@ async def update_server_config(request: Request, username: str = Depends(require
         await session.commit()
 
         # Refresh moderation cache
-        from app.main import get_bot_instance
+        from app.runtime_state import get_bot_instance
         bot = get_bot_instance()
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()
@@ -969,7 +968,7 @@ async def add_exemption(request: Request, username: str = Depends(require_auth))
                                f"{data['rule_type']}:{data['target_id']}")
         await session.commit()
 
-        from app.main import get_bot_instance
+        from app.runtime_state import get_bot_instance
         bot = get_bot_instance()
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()
@@ -994,7 +993,7 @@ async def remove_exemption(rule_id: int, username: str = Depends(require_auth)):
         await AuditLogRepo.log(session, username, "exemption_removed", str(rule_id))
         await session.commit()
 
-        from app.main import get_bot_instance
+        from app.runtime_state import get_bot_instance
         bot = get_bot_instance()
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()

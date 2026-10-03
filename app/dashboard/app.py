@@ -87,14 +87,9 @@ def create_dashboard_app() -> FastAPI:
         from app.database.engine import test_connection as db_test
         db_ok = await db_test()
 
-        from app.main import get_bot_instance
-        bot = get_bot_instance()
-        discord_ok = bot.is_ready() if bot else False
-
-        yt_ok = False
-        if bot:
-            scheduler = getattr(bot, "youtube_scheduler", None)
-            yt_ok = scheduler.is_healthy if scheduler else False
+        from app.runtime_state import is_bot_ready, is_youtube_healthy
+        discord_ok = is_bot_ready()
+        yt_ok = is_youtube_healthy()
 
         status = "ok" if (db_ok and discord_ok) else "degraded"
 
