@@ -705,6 +705,15 @@ class PolicyProfileRepo:
         for preset in defaults:
             existing = await PolicyProfileRepo.get_by_name(session, preset["name"])
             if not existing:
+                # Also check old underscore name (e.g. GENERAL_CHAT -> GENERAL CHAT)
+                alt_name = preset["name"].replace(" / ", "_").replace(" ", "_").strip()
+                old = await PolicyProfileRepo.get_by_name(session, alt_name)
+                if old:
+                    old.name = preset["name"]
+                    old.category = preset["category"]
+                    old.description = preset["description"]
+                    old.is_builtin = True
+                    continue
                 await PolicyProfileRepo.create(session, **preset)
             else:
                 if hasattr(existing, "category") and not existing.category:

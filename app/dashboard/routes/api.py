@@ -822,7 +822,8 @@ async def list_profiles(username: str = Depends(require_auth)):
     session = await get_session_direct()
     try:
         profiles = await PolicyProfileRepo.get_all(session)
-        if not profiles:
+        builtin_count = sum(1 for p in profiles if p.is_builtin)
+        if builtin_count < 15:
             await PolicyProfileRepo.create_defaults(session)
             await session.commit()
             profiles = await PolicyProfileRepo.get_all(session)
