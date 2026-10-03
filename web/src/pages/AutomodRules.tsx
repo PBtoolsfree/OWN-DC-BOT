@@ -523,6 +523,26 @@ export const AutomodRules: React.FC = () => {
                 )}
               </div>
 
+              {action === 'ban' && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-rose-200 uppercase font-bold block">⚠️ Critical Action: Automatic Server Ban</strong>
+                    <span>Members triggering this rule will be permanently banned from the server. Ensure thresholds and scopes are tested thoroughly.</span>
+                  </div>
+                </div>
+              )}
+
+              {action === 'kick' && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-amber-200 uppercase font-bold block">⚠️ High-Impact Action: Server Kick</strong>
+                    <span>Members triggering this rule will be immediately kicked from the server.</span>
+                  </div>
+                </div>
+              )}
+
               {/* Keywords / Allowed Invites */}
               {ruleType === 'keyword_filter' && (
                 <div>

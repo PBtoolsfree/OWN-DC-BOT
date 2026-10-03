@@ -20,98 +20,104 @@ interface EventToggleConfig {
   key: string;
   label: string;
   description: string;
-  category: 'AutoMod Interceptions' | 'Punishments & Cases' | 'System & Errors';
+  category: 'AUTOMOD INTERCEPTIONS' | 'PUNISHMENTS' | 'SYSTEM';
 }
 
 const LOG_EVENTS: EventToggleConfig[] = [
-  // Interceptions
+  // AUTOMOD INTERCEPTIONS
   {
     key: 'policy_violation',
     label: 'Policy Violation',
     description: 'General channel rule violations and denied message content',
-    category: 'AutoMod Interceptions',
+    category: 'AUTOMOD INTERCEPTIONS',
   },
   {
     key: 'blocked_link',
     label: 'Blocked Link',
     description: 'Unauthorized URLs, domain allowlist violations, and invite links',
-    category: 'AutoMod Interceptions',
+    category: 'AUTOMOD INTERCEPTIONS',
   },
   {
     key: 'blocked_attachment',
     label: 'Blocked Attachment',
     description: 'Images, videos, or files uploaded to restricted channels',
-    category: 'AutoMod Interceptions',
+    category: 'AUTOMOD INTERCEPTIONS',
   },
   {
     key: 'blocked_mention',
     label: 'Blocked Mention',
     description: 'Unauthorized @everyone, @here, or role pings',
-    category: 'AutoMod Interceptions',
+    category: 'AUTOMOD INTERCEPTIONS',
   },
   {
     key: 'message_delete',
     label: 'Message Delete',
     description: 'Messages purged or deleted by AutoMod enforcement',
-    category: 'AutoMod Interceptions',
+    category: 'AUTOMOD INTERCEPTIONS',
   },
 
-  // Punishments & Cases
+  // PUNISHMENTS
   {
     key: 'warning',
     label: 'Warning Issued',
     description: 'Bot automated warnings delivered to violating members',
-    category: 'Punishments & Cases',
+    category: 'PUNISHMENTS',
   },
   {
     key: 'timeout',
     label: 'Timeout / Mute',
     description: 'Members timed out due to repeat violations or manual mod action',
-    category: 'Punishments & Cases',
+    category: 'PUNISHMENTS',
   },
   {
     key: 'kick',
     label: 'Kick',
     description: 'Members kicked from the guild',
-    category: 'Punishments & Cases',
+    category: 'PUNISHMENTS',
   },
   {
     key: 'ban',
     label: 'Ban',
     description: 'Banned accounts from the Discord server',
-    category: 'Punishments & Cases',
+    category: 'PUNISHMENTS',
   },
   {
     key: 'unban',
     label: 'Unban',
     description: 'Revoked bans or pardoned members',
-    category: 'Punishments & Cases',
+    category: 'PUNISHMENTS',
   },
   {
     key: 'user_warning',
     label: 'User DM Warning',
     description: 'Direct message notifications dispatched to users',
-    category: 'Punishments & Cases',
+    category: 'PUNISHMENTS',
   },
+
+  // SYSTEM
   {
     key: 'manual_action',
     label: 'Manual Moderator Action',
     description: 'Slash commands and administrative actions run by human mods',
-    category: 'Punishments & Cases',
+    category: 'SYSTEM',
   },
-
-  // System & Errors
   {
     key: 'bot_error',
     label: 'Bot Error',
     description: 'Internal Discord bot exceptions or API permission errors',
-    category: 'System & Errors',
+    category: 'SYSTEM',
   },
   {
-    key: 'youtube_error',
-    label: 'YouTube Notification Error',
-    description: 'Failed RSS feeds or video dispatch errors',
-    category: 'System & Errors',
+    key: 'rule_error',
+    label: 'Rule Error',
+    description: 'Syntax or evaluation error in custom rule conditions',
+    category: 'SYSTEM',
+  },
+  {
+    key: 'permission_error',
+    label: 'Permission Error',
+    description: 'Role hierarchy or Discord permission conflicts preventing an action',
+    category: 'SYSTEM',
   },
 ];
 
@@ -343,14 +349,27 @@ export default function ModeratorSettings() {
 
       {/* Log Settings Event Toggles */}
       <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6">
-        <div className="border-b border-gray-800 pb-4">
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Bell className="w-5 h-5 text-[#5865F2]" />
-            <span>Event Notification Filter Toggles</span>
-          </h2>
-          <p className="text-xs text-gray-400 mt-0.5">
-            Select which moderation actions and security violations are dispatched to the Discord log channel.
-          </p>
+        <div className="border-b border-gray-800 pb-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <Bell className="w-5 h-5 text-[#5865F2]" />
+                <span>Event Notification Filter Toggles</span>
+              </h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Select which moderation actions and security violations are dispatched to the Discord log channel.
+              </p>
+            </div>
+          </div>
+          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">
+              <strong className="text-blue-200">How Event Filters Work:</strong> These toggles control{' '}
+              <span className="text-white underline">which moderation events are sent to the Discord Auto-Mod log channel</span>.
+              They do <span className="text-white font-bold">NOT</span> control whether the moderation action itself occurs.
+              All active channel policies, automod filters, warnings, timeouts, and cases are always enforced and logged to the web dashboard.
+            </p>
+          </div>
         </div>
 
         <div className="space-y-6">

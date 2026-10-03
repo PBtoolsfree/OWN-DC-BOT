@@ -782,19 +782,38 @@ export const WarningsActions: React.FC = () => {
               )}
 
               {ladderAction === 'ban' && (
-                <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                    Delete Message History (Days)
-                  </label>
-                  <select
-                    value={ladderHistoryDays}
-                    onChange={(e) => setLadderHistoryDays(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-xl bg-gray-900 border border-gray-800 text-white text-sm"
-                  >
-                    <option value={0}>Don't delete messages</option>
-                    <option value={1}>Previous 24 Hours</option>
-                    <option value={7}>Previous 7 Days</option>
-                  </select>
+                <div className="space-y-3">
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-rose-200 uppercase font-bold block">⚠️ Danger: Automatic Server Ban</strong>
+                      <span>Members reaching {ladderThreshold} {ladderMode === 'count' ? 'violations' : 'points'} will be permanently banned from the server.</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                      Delete Message History (Days)
+                    </label>
+                    <select
+                      value={ladderHistoryDays}
+                      onChange={(e) => setLadderHistoryDays(Number(e.target.value))}
+                      className="w-full px-3 py-2 rounded-xl bg-gray-900 border border-gray-800 text-white text-sm"
+                    >
+                      <option value={0}>Don't delete messages</option>
+                      <option value={1}>Previous 24 Hours</option>
+                      <option value={7}>Previous 7 Days</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {ladderAction === 'kick' && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-amber-200 uppercase font-bold block">⚠️ High-Impact: Server Kick</strong>
+                    <span>Members reaching {ladderThreshold} {ladderMode === 'count' ? 'violations' : 'points'} will be kicked from the server.</span>
+                  </div>
                 </div>
               )}
 
