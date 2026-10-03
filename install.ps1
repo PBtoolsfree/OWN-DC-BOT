@@ -141,13 +141,51 @@ Write-Host "[7/8] Checking web dashboard bundle..." -ForegroundColor Yellow
 $WebDistIndex = Join-Path $PSScriptRoot "web\dist\index.html"
 
 if (-not $SkipFrontendBuild) {
-    if (Get-Command "npm" -ErrorAction SilentlyContinue) {
+    $NpmCmd = $null
+    $NodeBinDir = $null
+
+    # Check PATH first for npm.cmd or npm
+    if (Get-Command "npm.cmd" -ErrorAction SilentlyContinue) {
+        $NpmCmd = "npm.cmd"
+    } elseif (Get-Command "npm" -ErrorAction SilentlyContinue) {
+        $NpmCmd = "npm"
+    }
+
+    # If not found in current PATH, search common Windows Node.js locations (e.g. winget, program files)
+    if (-not $NpmCmd) {
+        $CommonNodePaths = @(
+            "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe\node-v24.19.0-win-x64",
+            "C:\Program Files\nodejs",
+            "$env:APPDATA\npm",
+            "$env:ProgramFiles\nodejs"
+        )
+        # Also check any directory matching winget OpenJS.NodeJS
+        $WingetPkgs = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
+        if (Test-Path $WingetPkgs) {
+            $WingetNode = Get-ChildItem -Path $WingetPkgs -Filter "*OpenJS.NodeJS*" -Directory -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($WingetNode) {
+                $CommonNodePaths += $WingetNode.FullName
+            }
+        }
+
+        foreach ($p in $CommonNodePaths) {
+            $candidate = Join-Path $p "npm.cmd"
+            if (Test-Path $candidate) {
+                $NpmCmd = $candidate
+                $NodeBinDir = $p
+                $env:PATH = "$p;$env:PATH"
+                break
+            }
+        }
+    }
+
+    if ($NpmCmd) {
         if (-not (Test-Path $WebDistIndex)) {
             Write-Host "  Building dashboard frontend..." -ForegroundColor Gray
             Push-Location (Join-Path $PSScriptRoot "web")
             try {
-                & npm install --quiet
-                & npm run build
+                & $NpmCmd install --quiet
+                & $NpmCmd run build
             } finally {
                 Pop-Location
             }
