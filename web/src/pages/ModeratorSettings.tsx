@@ -199,7 +199,7 @@ export default function ModeratorSettings() {
   }
 
   const status = settings.channel_status;
-  const categories = ['AutoMod Interceptions', 'Punishments & Cases', 'System & Errors'] as const;
+  const categories = ['AUTOMOD INTERCEPTIONS', 'PUNISHMENTS', 'SYSTEM'] as const;
 
   return (
     <div className="space-y-8 animate-fade-in max-w-5xl">
