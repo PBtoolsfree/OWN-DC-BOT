@@ -59,4 +59,6 @@ start.sh
 
 # Test Installs
 test_fresh_install/
+fresh_install_test/
+test_*/
 
