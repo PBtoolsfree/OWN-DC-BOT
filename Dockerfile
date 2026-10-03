@@ -1,38 +1,37 @@
-# Build frontend
-FROM node:22-bookworm-slim AS web-builder
+# Multi-stage build: Frontend + Python Backend
+FROM node:20-slim AS frontend-builder
 WORKDIR /app/web
+
 COPY web/package*.json ./
-RUN npm ci || npm install
-COPY web/ .
+RUN npm ci
+
+COPY web/ ./
 RUN npm run build
 
-# Build backend
-FROM node:22-bookworm-slim AS backend-builder
+# Python Runtime
+FROM python:3.12-slim
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci || npm install
-COPY . .
-RUN npm run build
 
-# Production image
-FROM node:22-bookworm-slim
-WORKDIR /app
-ENV NODE_ENV=production
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Copy backend dependencies
-COPY package*.json ./
-RUN npm ci --omit=dev || npm install --omit=dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy built backend
-COPY --from=backend-builder /app/dist ./dist
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy built frontend
-COPY --from=web-builder /app/web/dist ./web/dist
+# Copy application source
+COPY app/ ./app/
+COPY alembic.ini pyproject.toml ./
+COPY .env.example ./
 
-# Ensure data directory exists with correct permissions
-RUN mkdir -p /app/data && chown -R node:node /app/data
+# Copy built frontend assets
+COPY --from=frontend-builder /app/web/dist ./web/dist
 
-USER node
-EXPOSE 3000
+# Expose Dashboard Port
+EXPOSE 8000
 
-CMD ["npm", "start"]
+CMD ["python", "-m", "app.main"]

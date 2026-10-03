@@ -1,16 +1,57 @@
-node_modules/
-dist/
+# Environment & Secrets
 .env
 .env.*
 !.env.example
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build & Distribution Artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+web/dist/
+
+# Dependencies
+node_modules/
+web/node_modules/
+
+# Runtime Data, Logs, Backups
 data/
-backup/
 logs/
+backups/
+*.log
+build.log
+
+# Databases
 *.db
 *.sqlite
 *.sqlite3
-secrets/
-certificates/
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Files
 .DS_Store
-web/node_modules/
-web/dist/
+Thumbs.db
+desktop.ini
+
+# Docker
+docker-data/

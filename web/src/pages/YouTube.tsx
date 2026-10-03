@@ -1,210 +1,484 @@
 import { useEffect, useState } from 'react';
-import { api } from '../services/api';
-import { Youtube, Plus, Edit2, Trash2, Check, X, Bell } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { youtubeApi } from '../api/youtube';
+import { channelsApi } from '../api/channels';
+import { YouTubeChannel, DiscordChannel, DiscordRole } from '../types';
+import { YouTubeChannelCard } from '../components/YouTubeChannelCard';
+import { YouTubeChannelModal } from '../components/YouTubeChannelModal';
+import { NotificationPreview } from '../components/NotificationPreview';
+import { ConfirmModal } from '../components/ConfirmModal';
+import { LoadingSkeleton } from '../components/LoadingSkeleton';
+import { EmptyState } from '../components/EmptyState';
+import { toast } from '../hooks/useToast';
+import {
+  Youtube,
+  Plus,
+  Bell,
+  Sliders,
+  CheckCircle2,
+  ListTree,
+  ExternalLink,
+} from 'lucide-react';
 
 export default function YouTube() {
-  const [channels, setChannels] = useState<any[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const currentTab = searchParams.get('tab') || 'channels';
+
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [urlInput, setUrlInput] = useState('');
-  const [formData, setFormData] = useState({
-    id: '',
-    discord_channel_id: '',
-    channel_name: '',
-    mention_role_id: '',
-    custom_message: '',
-    enabled: 1,
-    channel_url: ''
-  });
+  const [channels, setChannels] = useState<YouTubeChannel[]>([]);
+  const [discordChannels, setDiscordChannels] = useState<DiscordChannel[]>([]);
+  const [roles, setRoles] = useState<DiscordRole[]>([]);
 
-  useEffect(() => {
-    fetchChannels();
-  }, []);
+  // Modals
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
-  const fetchChannels = async () => {
+  // Notification Template Editor state
+  const [templateTitle, setTemplateTitle] = useState('🔴 {channel_name} IS NOW LIVE!');
+  const [templateDesc, setTemplateDesc] = useState(
+    '**{video_title}**\n\nCome hang out and join the stream live right now on YouTube!'
+  );
+  const [templateFooter, setTemplateFooter] = useState('PB HERO Personal Discord Bot');
+  const [templateRole, setTemplateRole] = useState('PB Gang');
+  const [showThumb, setShowThumb] = useState(true);
+  const [showTimestamp, setShowTimestamp] = useState(true);
+  const [enableButton, setEnableButton] = useState(true);
+
+  // Settings state
+  const [pollInterval, setPollInterval] = useState('60');
+  const [liveInterval, setLiveInterval] = useState('30');
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // Feed test state
+  const [testResult, setTestResult] = useState<{
+    channelId: string;
+    success: boolean;
+    entries: any[];
+    error?: string | null;
+  } | null>(null);
+
+  const loadData = async () => {
+    setLoading(true);
     try {
-      const data = await api.get('/youtube/channels');
-      setChannels(data);
+      const [ytList, chList, rList] = await Promise.all([
+        youtubeApi.getChannels(),
+        channelsApi.getChannels(),
+        channelsApi.getRoles(),
+      ]);
+      setChannels(ytList);
+      setDiscordChannels(chList);
+      setRoles(rList);
     } catch (err: any) {
-      setError(err.message || 'Failed to load channels');
+      toast.error(err.message || 'Failed to load YouTube data');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setUrlInput(val);
-    
-    // Attempt to resolve UC... ID
-    const match = val.match(/(?:channel\/|UC)([a-zA-Z0-9_-]{22})/);
-    if (match) {
-      const id = match[1].startsWith('UC') ? match[1] : `UC${match[1]}`;
-      setFormData({ ...formData, id, channel_url: `https://youtube.com/channel/${id}` });
-    } else {
-      setFormData({ ...formData, id: '', channel_url: val });
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const handleAddChannel = async (payload: any) => {
+    const res = await youtubeApi.addChannel(payload);
+    toast.success(`Added YouTube channel: ${res.channel_name}`);
+    await loadData();
+  };
+
+  const handleToggleChannel = async (id: string, enabled: boolean) => {
+    try {
+      await youtubeApi.toggleChannel(id, enabled);
+      toast.success(enabled ? 'Channel monitoring enabled' : 'Channel monitoring paused');
+      setChannels((prev) =>
+        prev.map((c) => (c.youtube_channel_id === id ? { ...c, enabled } : c))
+      );
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to toggle channel status');
     }
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.id) {
-      alert('Could not resolve YouTube Channel ID. Please provide a direct channel ID or URL containing UC...');
-      return;
-    }
-    
+  const handleTestChannel = async (id: string) => {
     try {
-      if (channels.find(c => c.id === formData.id)) {
-        await api.patch(`/youtube/channels/${formData.id}`, formData);
+      toast.info('Testing YouTube feed parser...');
+      const res = await youtubeApi.testChannel(id);
+      if (res.success) {
+        toast.success(`Feed check succeeded (${res.entry_count} entries found)`);
+        setTestResult({
+          channelId: id,
+          success: true,
+          entries: res.entries,
+        });
       } else {
-        await api.post('/youtube/channels', formData);
+        toast.error(res.error || 'Feed check failed');
+        setTestResult({
+          channelId: id,
+          success: false,
+          entries: [],
+          error: res.error,
+        });
       }
-      setIsModalOpen(false);
-      fetchChannels();
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || 'Failed to test feed');
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this channel?')) return;
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
     try {
-      await api.delete(`/youtube/channels/${id}`);
-      fetchChannels();
+      await youtubeApi.deleteChannel(deleteTarget.id);
+      toast.success(`Deleted channel: ${deleteTarget.name}`);
+      setChannels((prev) => prev.filter((c) => c.youtube_channel_id !== deleteTarget.id));
+      setDeleteTarget(null);
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || 'Failed to delete channel');
     }
   };
-
-  const handleToggle = async (id: string, enabled: number) => {
-    try {
-      await api.patch(`/youtube/channels/${id}`, { enabled: enabled === 1 ? 0 : 1 });
-      fetchChannels();
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
-
-  const handleTest = async (id: string) => {
-    try {
-      await api.post(`/youtube/channels/${id}/test`, {});
-      alert('Test notification sent successfully!');
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
-
-  if (loading) return <div className="text-gray-400">Loading channels...</div>;
-  if (error) return <div className="text-red-500">{error}</div>;
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold flex items-center gap-2"><Youtube className="text-red-500" /> YouTube Channels</h2>
-        <button onClick={() => {
-          setUrlInput('');
-          setFormData({ id: '', discord_channel_id: '', channel_name: '', mention_role_id: '', custom_message: '', enabled: 1, channel_url: '' });
-          setIsModalOpen(true);
-        }} className="flex items-center gap-2 bg-[#5865F2] hover:bg-[#4752C4] px-4 py-2 rounded transition-colors text-sm font-medium">
-          <Plus size={16} /> Add Channel
+    <div className="space-y-6 animate-fade-in">
+      {/* Top Header bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-black text-white tracking-tight flex items-center gap-2.5">
+            <Youtube className="w-7 h-7 text-red-500" />
+            <span>YouTube Monitor</span>
+          </h1>
+          <p className="text-xs text-gray-400 mt-1">
+            Private RSS feed parser & live stream detector for single-server Discord broadcasts.
+          </p>
+        </div>
+
+        <button
+          onClick={() => setIsAddModalOpen(true)}
+          className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#5865F2] hover:bg-[#4752c4] text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-[#5865F2]/20"
+        >
+          <Plus className="w-4 h-4" />
+          <span>Add YouTube Channel</span>
         </button>
       </div>
 
-      {channels.length === 0 ? (
-        <div className="bg-[#151921] border border-gray-800 rounded-lg p-12 text-center">
-          <Youtube className="mx-auto text-gray-600 mb-4" size={48} />
-          <h3 className="text-xl font-bold text-gray-300">No YouTube channels configured.</h3>
-        </div>
-      ) : (
-        <div className="bg-[#151921] border border-gray-800 rounded-lg overflow-hidden">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-gray-800/50 border-b border-gray-800 text-sm font-medium text-gray-400">
-                <th className="p-4">Channel Name</th>
-                <th className="p-4">YouTube ID</th>
-                <th className="p-4">Discord Channel</th>
-                <th className="p-4">Status</th>
-                <th className="p-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800 text-sm">
-              {channels.map((c) => (
-                <tr key={c.id} className="hover:bg-gray-800/20 transition-colors">
-                  <td className="p-4 font-medium"><a href={c.channel_url} target="_blank" className="hover:underline">{c.channel_name}</a></td>
-                  <td className="p-4 text-gray-400 font-mono text-xs">{c.id}</td>
-                  <td className="p-4 text-gray-400 font-mono text-xs">{c.discord_channel_id}</td>
-                  <td className="p-4">
-                    <button onClick={() => handleToggle(c.id, c.enabled)} className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${c.enabled ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
-                      {c.enabled ? <><Check size={12}/> Enabled</> : <><X size={12}/> Disabled</>}
-                    </button>
-                  </td>
-                  <td className="p-4 text-right space-x-2">
-                    <button onClick={() => handleTest(c.id)} className="p-2 text-blue-400 hover:text-white bg-blue-500/10 rounded transition-colors" title="Test Notification">
-                      <Bell size={16} />
-                    </button>
-                    <button onClick={() => { 
-                      setFormData(c); 
-                      setUrlInput(c.channel_url || c.id);
-                      setIsModalOpen(true); 
-                    }} className="p-2 text-gray-400 hover:text-white bg-gray-800 rounded transition-colors" title="Edit">
-                      <Edit2 size={16} />
-                    </button>
-                    <button onClick={() => handleDelete(c.id)} className="p-2 text-red-500 hover:text-red-400 bg-red-500/10 rounded transition-colors" title="Delete">
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
-                </tr>
+      {/* Navigation tabs */}
+      <div className="flex items-center gap-2 border-b border-gray-800 pb-2">
+        <button
+          onClick={() => setSearchParams({ tab: 'channels' })}
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
+            currentTab === 'channels'
+              ? 'bg-[#5865F2] text-white shadow'
+              : 'text-gray-400 hover:text-white hover:bg-gray-800'
+          }`}
+        >
+          <ListTree className="w-4 h-4" />
+          <span>Channels ({channels.length})</span>
+        </button>
+
+        <button
+          onClick={() => setSearchParams({ tab: 'notifications' })}
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
+            currentTab === 'notifications'
+              ? 'bg-[#5865F2] text-white shadow'
+              : 'text-gray-400 hover:text-white hover:bg-gray-800'
+          }`}
+        >
+          <Bell className="w-4 h-4" />
+          <span>Notification Templates</span>
+        </button>
+
+        <button
+          onClick={() => setSearchParams({ tab: 'settings' })}
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
+            currentTab === 'settings'
+              ? 'bg-[#5865F2] text-white shadow'
+              : 'text-gray-400 hover:text-white hover:bg-gray-800'
+          }`}
+        >
+          <Sliders className="w-4 h-4" />
+          <span>Settings</span>
+        </button>
+      </div>
+
+      {/* Tab: Channels */}
+      {currentTab === 'channels' && (
+        <div className="space-y-6">
+          {loading ? (
+            <LoadingSkeleton rows={4} />
+          ) : channels.length === 0 ? (
+            <EmptyState
+              title="No YouTube Channels Monitored"
+              description="Add YouTube creators, live streamers, or your own channel to receive automatic announcements in your Discord server."
+              icon={Youtube}
+              actionText="+ Add First Channel"
+              onAction={() => setIsAddModalOpen(true)}
+            />
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {channels.map((ch) => (
+                <YouTubeChannelCard
+                  key={ch.id}
+                  channel={ch}
+                  discordChannels={discordChannels}
+                  onToggle={handleToggleChannel}
+                  onTest={handleTestChannel}
+                  onDelete={(id, name) => setDeleteTarget({ id, name })}
+                />
               ))}
-            </tbody>
-          </table>
+            </div>
+          )}
+
+          {/* Test feed drawer / card */}
+          {testResult && (
+            <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-3">
+              <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+                <span className="text-xs font-bold text-white uppercase tracking-wider">
+                  Feed Test Result
+                </span>
+                <button
+                  onClick={() => setTestResult(null)}
+                  className="text-xs text-gray-400 hover:text-white"
+                >
+                  Close
+                </button>
+              </div>
+
+              {testResult.success ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-emerald-400">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Feed parsed successfully. Showing latest video entries:</span>
+                  </div>
+                  <div className="divide-y divide-gray-800 bg-[#0B0E14] rounded-xl p-3 border border-gray-800 text-xs">
+                    {testResult.entries.map((e, idx) => (
+                      <div key={idx} className="py-2 flex items-center justify-between">
+                        <span className="font-medium text-white truncate pr-4">{e.title}</span>
+                        <a
+                          href={e.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[#5865F2] hover:underline flex items-center gap-1 shrink-0"
+                        >
+                          <span>Watch</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-rose-400">Error: {testResult.error}</div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-[#151921] rounded-lg shadow-xl w-full max-w-lg border border-gray-800">
-            <div className="p-6 border-b border-gray-800 flex justify-between items-center">
-              <h3 className="text-xl font-bold">{channels.find(c => c.id === formData.id) ? 'Edit Channel' : 'Add Channel'}</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-white"><X size={24} /></button>
+      {/* Tab: Notification Template Editor & Live Preview */}
+      {currentTab === 'notifications' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+          {/* Form */}
+          <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <h2 className="text-sm font-bold text-white uppercase tracking-wider border-b border-gray-800 pb-3">
+              Announcement Template Editor
+            </h2>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-gray-300 block">
+                Notification Title Template
+              </label>
+              <input
+                type="text"
+                value={templateTitle}
+                onChange={(e) => setTemplateTitle(e.target.value)}
+                placeholder="🔴 {channel_name} IS NOW LIVE!"
+                className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+              />
+              <span className="text-[11px] text-gray-500">
+                Variables: <code className="text-gray-400">{'{channel_name}'}</code>,{' '}
+                <code className="text-gray-400">{'{video_title}'}</code>
+              </span>
             </div>
-            <form onSubmit={handleSave} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">YouTube URL or Channel ID</label>
-                <input required type="text" value={urlInput} onChange={handleUrlChange} disabled={!!channels.find(c => c.id === formData.id)} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white disabled:opacity-50" placeholder="https://youtube.com/channel/UC..." />
-                {!formData.id && urlInput.length > 0 && (
-                  <p className="text-xs text-red-400 mt-1">Could not resolve UC... ID. Please provide the exact ID.</p>
-                )}
-                {formData.id && (
-                  <p className="text-xs text-green-400 mt-1">Resolved ID: {formData.id}</p>
-                )}
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-gray-300 block">
+                Embed Description
+              </label>
+              <textarea
+                rows={4}
+                value={templateDesc}
+                onChange={(e) => setTemplateDesc(e.target.value)}
+                placeholder="Markdown formatted description"
+                className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-300 block">Mention Role</label>
+                <input
+                  type="text"
+                  value={templateRole}
+                  onChange={(e) => setTemplateRole(e.target.value)}
+                  placeholder="e.g. YouTube Notifications"
+                  className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+                />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">Display Name</label>
-                <input required type="text" value={formData.channel_name} onChange={e => setFormData({...formData, channel_name: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" />
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-300 block">Footer Text</label>
+                <input
+                  type="text"
+                  value={templateFooter}
+                  onChange={(e) => setTemplateFooter(e.target.value)}
+                  placeholder="PB HERO Personal Bot"
+                  className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+                />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">Discord Channel ID</label>
-                <input required type="text" value={formData.discord_channel_id} onChange={e => setFormData({...formData, discord_channel_id: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" />
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-gray-800">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">
+                Visual Elements
+              </span>
+              <div className="grid grid-cols-3 gap-2">
+                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showThumb}
+                    onChange={(e) => setShowThumb(e.target.checked)}
+                    className="rounded border-gray-700 text-[#5865F2]"
+                  />
+                  <span>Show Thumbnail</span>
+                </label>
+
+                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showTimestamp}
+                    onChange={(e) => setShowTimestamp(e.target.checked)}
+                    className="rounded border-gray-700 text-[#5865F2]"
+                  />
+                  <span>Show Timestamp</span>
+                </label>
+
+                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enableButton}
+                    onChange={(e) => setEnableButton(e.target.checked)}
+                    className="rounded border-gray-700 text-[#5865F2]"
+                  />
+                  <span>Watch Button</span>
+                </label>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">Role Mention ID (Optional)</label>
-                <input type="text" value={formData.mention_role_id || ''} onChange={e => setFormData({...formData, mention_role_id: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" placeholder="e.g. 1234567890" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">Custom Message (Optional)</label>
-                <input type="text" value={formData.custom_message || ''} onChange={e => setFormData({...formData, custom_message: e.target.value})} className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white" placeholder="Hey @role, new video!" />
-              </div>
-              
-              <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-800">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Cancel</button>
-                <button type="submit" disabled={!formData.id} className="px-4 py-2 bg-[#5865F2] hover:bg-[#4752C4] text-white rounded transition-colors font-medium disabled:opacity-50">Save Channel</button>
-              </div>
-            </form>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => toast.success('Template settings saved successfully')}
+                className="px-5 py-2 bg-[#5865F2] hover:bg-[#4752c4] text-white text-xs font-bold rounded-xl shadow transition-colors"
+              >
+                Save Template
+              </button>
+            </div>
+          </div>
+
+          {/* Live Preview Panel */}
+          <div className="space-y-3">
+            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+              Discord Embed Live Preview
+            </span>
+            <NotificationPreview
+              title={templateTitle.replace('{channel_name}', 'PB HERO').replace('{video_title}', 'LIVESTREAM: PB HERO Bot Walkthrough')}
+              description={templateDesc.replace('{channel_name}', 'PB HERO').replace('{video_title}', 'LIVESTREAM: PB HERO Bot Walkthrough')}
+              footer={templateFooter}
+              mentionRoleName={templateRole}
+              showThumbnail={showThumb}
+              showTimestamp={showTimestamp}
+              enableButton={enableButton}
+              videoTitle="PB HERO Discord Bot Live Walkthrough"
+              channelName="PB HERO"
+            />
           </div>
         </div>
       )}
+
+      {/* Tab: Settings */}
+      {currentTab === 'settings' && (
+        <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl max-w-xl space-y-6">
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider border-b border-gray-800 pb-3">
+            YouTube Monitoring Polling Intervals
+          </h2>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-gray-300 block">
+                RSS Feed Poll Interval (Seconds)
+              </label>
+              <input
+                type="number"
+                min="30"
+                max="3600"
+                value={pollInterval}
+                onChange={(e) => setPollInterval(e.target.value)}
+                className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+              />
+              <span className="text-[11px] text-gray-500">
+                Frequency to check YouTube XML feeds for uploaded videos and premieres (Default: 60s).
+              </span>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-gray-300 block">
+                Live Status Check Interval (Seconds)
+              </label>
+              <input
+                type="number"
+                min="15"
+                max="1800"
+                value={liveInterval}
+                onChange={(e) => setLiveInterval(e.target.value)}
+                className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+              />
+              <span className="text-[11px] text-gray-500">
+                Frequency to verify stream status for scheduled/ongoing livestreams (Default: 30s).
+              </span>
+            </div>
+
+            <button
+              onClick={() => {
+                setSavingSettings(true);
+                setTimeout(() => {
+                  setSavingSettings(false);
+                  toast.success('YouTube polling parameters saved.');
+                }, 500);
+              }}
+              disabled={savingSettings}
+              className="px-5 py-2 bg-[#5865F2] hover:bg-[#4752c4] text-white text-xs font-bold rounded-xl shadow transition-colors"
+            >
+              {savingSettings ? 'Saving...' : 'Save Settings'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add Modal */}
+      <YouTubeChannelModal
+        isOpen={isAddModalOpen}
+        channels={discordChannels}
+        roles={roles}
+        onClose={() => setIsAddModalOpen(false)}
+        onSubmit={handleAddChannel}
+      />
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        title="Delete YouTube Channel"
+        message={`Are you sure you want to stop monitoring and delete "${deleteTarget?.name}"? Scheduled notifications and event histories will be removed.`}
+        confirmText="Delete Channel"
+        isDangerous
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

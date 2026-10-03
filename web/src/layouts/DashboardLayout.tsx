@@ -1,82 +1,122 @@
-import { useEffect, useState } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
-import { api } from '../services/api';
-import { LayoutDashboard, Youtube, Shield, Settings, Activity, Key, ScrollText, LogOut } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Outlet, useNavigate } from 'react-router-dom';
+import { Sidebar } from '../components/Sidebar';
+import { Topbar } from '../components/Topbar';
+import { ToastContainer } from '../components/Toast';
+import { authApi } from '../api/auth';
+import { systemApi } from '../api/system';
+import { SystemStatus } from '../types';
+import { toast } from '../hooks/useToast';
+import { Loader2 } from 'lucide-react';
 
 export default function DashboardLayout() {
   const [loading, setLoading] = useState(true);
-  const location = useLocation();
+  const [username, setUsername] = useState('ADMIN');
+  const [guildId, setGuildId] = useState<string>('');
+  const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [sidebarOpenMobile, setSidebarOpenMobile] = useState(false);
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    api.get('/auth/me')
-      .then(() => setLoading(false))
-      .catch(() => {
-        window.location.href = '/login';
-      });
+  // Fetch live system status
+  const fetchStatus = useCallback(async () => {
+    try {
+      const data = await systemApi.getStatus();
+      setStatus(data);
+    } catch (_) {
+      // Ignored for polling
+    }
   }, []);
 
+  // Initial session verification
+  useEffect(() => {
+    let isMounted = true;
+
+    authApi
+      .getMe()
+      .then((user) => {
+        if (!isMounted) return;
+        if (user && user.authenticated) {
+          setUsername(user.username);
+          setGuildId(user.guild_id);
+          setLoading(false);
+          // Initial status fetch
+          fetchStatus();
+        } else {
+          navigate('/login');
+        }
+      })
+      .catch(() => {
+        if (isMounted) navigate('/login');
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [navigate, fetchStatus]);
+
+  // Periodic status poll (20s)
+  useEffect(() => {
+    if (loading) return;
+
+    const interval = setInterval(() => {
+      fetchStatus();
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [loading, fetchStatus]);
+
   const handleLogout = async () => {
-    await api.post('/auth/logout', {});
-    window.location.href = '/login';
+    try {
+      await authApi.logout();
+      toast.info('You have logged out.');
+      navigate('/login');
+    } catch (_) {
+      navigate('/login');
+    }
   };
 
   if (loading) {
-    return <div className="min-h-screen bg-[#0B0E14] flex items-center justify-center text-white">Verifying session...</div>;
-  }
-
-  const navItems = [
-    { name: 'Overview', path: '/', icon: LayoutDashboard },
-    { name: 'YouTube', path: '/youtube', icon: Youtube },
-    { name: 'Moderation', path: '/moderation', icon: Shield },
-    { name: 'Server Monitor', path: '/monitor', icon: Activity },
-    { name: 'Permissions', path: '/permissions', icon: Key },
-    { name: 'Settings', path: '/settings', icon: Settings },
-    { name: 'Logs', path: '/logs', icon: ScrollText },
-  ];
-
-  return (
-    <div className="flex h-screen bg-[#0B0E14] text-white">
-      {/* Sidebar */}
-      <div className="w-64 bg-[#151921] border-r border-gray-800 flex flex-col">
-        <div className="p-4 border-b border-gray-800">
-          <h1 className="text-xl font-bold">PB HERO Bot</h1>
+    return (
+      <div className="min-h-screen bg-[#0B0E14] flex flex-col items-center justify-center text-white space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-[#5865F2] flex items-center justify-center font-black text-xl shadow-xl animate-pulse">
+          PB
         </div>
-        
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`flex items-center space-x-3 px-4 py-3 rounded transition-colors ${
-                  isActive ? 'bg-[#5865F2] text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-                }`}
-              >
-                <Icon size={20} />
-                <span>{item.name}</span>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="p-4 border-t border-gray-800">
-          <button 
-            onClick={handleLogout}
-            className="flex items-center space-x-3 px-4 py-3 w-full rounded text-gray-400 hover:bg-red-500/10 hover:text-red-500 transition-colors"
-          >
-            <LogOut size={20} />
-            <span>Logout</span>
-          </button>
+        <div className="flex items-center gap-2 text-xs text-gray-400 font-medium">
+          <Loader2 className="w-4 h-4 animate-spin text-[#5865F2]" />
+          <span>Verifying private bot session...</span>
         </div>
       </div>
+    );
+  }
 
-      {/* Main Content */}
-      <div className="flex-1 overflow-auto">
-        <div className="p-8">
-          <Outlet />
-        </div>
+  return (
+    <div className="flex h-screen bg-[#0B0E14] text-white overflow-hidden font-sans">
+      <ToastContainer />
+
+      {/* Main Sidebar */}
+      <Sidebar
+        guildId={guildId}
+        onLogout={handleLogout}
+        isOpenMobile={sidebarOpenMobile}
+        onCloseMobile={() => setSidebarOpenMobile(false)}
+      />
+
+      {/* Main App Canvas */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Top Header */}
+        <Topbar
+          status={status}
+          username={username}
+          onLogout={handleLogout}
+          onToggleSidebar={() => setSidebarOpenMobile(!sidebarOpenMobile)}
+        />
+
+        {/* Dynamic Page Content */}
+        <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-[#0B0E14] custom-scrollbar">
+          <div className="max-w-7xl mx-auto space-y-8">
+            <Outlet />
+          </div>
+        </main>
       </div>
     </div>
   );
