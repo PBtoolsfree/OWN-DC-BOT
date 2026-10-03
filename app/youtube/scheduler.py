@@ -220,6 +220,8 @@ class YouTubeScheduler:
                     thumbnail_url=entry.thumbnail_url,
                     description=entry.description,
                     role_id=dest.notification_role_id,
+                    channel_id=channel.youtube_channel_id,
+                    published_at=entry.published,
                 )
 
                 if success:
@@ -290,6 +292,9 @@ class YouTubeScheduler:
                             channel_name=channel.channel_name,
                             thumbnail_url=latest.thumbnail_url,
                             role_id=dest.notification_role_id,
+                            channel_id=channel.youtube_channel_id,
+                            scheduled_start=live_status.scheduled_start,
+                            viewer_count=live_status.viewer_count,
                         )
 
                         if success:

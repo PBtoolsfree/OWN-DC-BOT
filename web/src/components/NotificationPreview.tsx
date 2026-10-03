@@ -11,6 +11,9 @@ interface NotificationPreviewProps {
   enableButton?: boolean;
   videoTitle?: string;
   channelName?: string;
+  buttonLabel?: string;
+  badgeText?: string;
+  borderColor?: string;
 }
 
 export const NotificationPreview: React.FC<NotificationPreviewProps> = ({
@@ -23,6 +26,9 @@ export const NotificationPreview: React.FC<NotificationPreviewProps> = ({
   enableButton = true,
   videoTitle = 'EPIC LIVESTREAM: PB HERO Discord Bot Walkthrough',
   channelName = 'PB HERO',
+  buttonLabel = 'Watch on YouTube',
+  badgeText = 'LIVE',
+  borderColor = '#ED4245',
 }) => {
   return (
     <div className="bg-[#313338] border border-[#232428] rounded-xl p-4 max-w-lg shadow-xl font-sans text-sm text-[#dbdee1]">
@@ -54,7 +60,10 @@ export const NotificationPreview: React.FC<NotificationPreviewProps> = ({
       )}
 
       {/* Discord Embed */}
-      <div className="border-l-4 border-[#ED4245] bg-[#2b2d31] rounded-r-lg p-3.5 space-y-2">
+      <div
+        className="border-l-4 bg-[#2b2d31] rounded-r-lg p-3.5 space-y-2"
+        style={{ borderLeftColor: borderColor }}
+      >
         {/* Author */}
         <div className="flex items-center gap-2">
           <div className="w-5 h-5 rounded-full bg-red-600 flex items-center justify-center text-[10px] text-white font-bold">
@@ -65,7 +74,7 @@ export const NotificationPreview: React.FC<NotificationPreviewProps> = ({
 
         {/* Title */}
         <h4 className="text-base font-bold text-white hover:text-[#00a8fc] cursor-pointer transition-colors leading-snug">
-          {title || '🔴 PB HERO IS LIVE!'}
+          {title || 'PB HERO Announcement'}
         </h4>
 
         {/* Video Subtitle / Dynamic title */}
@@ -84,7 +93,7 @@ export const NotificationPreview: React.FC<NotificationPreviewProps> = ({
               <span className="text-xs text-gray-400 font-medium">YouTube Video Thumbnail</span>
             </div>
             <span className="absolute bottom-2 right-2 bg-black/80 text-[10px] text-white px-1.5 py-0.5 rounded font-mono">
-              LIVE
+              {badgeText}
             </span>
           </div>
         )}
@@ -105,7 +114,7 @@ export const NotificationPreview: React.FC<NotificationPreviewProps> = ({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#4e5058] hover:bg-[#6d6f78] text-white text-xs font-medium rounded transition-colors"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            <span>Watch on YouTube</span>
+            <span>{buttonLabel}</span>
           </button>
         </div>
       )}

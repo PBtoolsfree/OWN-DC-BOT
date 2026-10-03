@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { youtubeApi } from '../api/youtube';
 import { channelsApi } from '../api/channels';
-import { YouTubeChannel, DiscordChannel, DiscordRole } from '../types';
+import {
+  YouTubeChannel,
+  DiscordChannel,
+  DiscordRole,
+  NotificationTemplate,
+  YouTubeEventType,
+} from '../types';
 import { YouTubeChannelCard } from '../components/YouTubeChannelCard';
 import { YouTubeChannelModal } from '../components/YouTubeChannelModal';
 import { NotificationPreview } from '../components/NotificationPreview';
@@ -18,11 +24,129 @@ import {
   CheckCircle2,
   ListTree,
   ExternalLink,
+  RotateCcw,
+  Save,
+  Video,
+  Radio,
+  Clock,
+  Sparkles,
 } from 'lucide-react';
+
+const VALID_TABS = ['channels', 'notifications', 'settings'] as const;
+type TabType = (typeof VALID_TABS)[number];
+
+const EVENT_METADATA: Record<
+  YouTubeEventType,
+  {
+    label: string;
+    icon: typeof Video;
+    badge: string;
+    button: string;
+    borderColor: string;
+    sampleTitle: string;
+    variables: string[];
+    descriptionHelp: string;
+  }
+> = {
+  upload: {
+    label: 'New Video',
+    icon: Video,
+    badge: 'NEW VIDEO',
+    button: 'Watch Video',
+    borderColor: '#ED4245',
+    sampleTitle: 'PB HERO Bot Update: New Features Released',
+    variables: ['{channel_name}', '{video_title}', '{video_url}', '{channel_id}', '{published_at}'],
+    descriptionHelp: 'Sent when a new video is published to YouTube.',
+  },
+  scheduled_live: {
+    label: 'Scheduled Live',
+    icon: Clock,
+    badge: 'SCHEDULED',
+    button: 'Watch Live',
+    borderColor: '#FEE75C',
+    sampleTitle: 'Community Q&A and Bot Showcase',
+    variables: ['{channel_name}', '{video_title}', '{video_url}', '{scheduled_start}'],
+    descriptionHelp: 'Sent when a live stream is scheduled with a future start time.',
+  },
+  live_started: {
+    label: 'Live Started',
+    icon: Radio,
+    badge: 'LIVE',
+    button: 'Watch Live',
+    borderColor: '#ED4245',
+    sampleTitle: 'EPIC LIVESTREAM: PB HERO Discord Bot Walkthrough',
+    variables: ['{channel_name}', '{video_title}', '{video_url}', '{viewer_count}', '{started_at}'],
+    descriptionHelp: 'Sent immediately when the channel goes live on YouTube.',
+  },
+  premiere: {
+    label: 'Premiere',
+    icon: Sparkles,
+    badge: 'PREMIERE',
+    button: 'Watch Premiere',
+    borderColor: '#9B59B6',
+    sampleTitle: 'Special Premiere: Season 2 Launch',
+    variables: ['{channel_name}', '{video_title}', '{video_url}', '{scheduled_start}'],
+    descriptionHelp: 'Sent when a scheduled video premiere is announced.',
+  },
+};
+
+const DEFAULT_TEMPLATES: Record<YouTubeEventType, NotificationTemplate> = {
+  upload: {
+    event_type: 'upload',
+    title_template: '🎬 NEW VIDEO — {channel_name}',
+    description_template: '**{video_title}**\n\nA new video is now available on YouTube.',
+    mention_role: 'PB Gang',
+    footer_text: 'PB HERO Personal Bot',
+    show_thumbnail: true,
+    show_timestamp: true,
+    enable_button: true,
+  },
+  scheduled_live: {
+    event_type: 'scheduled_live',
+    title_template: '⏰ LIVE SCHEDULED — {channel_name}',
+    description_template: '**{video_title}**\n\nThe livestream is scheduled to start soon.',
+    mention_role: 'PB Gang',
+    footer_text: 'PB HERO Personal Bot',
+    show_thumbnail: true,
+    show_timestamp: true,
+    enable_button: true,
+  },
+  live_started: {
+    event_type: 'live_started',
+    title_template: '🔴 {channel_name} IS NOW LIVE!',
+    description_template: '**{video_title}**\n\nJoin the stream now on YouTube.',
+    mention_role: 'PB Gang',
+    footer_text: 'PB HERO Personal Bot',
+    show_thumbnail: true,
+    show_timestamp: true,
+    enable_button: true,
+  },
+  premiere: {
+    event_type: 'premiere',
+    title_template: '🎬 PREMIERE — {channel_name}',
+    description_template: '**{video_title}**\n\nA new YouTube Premiere is scheduled.',
+    mention_role: 'PB Gang',
+    footer_text: 'PB HERO Personal Bot',
+    show_thumbnail: true,
+    show_timestamp: true,
+    enable_button: true,
+  },
+};
 
 export default function YouTube() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const currentTab = searchParams.get('tab') || 'channels';
+  const rawTab = searchParams.get('tab');
+  const currentTab: TabType =
+    rawTab && (VALID_TABS as readonly string[]).includes(rawTab)
+      ? (rawTab as TabType)
+      : 'channels';
+
+  // Normalize URL query parameter if invalid or missing
+  useEffect(() => {
+    if (!rawTab || !(VALID_TABS as readonly string[]).includes(rawTab)) {
+      setSearchParams({ tab: 'channels' }, { replace: true });
+    }
+  }, [rawTab, setSearchParams]);
 
   const [loading, setLoading] = useState(true);
   const [channels, setChannels] = useState<YouTubeChannel[]>([]);
@@ -33,16 +157,16 @@ export default function YouTube() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
-  // Notification Template Editor state
-  const [templateTitle, setTemplateTitle] = useState('🔴 {channel_name} IS NOW LIVE!');
-  const [templateDesc, setTemplateDesc] = useState(
-    '**{video_title}**\n\nCome hang out and join the stream live right now on YouTube!'
-  );
-  const [templateFooter, setTemplateFooter] = useState('PB HERO Personal Discord Bot');
-  const [templateRole, setTemplateRole] = useState('PB Gang');
-  const [showThumb, setShowThumb] = useState(true);
-  const [showTimestamp, setShowTimestamp] = useState(true);
-  const [enableButton, setEnableButton] = useState(true);
+  // Notification Template State
+  const [templates, setTemplates] =
+    useState<Record<YouTubeEventType, NotificationTemplate>>(DEFAULT_TEMPLATES);
+  const [activeEvent, setActiveEvent] = useState<YouTubeEventType>('upload');
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [lastFocusedField, setLastFocusedField] = useState<'title' | 'description' | 'footer'>('description');
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const descTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const footerInputRef = useRef<HTMLInputElement>(null);
 
   // Settings state
   const [pollInterval, setPollInterval] = useState('60');
@@ -60,14 +184,25 @@ export default function YouTube() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [ytList, chList, rList] = await Promise.all([
+      const [ytList, chList, rList, tmplList] = await Promise.all([
         youtubeApi.getChannels(),
         channelsApi.getChannels(),
         channelsApi.getRoles(),
+        youtubeApi.getTemplates().catch(() => []),
       ]);
       setChannels(ytList);
       setDiscordChannels(chList);
       setRoles(rList);
+
+      if (tmplList && Array.isArray(tmplList) && tmplList.length > 0) {
+        const map = { ...DEFAULT_TEMPLATES };
+        for (const item of tmplList) {
+          if (item.event_type && (map as any)[item.event_type]) {
+            map[item.event_type as YouTubeEventType] = item;
+          }
+        }
+        setTemplates(map);
+      }
     } catch (err: any) {
       toast.error(err.message || 'Failed to load YouTube data');
     } finally {
@@ -78,6 +213,143 @@ export default function YouTube() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const handleTabChange = (newTab: TabType) => {
+    setSearchParams({ tab: newTab });
+  };
+
+  const currentTemplate = templates[activeEvent] || DEFAULT_TEMPLATES[activeEvent];
+
+  const updateActiveField = <K extends keyof NotificationTemplate>(
+    field: K,
+    val: NotificationTemplate[K]
+  ) => {
+    setTemplates((prev) => ({
+      ...prev,
+      [activeEvent]: {
+        ...prev[activeEvent],
+        [field]: val,
+      },
+    }));
+  };
+
+  const handleInsertVariable = (variable: string) => {
+    if (lastFocusedField === 'title') {
+      const current = currentTemplate.title_template || '';
+      updateActiveField('title_template', current ? `${current} ${variable}` : variable);
+      titleInputRef.current?.focus();
+    } else if (lastFocusedField === 'footer') {
+      const current = currentTemplate.footer_text || '';
+      updateActiveField('footer_text', current ? `${current} ${variable}` : variable);
+      footerInputRef.current?.focus();
+    } else {
+      const current = currentTemplate.description_template || '';
+      updateActiveField('description_template', current ? `${current} ${variable}` : variable);
+      descTextareaRef.current?.focus();
+    }
+  };
+
+  const validateTemplate = (t: NotificationTemplate, event: YouTubeEventType): string | null => {
+    if (!t.title_template || !t.title_template.trim()) {
+      return 'Notification Title Template cannot be empty.';
+    }
+    if (t.title_template.length > 256) {
+      return `Title template exceeds maximum limit of 256 characters (currently ${t.title_template.length}).`;
+    }
+    if (!t.description_template || !t.description_template.trim()) {
+      return 'Embed Description cannot be empty.';
+    }
+    if (t.description_template.length > 2000) {
+      return `Description template exceeds maximum limit of 2000 characters (currently ${t.description_template.length}).`;
+    }
+    if (t.footer_text && t.footer_text.length > 256) {
+      return `Footer text exceeds maximum limit of 256 characters (currently ${t.footer_text.length}).`;
+    }
+
+    // Check for unsupported variables
+    const allowed = new Set(EVENT_METADATA[event].variables);
+    const extractVars = (str: string) => str.match(/\{[a-zA-Z0-9_]+\}/g) || [];
+    const used = [
+      ...extractVars(t.title_template),
+      ...extractVars(t.description_template),
+      ...extractVars(t.footer_text || ''),
+    ];
+
+    for (const v of used) {
+      if (!allowed.has(v)) {
+        return `Variable "${v}" is not supported for ${EVENT_METADATA[event].label}. Available variables: ${EVENT_METADATA[event].variables.join(', ')}`;
+      }
+    }
+
+    return null;
+  };
+
+  const handleSaveTemplate = async () => {
+    const errorMsg = validateTemplate(currentTemplate, activeEvent);
+    if (errorMsg) {
+      toast.error(errorMsg);
+      return;
+    }
+
+    setSavingTemplate(true);
+    try {
+      const res = await youtubeApi.updateTemplate(activeEvent, {
+        title_template: currentTemplate.title_template,
+        description_template: currentTemplate.description_template,
+        mention_role: currentTemplate.mention_role,
+        footer_text: currentTemplate.footer_text,
+        show_thumbnail: currentTemplate.show_thumbnail,
+        show_timestamp: currentTemplate.show_timestamp,
+        enable_button: currentTemplate.enable_button,
+      });
+
+      if (res.template) {
+        setTemplates((prev) => ({
+          ...prev,
+          [activeEvent]: res.template,
+        }));
+      }
+      toast.success(`${EVENT_METADATA[activeEvent].label} template saved successfully`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to save template');
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const handleResetTemplateConfirm = async () => {
+    try {
+      const res = await youtubeApi.resetTemplate(activeEvent);
+      if (res.template) {
+        setTemplates((prev) => ({
+          ...prev,
+          [activeEvent]: res.template,
+        }));
+      } else {
+        setTemplates((prev) => ({
+          ...prev,
+          [activeEvent]: DEFAULT_TEMPLATES[activeEvent],
+        }));
+      }
+      toast.success(`${EVENT_METADATA[activeEvent].label} template reset to default`);
+      setIsResetModalOpen(false);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to reset template');
+    }
+  };
+
+  const renderPreviewText = (text: string, event: YouTubeEventType) => {
+    if (!text) return '';
+    return text
+      .replace(/\{channel_name\}/g, 'PB HERO GAMER')
+      .replace(/\{channel_id\}/g, 'UC123456789PBHERO')
+      .replace(/\{video_title\}/g, EVENT_METADATA[event].sampleTitle)
+      .replace(/\{video_url\}/g, 'https://youtube.com/watch?v=dQw4w9WgXcQ')
+      .replace(/\{published_at\}/g, 'Today at 6:00 PM')
+      .replace(/\{scheduled_start\}/g, 'Tomorrow at 8:00 PM UTC')
+      .replace(/\{viewer_count\}/g, '1,420')
+      .replace(/\{started_at\}/g, 'Just now');
+  };
 
   const handleAddChannel = async (payload: any) => {
     const res = await youtubeApi.addChannel(payload);
@@ -160,7 +432,7 @@ export default function YouTube() {
       {/* Navigation tabs */}
       <div className="flex items-center gap-2 border-b border-gray-800 pb-2">
         <button
-          onClick={() => setSearchParams({ tab: 'channels' })}
+          onClick={() => handleTabChange('channels')}
           className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
             currentTab === 'channels'
               ? 'bg-[#5865F2] text-white shadow'
@@ -172,7 +444,7 @@ export default function YouTube() {
         </button>
 
         <button
-          onClick={() => setSearchParams({ tab: 'notifications' })}
+          onClick={() => handleTabChange('notifications')}
           className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
             currentTab === 'notifications'
               ? 'bg-[#5865F2] text-white shadow'
@@ -184,7 +456,7 @@ export default function YouTube() {
         </button>
 
         <button
-          onClick={() => setSearchParams({ tab: 'settings' })}
+          onClick={() => handleTabChange('settings')}
           className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-colors ${
             currentTab === 'settings'
               ? 'bg-[#5865F2] text-white shadow'
@@ -272,131 +544,230 @@ export default function YouTube() {
 
       {/* Tab: Notification Template Editor & Live Preview */}
       {currentTab === 'notifications' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-          {/* Form */}
-          <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider border-b border-gray-800 pb-3">
-              Announcement Template Editor
-            </h2>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-gray-300 block">
-                Notification Title Template
-              </label>
-              <input
-                type="text"
-                value={templateTitle}
-                onChange={(e) => setTemplateTitle(e.target.value)}
-                placeholder="🔴 {channel_name} IS NOW LIVE!"
-                className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
-              />
-              <span className="text-[11px] text-gray-500">
-                Variables: <code className="text-gray-400">{'{channel_name}'}</code>,{' '}
-                <code className="text-gray-400">{'{video_title}'}</code>
-              </span>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-gray-300 block">
-                Embed Description
-              </label>
-              <textarea
-                rows={4}
-                value={templateDesc}
-                onChange={(e) => setTemplateDesc(e.target.value)}
-                placeholder="Markdown formatted description"
-                className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-[#5865F2]"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-gray-300 block">Mention Role</label>
-                <input
-                  type="text"
-                  value={templateRole}
-                  onChange={(e) => setTemplateRole(e.target.value)}
-                  placeholder="e.g. YouTube Notifications"
-                  className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-gray-300 block">Footer Text</label>
-                <input
-                  type="text"
-                  value={templateFooter}
-                  onChange={(e) => setTemplateFooter(e.target.value)}
-                  placeholder="PB HERO Personal Bot"
-                  className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t border-gray-800">
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">
-                Visual Elements
-              </span>
-              <div className="grid grid-cols-3 gap-2">
-                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showThumb}
-                    onChange={(e) => setShowThumb(e.target.checked)}
-                    className="rounded border-gray-700 text-[#5865F2]"
-                  />
-                  <span>Show Thumbnail</span>
-                </label>
-
-                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showTimestamp}
-                    onChange={(e) => setShowTimestamp(e.target.checked)}
-                    className="rounded border-gray-700 text-[#5865F2]"
-                  />
-                  <span>Show Timestamp</span>
-                </label>
-
-                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={enableButton}
-                    onChange={(e) => setEnableButton(e.target.checked)}
-                    className="rounded border-gray-700 text-[#5865F2]"
-                  />
-                  <span>Watch Button</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={() => toast.success('Template settings saved successfully')}
-                className="px-5 py-2 bg-[#5865F2] hover:bg-[#4752c4] text-white text-xs font-bold rounded-xl shadow transition-colors"
-              >
-                Save Template
-              </button>
-            </div>
+        <div className="space-y-6">
+          {/* Event-specific template navigation pills */}
+          <div className="bg-[#151921] border border-gray-800 p-2 rounded-2xl flex flex-wrap items-center gap-2">
+            {(Object.keys(EVENT_METADATA) as YouTubeEventType[]).map((evtKey) => {
+              const meta = EVENT_METADATA[evtKey];
+              const IconComp = meta.icon;
+              const isActive = activeEvent === evtKey;
+              return (
+                <button
+                  key={evtKey}
+                  type="button"
+                  onClick={() => setActiveEvent(evtKey)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                    isActive
+                      ? 'bg-[#5865F2] text-white shadow-md shadow-[#5865F2]/25'
+                      : 'text-gray-400 hover:text-white hover:bg-gray-800/60'
+                  }`}
+                >
+                  <IconComp className="w-4 h-4" />
+                  <span>{meta.label}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Live Preview Panel */}
-          <div className="space-y-3">
-            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
-              Discord Embed Live Preview
-            </span>
-            <NotificationPreview
-              title={templateTitle.replace('{channel_name}', 'PB HERO').replace('{video_title}', 'LIVESTREAM: PB HERO Bot Walkthrough')}
-              description={templateDesc.replace('{channel_name}', 'PB HERO').replace('{video_title}', 'LIVESTREAM: PB HERO Bot Walkthrough')}
-              footer={templateFooter}
-              mentionRoleName={templateRole}
-              showThumbnail={showThumb}
-              showTimestamp={showTimestamp}
-              enableButton={enableButton}
-              videoTitle="PB HERO Discord Bot Live Walkthrough"
-              channelName="PB HERO"
-            />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+            {/* Form */}
+            <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+                <div>
+                  <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <span>{EVENT_METADATA[activeEvent].label} Template</span>
+                  </h2>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    {EVENT_METADATA[activeEvent].descriptionHelp}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsResetModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset to Default</span>
+                </button>
+              </div>
+
+              {/* Title Input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-gray-300 block">
+                    Notification Title Template <span className="text-red-400">*</span>
+                  </label>
+                  <span className="text-[10px] text-gray-500 font-mono">
+                    {currentTemplate.title_template?.length || 0}/256
+                  </span>
+                </div>
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  maxLength={256}
+                  value={currentTemplate.title_template}
+                  onFocus={() => setLastFocusedField('title')}
+                  onChange={(e) => updateActiveField('title_template', e.target.value)}
+                  placeholder="🎬 NEW VIDEO — {channel_name}"
+                  className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+                />
+              </div>
+
+              {/* Description Input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-gray-300 block">
+                    Embed Description <span className="text-red-400">*</span>
+                  </label>
+                  <span className="text-[10px] text-gray-500 font-mono">
+                    {currentTemplate.description_template?.length || 0}/2000
+                  </span>
+                </div>
+                <textarea
+                  ref={descTextareaRef}
+                  rows={4}
+                  maxLength={2000}
+                  value={currentTemplate.description_template}
+                  onFocus={() => setLastFocusedField('description')}
+                  onChange={(e) => updateActiveField('description_template', e.target.value)}
+                  placeholder="**{video_title}**&#10;&#10;A new video is now available on YouTube."
+                  className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-[#5865F2] font-mono leading-relaxed"
+                />
+              </div>
+
+              {/* Variable helper */}
+              <div className="bg-[#0B0E14] border border-gray-800 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+                    Available Variables
+                  </span>
+                  <span className="text-[10px] text-gray-500">
+                    Click to insert into {lastFocusedField}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {EVENT_METADATA[activeEvent].variables.map((variable) => (
+                    <button
+                      key={variable}
+                      type="button"
+                      onClick={() => handleInsertVariable(variable)}
+                      className="px-2 py-1 bg-gray-800 hover:bg-[#5865F2]/20 hover:text-[#5865F2] hover:border-[#5865F2]/40 border border-gray-700 rounded-lg text-[11px] font-mono text-gray-300 transition-colors"
+                      title={`Insert ${variable}`}
+                    >
+                      {variable}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Mention Role & Footer */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-300 block">Mention Role</label>
+                  <input
+                    type="text"
+                    value={currentTemplate.mention_role || ''}
+                    onChange={(e) => updateActiveField('mention_role', e.target.value)}
+                    placeholder="e.g. YouTube Notifications"
+                    className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-gray-300 block">Footer Text</label>
+                    <span className="text-[10px] text-gray-500 font-mono">
+                      {currentTemplate.footer_text?.length || 0}/256
+                    </span>
+                  </div>
+                  <input
+                    ref={footerInputRef}
+                    type="text"
+                    maxLength={256}
+                    value={currentTemplate.footer_text || ''}
+                    onFocus={() => setLastFocusedField('footer')}
+                    onChange={(e) => updateActiveField('footer_text', e.target.value)}
+                    placeholder="PB HERO Personal Bot"
+                    className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
+                  />
+                </div>
+              </div>
+
+              {/* Visual Elements checkboxes */}
+              <div className="space-y-2 pt-2 border-t border-gray-800">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">
+                  Visual Elements
+                </span>
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={currentTemplate.show_thumbnail}
+                      onChange={(e) => updateActiveField('show_thumbnail', e.target.checked)}
+                      className="rounded border-gray-700 text-[#5865F2]"
+                    />
+                    <span>Show Thumbnail</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={currentTemplate.show_timestamp}
+                      onChange={(e) => updateActiveField('show_timestamp', e.target.checked)}
+                      className="rounded border-gray-700 text-[#5865F2]"
+                    />
+                    <span>Show Timestamp</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={currentTemplate.enable_button}
+                      onChange={(e) => updateActiveField('enable_button', e.target.checked)}
+                      className="rounded border-gray-700 text-[#5865F2]"
+                    />
+                    <span>Watch Button</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Save Button */}
+              <div className="pt-2">
+                <button
+                  type="button"
+                  disabled={savingTemplate}
+                  onClick={handleSaveTemplate}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#5865F2] hover:bg-[#4752c4] text-white text-xs font-bold rounded-xl shadow transition-colors disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{savingTemplate ? 'Saving Template...' : 'Save Template'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Live Preview Panel */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                  Discord Embed Live Preview ({EVENT_METADATA[activeEvent].label})
+                </span>
+                <span className="text-[10px] text-gray-500 font-mono">Real-time dynamic rendering</span>
+              </div>
+              <NotificationPreview
+                title={renderPreviewText(currentTemplate.title_template, activeEvent)}
+                description={renderPreviewText(currentTemplate.description_template, activeEvent)}
+                footer={renderPreviewText(currentTemplate.footer_text || '', activeEvent)}
+                mentionRoleName={currentTemplate.mention_role || undefined}
+                showThumbnail={currentTemplate.show_thumbnail}
+                showTimestamp={currentTemplate.show_timestamp}
+                enableButton={currentTemplate.enable_button}
+                videoTitle={EVENT_METADATA[activeEvent].sampleTitle}
+                channelName="PB HERO GAMER"
+                buttonLabel={EVENT_METADATA[activeEvent].button}
+                badgeText={EVENT_METADATA[activeEvent].badge}
+                borderColor={EVENT_METADATA[activeEvent].borderColor}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -478,6 +849,17 @@ export default function YouTube() {
         isDangerous
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* Reset Template Confirmation Modal */}
+      <ConfirmModal
+        isOpen={isResetModalOpen}
+        title={`Reset ${EVENT_METADATA[activeEvent].label} Template`}
+        message={`Reset ${EVENT_METADATA[activeEvent].label} template to default? This will only reset settings for this event.`}
+        confirmText="Reset to Default"
+        isDangerous
+        onConfirm={handleResetTemplateConfirm}
+        onCancel={() => setIsResetModalOpen(false)}
       />
     </div>
   );

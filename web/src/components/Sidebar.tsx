@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Youtube,
@@ -34,6 +34,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [youtubeOpen, setYoutubeOpen] = useState(true);
   const [moderatorOpen, setModeratorOpen] = useState(true);
+
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const currentTab = searchParams.get('tab') || 'channels';
+  const isYouTube = location.pathname === '/youtube';
+
+  const isChannelsActive = isYouTube && currentTab === 'channels';
+  const isNotificationsActive = isYouTube && currentTab === 'notifications';
+  const isSettingsActive = isYouTube && currentTab === 'settings';
 
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
@@ -96,18 +105,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {youtubeOpen && (
             <div className="space-y-0.5 pl-5 mt-1 border-l border-gray-800 ml-4">
-              <NavLink to="/youtube/channels" className={subNavLinkClass} onClick={onCloseMobile}>
+              <Link
+                to="/youtube?tab=channels"
+                className={subNavLinkClass({ isActive: isChannelsActive })}
+                onClick={onCloseMobile}
+              >
                 <ListTree className="w-3.5 h-3.5" />
                 <span>Channels</span>
-              </NavLink>
-              <NavLink to="/youtube/notifications" className={subNavLinkClass} onClick={onCloseMobile}>
+              </Link>
+              <Link
+                to="/youtube?tab=notifications"
+                className={subNavLinkClass({ isActive: isNotificationsActive })}
+                onClick={onCloseMobile}
+              >
                 <Bell className="w-3.5 h-3.5" />
                 <span>Notifications</span>
-              </NavLink>
-              <NavLink to="/youtube/settings" className={subNavLinkClass} onClick={onCloseMobile}>
+              </Link>
+              <Link
+                to="/youtube?tab=settings"
+                className={subNavLinkClass({ isActive: isSettingsActive })}
+                onClick={onCloseMobile}
+              >
                 <Sliders className="w-3.5 h-3.5" />
                 <span>Settings</span>
-              </NavLink>
+              </Link>
             </div>
           )}
         </div>

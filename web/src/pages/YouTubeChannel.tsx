@@ -72,7 +72,7 @@ export default function YouTubeChannelDetails() {
         }
       } catch (err: any) {
         toast.error(err.message || 'Channel not found');
-        navigate('/youtube');
+        navigate('/youtube?tab=channels');
       } finally {
         setLoading(false);
       }
@@ -164,7 +164,7 @@ export default function YouTubeChannelDetails() {
     try {
       await youtubeApi.deleteChannel(id);
       toast.success('Channel deleted.');
-      navigate('/youtube');
+      navigate('/youtube?tab=channels');
     } catch (err: any) {
       toast.error(err.message || 'Failed to delete channel');
     }
@@ -186,7 +186,7 @@ export default function YouTubeChannelDetails() {
       {/* Back navigation & Header */}
       <div className="flex items-center gap-3">
         <Link
-          to="/youtube"
+          to="/youtube?tab=channels"
           className="p-2 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />

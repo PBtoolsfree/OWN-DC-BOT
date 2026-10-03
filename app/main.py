@@ -18,7 +18,7 @@ from app.dashboard.app import create_dashboard_app
 from app.dashboard.auth import hash_password
 from app.database.engine import close_engine, get_session_direct, init_engine
 from app.database.models import Base
-from app.database.repositories import AdminUserRepo, PolicyProfileRepo
+from app.database.repositories import AdminUserRepo, PolicyProfileRepo, YouTubeTemplateRepo
 from app.logging_config import setup_logging
 from app.runtime_state import (
     BotState,
@@ -55,6 +55,10 @@ async def init_database(create_admin_user: bool = True) -> None:
             await PolicyProfileRepo.create_defaults(session)
             await session.commit()
             logger.info("Created default policy profiles")
+
+        # Initialize default YouTube notification templates
+        await YouTubeTemplateRepo.create_defaults(session)
+        await session.commit()
 
         # Initialize admin user if configured in environment
         if create_admin_user and settings.ADMIN_USERNAME:

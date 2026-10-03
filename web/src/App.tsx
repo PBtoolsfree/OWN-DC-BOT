@@ -20,9 +20,9 @@ function App() {
         <Route path="/" element={<DashboardLayout />}>
           <Route index element={<Overview />} />
           <Route path="youtube" element={<YouTube />} />
-          <Route path="youtube/channels" element={<YouTube />} />
-          <Route path="youtube/notifications" element={<YouTube />} />
-          <Route path="youtube/settings" element={<YouTube />} />
+          <Route path="youtube/channels" element={<Navigate to="/youtube?tab=channels" replace />} />
+          <Route path="youtube/notifications" element={<Navigate to="/youtube?tab=notifications" replace />} />
+          <Route path="youtube/settings" element={<Navigate to="/youtube?tab=settings" replace />} />
           <Route path="youtube/:id" element={<YouTubeChannelDetails />} />
           <Route path="moderator" element={<Moderator />} />
           <Route path="moderator/policies" element={<ChannelPolicies />} />

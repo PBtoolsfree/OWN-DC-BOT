@@ -30,6 +30,7 @@ from app.database.models import (
     YouTubeChannel,
     YouTubeDestination,
     YouTubeEvent,
+    YouTubeNotificationTemplate,
 )
 
 logger = logging.getLogger("pbhero.database")
@@ -245,6 +246,107 @@ class YouTubeEventRepo:
             )
         )
         return result.scalar() or 0
+
+
+# ─── YouTube Notification Templates ──────────────────────────────────────────
+
+class YouTubeTemplateRepo:
+    """Repository for event-specific YouTube notification templates."""
+
+    DEFAULTS = {
+        EventType.UPLOAD: {
+            "title_template": "🎬 NEW VIDEO — {channel_name}",
+            "description_template": "**{video_title}**\n\nA new video is now available on YouTube.",
+            "mention_role": None,
+            "footer_text": "PB HERO Personal Discord Bot",
+            "show_thumbnail": True,
+            "show_timestamp": True,
+            "enable_button": True,
+        },
+        EventType.SCHEDULED_LIVE: {
+            "title_template": "⏰ LIVE SCHEDULED — {channel_name}",
+            "description_template": "**{video_title}**\n\nThe livestream is scheduled to start soon.",
+            "mention_role": None,
+            "footer_text": "PB HERO Personal Discord Bot",
+            "show_thumbnail": True,
+            "show_timestamp": True,
+            "enable_button": True,
+        },
+        EventType.LIVE_STARTED: {
+            "title_template": "🔴 {channel_name} IS NOW LIVE!",
+            "description_template": "**{video_title}**\n\nJoin the stream now on YouTube.",
+            "mention_role": None,
+            "footer_text": "PB HERO Personal Discord Bot",
+            "show_thumbnail": True,
+            "show_timestamp": True,
+            "enable_button": True,
+        },
+        EventType.PREMIERE: {
+            "title_template": "🎬 PREMIERE — {channel_name}",
+            "description_template": "**{video_title}**\n\nA new YouTube Premiere is scheduled.",
+            "mention_role": None,
+            "footer_text": "PB HERO Personal Discord Bot",
+            "show_thumbnail": True,
+            "show_timestamp": True,
+            "enable_button": True,
+        },
+    }
+
+    @classmethod
+    async def create_defaults(cls, session: AsyncSession) -> None:
+        """Ensure default templates exist for all four event types."""
+        for event_type, data in cls.DEFAULTS.items():
+            result = await session.execute(
+                select(YouTubeNotificationTemplate).where(YouTubeNotificationTemplate.event_type == event_type)
+            )
+            if not result.scalar_one_or_none():
+                tpl = YouTubeNotificationTemplate(event_type=event_type, **data)
+                session.add(tpl)
+        await session.flush()
+
+    @classmethod
+    async def get_all(cls, session: AsyncSession) -> list[YouTubeNotificationTemplate]:
+        """Get all event templates, auto-creating defaults if any are missing."""
+        await cls.create_defaults(session)
+        result = await session.execute(
+            select(YouTubeNotificationTemplate).order_by(YouTubeNotificationTemplate.id)
+        )
+        return list(result.scalars().all())
+
+    @classmethod
+    async def get_by_event_type(cls, session: AsyncSession, event_type: EventType) -> YouTubeNotificationTemplate:
+        """Get template for a specific event type, auto-creating default if missing."""
+        result = await session.execute(
+            select(YouTubeNotificationTemplate).where(YouTubeNotificationTemplate.event_type == event_type)
+        )
+        tpl = result.scalar_one_or_none()
+        if not tpl:
+            defaults = cls.DEFAULTS.get(event_type)
+            if not defaults:
+                raise ValueError(f"Unknown event type: {event_type}")
+            tpl = YouTubeNotificationTemplate(event_type=event_type, **defaults)
+            session.add(tpl)
+            await session.flush()
+        return tpl
+
+    @classmethod
+    async def update(cls, session: AsyncSession, event_type: EventType, **kwargs) -> YouTubeNotificationTemplate:
+        """Update an event template."""
+        tpl = await cls.get_by_event_type(session, event_type)
+        for key, val in kwargs.items():
+            if hasattr(tpl, key) and key not in ("id", "event_type", "created_at"):
+                setattr(tpl, key, val)
+        tpl.updated_at = datetime.utcnow()
+        await session.flush()
+        return tpl
+
+    @classmethod
+    async def reset(cls, session: AsyncSession, event_type: EventType) -> YouTubeNotificationTemplate:
+        """Reset an event template to its factory default values."""
+        defaults = cls.DEFAULTS.get(event_type)
+        if not defaults:
+            raise ValueError(f"Unknown event type: {event_type}")
+        return await cls.update(session, event_type, **defaults)
 
 
 # ─── Channel Policies ────────────────────────────────────────────────────────

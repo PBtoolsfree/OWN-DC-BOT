@@ -40,6 +40,7 @@ from app.database.repositories import (
     YouTubeChannelRepo,
     YouTubeDestinationRepo,
     YouTubeEventRepo,
+    YouTubeTemplateRepo,
 )
 
 logger = logging.getLogger("pbhero.dashboard")
@@ -543,6 +544,168 @@ async def test_youtube_live(channel_id: str, username: str = Depends(require_aut
             "viewer_count": None,
             "error": str(e),
         }
+
+
+# ─── YouTube Notification Templates ──────────────────────────────────────────
+
+ALLOWED_EVENT_TYPES = {"upload", "scheduled_live", "live_started", "premiere"}
+SUPPORTED_VARIABLES = {
+    "{channel_name}",
+    "{video_title}",
+    "{video_url}",
+    "{channel_id}",
+    "{published_at}",
+    "{scheduled_start}",
+    "{viewer_count}",
+    "{started_at}",
+}
+
+
+def _validate_template_variables(text: str) -> None:
+    """Validate that all {...} placeholders in text are supported."""
+    if not text:
+        return
+    matches = re.findall(r"\{[^{}]*\}", text)
+    for var in matches:
+        if var not in SUPPORTED_VARIABLES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported template variable: '{var}'. Supported: {', '.join(sorted(SUPPORTED_VARIABLES))}",
+            )
+
+
+def _serialize_template(tpl) -> dict:
+    return {
+        "id": tpl.id,
+        "event_type": tpl.event_type.value if hasattr(tpl.event_type, "value") else str(tpl.event_type),
+        "title_template": tpl.title_template,
+        "description_template": tpl.description_template,
+        "mention_role": tpl.mention_role,
+        "footer_text": tpl.footer_text or "PB HERO Personal Discord Bot",
+        "show_thumbnail": tpl.show_thumbnail,
+        "show_timestamp": tpl.show_timestamp,
+        "enable_button": tpl.enable_button,
+        "updated_at": tpl.updated_at.isoformat() if tpl.updated_at else None,
+    }
+
+
+@router.get("/youtube/templates")
+async def get_all_youtube_templates(username: str = Depends(require_auth)):
+    """Get all 4 event-specific YouTube notification templates."""
+    session = await get_session_direct()
+    try:
+        templates = await YouTubeTemplateRepo.get_all(session)
+        await session.commit()
+        return [_serialize_template(t) for t in templates]
+    finally:
+        await session.close()
+
+
+@router.get("/youtube/templates/{event_type}")
+async def get_youtube_template(event_type: str, username: str = Depends(require_auth)):
+    """Get a single YouTube notification template by event type."""
+    norm_type = event_type.lower().strip()
+    if norm_type not in ALLOWED_EVENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event type: '{event_type}'. Allowed: {', '.join(sorted(ALLOWED_EVENT_TYPES))}",
+        )
+
+    session = await get_session_direct()
+    try:
+        tpl = await YouTubeTemplateRepo.get_by_event_type(session, EventType(norm_type))
+        await session.commit()
+        return _serialize_template(tpl)
+    finally:
+        await session.close()
+
+
+@router.put("/youtube/templates/{event_type}")
+async def update_youtube_template(event_type: str, request: Request, username: str = Depends(require_auth)):
+    """Update a specific YouTube notification template."""
+    norm_type = event_type.lower().strip()
+    if norm_type not in ALLOWED_EVENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event type: '{event_type}'. Allowed: {', '.join(sorted(ALLOWED_EVENT_TYPES))}",
+        )
+
+    data = await request.json()
+
+    # Validate fields
+    updates = {}
+    if "title_template" in data:
+        title = str(data["title_template"]).strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title template cannot be empty")
+        if len(title) > 256:
+            raise HTTPException(status_code=400, detail="Title template cannot exceed 256 characters")
+        _validate_template_variables(title)
+        updates["title_template"] = title
+
+    if "description_template" in data:
+        desc = str(data["description_template"]).strip()
+        if not desc:
+            raise HTTPException(status_code=400, detail="Description template cannot be empty")
+        if len(desc) > 2000:
+            raise HTTPException(status_code=400, detail="Description template cannot exceed 2000 characters")
+        _validate_template_variables(desc)
+        updates["description_template"] = desc
+
+    if "mention_role" in data:
+        updates["mention_role"] = data["mention_role"].strip() if data["mention_role"] else None
+
+    if "footer_text" in data:
+        footer = str(data["footer_text"]).strip() if data["footer_text"] else ""
+        if len(footer) > 256:
+            raise HTTPException(status_code=400, detail="Footer text cannot exceed 256 characters")
+        _validate_template_variables(footer)
+        updates["footer_text"] = footer
+
+    for bool_field in ("show_thumbnail", "show_timestamp", "enable_button"):
+        if bool_field in data:
+            updates[bool_field] = bool(data[bool_field])
+
+    session = await get_session_direct()
+    try:
+        tpl = await YouTubeTemplateRepo.update(session, EventType(norm_type), **updates)
+        await AuditLogRepo.log(session, username, "youtube_template_updated", norm_type)
+        await session.commit()
+        return {"success": True, "template": _serialize_template(tpl)}
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await session.close()
+
+
+@router.post("/youtube/templates/{event_type}/reset")
+async def reset_youtube_template(event_type: str, username: str = Depends(require_auth)):
+    """Reset a specific YouTube notification template to factory defaults."""
+    norm_type = event_type.lower().strip()
+    if norm_type not in ALLOWED_EVENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event type: '{event_type}'. Allowed: {', '.join(sorted(ALLOWED_EVENT_TYPES))}",
+        )
+
+    session = await get_session_direct()
+    try:
+        tpl = await YouTubeTemplateRepo.reset(session, EventType(norm_type))
+        await AuditLogRepo.log(session, username, "youtube_template_reset", norm_type)
+        await session.commit()
+        return {"success": True, "template": _serialize_template(tpl)}
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await session.close()
 
 
 # ─── Channel Policies ────────────────────────────────────────────────────────

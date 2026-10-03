@@ -171,6 +171,23 @@ class YouTubeEvent(Base):
     )
 
 
+class YouTubeNotificationTemplate(Base):
+    """Notification template per YouTube event type (single-server)."""
+    __tablename__ = "youtube_notification_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_type = Column(Enum(EventType), nullable=False, unique=True, index=True)
+    title_template = Column(String(256), nullable=False)
+    description_template = Column(Text, nullable=False)
+    mention_role = Column(String(128), nullable=True)
+    footer_text = Column(String(256), nullable=True)
+    show_thumbnail = Column(Boolean, default=True, nullable=False)
+    show_timestamp = Column(Boolean, default=True, nullable=False)
+    enable_button = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ChannelPolicy(Base):
     """Channel-specific moderation policies."""
     __tablename__ = "channel_policies"

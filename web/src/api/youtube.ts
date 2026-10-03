@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { YouTubeChannel, YouTubeDestination } from '../types';
+import { NotificationTemplate, YouTubeChannel, YouTubeDestination } from '../types';
 
 export interface AddYouTubePayload {
   youtube_input: string;
@@ -50,4 +50,10 @@ export const youtubeApi = {
       viewer_count?: number | null;
       error?: string | null;
     }>(`/youtube/test-live/${id}`, {}),
+  getTemplates: () => apiClient.get<NotificationTemplate[]>('/youtube/templates'),
+  getTemplate: (eventType: string) => apiClient.get<NotificationTemplate>(`/youtube/templates/${eventType}`),
+  updateTemplate: (eventType: string, data: Partial<NotificationTemplate>) =>
+    apiClient.put<{ success: boolean; template: NotificationTemplate }>(`/youtube/templates/${eventType}`, data),
+  resetTemplate: (eventType: string) =>
+    apiClient.post<{ success: boolean; template: NotificationTemplate }>(`/youtube/templates/${eventType}/reset`, {}),
 };

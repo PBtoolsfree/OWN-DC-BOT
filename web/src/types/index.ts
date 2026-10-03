@@ -180,3 +180,19 @@ export interface ToastMessage {
   message: string;
   duration?: number;
 }
+
+export type YouTubeEventType = 'upload' | 'scheduled_live' | 'live_started' | 'premiere';
+
+export interface NotificationTemplate {
+  id?: number;
+  event_type: YouTubeEventType;
+  title_template: string;
+  description_template: string;
+  mention_role?: string | null;
+  footer_text?: string | null;
+  show_thumbnail: boolean;
+  show_timestamp: boolean;
+  enable_button: boolean;
+  updated_at?: string | null;
+}
+
