@@ -61,4 +61,5 @@ start.sh
 test_fresh_install/
 fresh_install_test/
 test_*/
+cookies.txt
 

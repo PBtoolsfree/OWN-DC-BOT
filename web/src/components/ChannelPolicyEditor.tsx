@@ -38,6 +38,7 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
   const [presetName, setPresetName] = useState<string>('CUSTOM');
   const [deleteViolations, setDeleteViolations] = useState<boolean>(true);
   const [warnOnViolation, setWarnOnViolation] = useState<boolean>(true);
+  const [sendDmWarning, setSendDmWarning] = useState<boolean>(false);
   const [logViolations, setLogViolations] = useState<boolean>(true);
   const [enabled, setEnabled] = useState<boolean>(true);
 
@@ -70,6 +71,7 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
       setPresetName(policy.preset_name || 'CUSTOM');
       setDeleteViolations(policy.delete_violations ?? true);
       setWarnOnViolation(policy.warn_on_violation ?? true);
+      setSendDmWarning(policy.send_dm_warning ?? false);
       setLogViolations(policy.log_violations ?? true);
       setEnabled(policy.enabled ?? true);
     } else {
@@ -89,6 +91,7 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
       setPresetName('INHERITED');
       setDeleteViolations(true);
       setWarnOnViolation(true);
+      setSendDmWarning(false);
       setLogViolations(true);
       setEnabled(true);
     }
@@ -156,6 +159,7 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
         preset_name: presetName,
         delete_violations: deleteViolations,
         warn_on_violation: warnOnViolation,
+        send_dm_warning: sendDmWarning,
         log_violations: logViolations,
         enabled,
       });
@@ -198,6 +202,11 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
             <span className="bg-[#5865F2]/20 text-[#5865F2] border border-[#5865F2]/30 px-2.5 py-0.5 rounded-full text-xs font-semibold">
               {presetName}
             </span>
+            {hasChanges && (
+              <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full text-xs font-semibold animate-pulse">
+                ● Unsaved Changes
+              </span>
+            )}
           </div>
           <span className="text-xs text-gray-400 mt-1 block">
             Category: <strong className="text-gray-200">{channel.category || 'None'}</strong> • Type: <strong className="text-gray-200">{channel.type.toUpperCase()}</strong>
@@ -433,7 +442,7 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
             Violation Enforcement Actions
           </span>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
             <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
@@ -453,6 +462,19 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
                 checked={warnOnViolation}
                 onChange={(e) => {
                   setWarnOnViolation(e.target.checked);
+                  setHasChanges(true);
+                }}
+                className="rounded border-gray-700 text-[#5865F2] focus:ring-0"
+              />
+              <span>Post Channel Warning</span>
+            </label>
+
+            <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={sendDmWarning}
+                onChange={(e) => {
+                  setSendDmWarning(e.target.checked);
                   setHasChanges(true);
                 }}
                 className="rounded border-gray-700 text-[#5865F2] focus:ring-0"

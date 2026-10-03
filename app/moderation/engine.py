@@ -65,13 +65,21 @@ class ModerationEngine:
 
             # Load server config
             config = await ServerConfigRepo.get(session)
+            from app.database.serializers import deserialize_json_field
+
+            default_log_events = [
+                "policy_violation", "blocked_link", "blocked_attachment", "blocked_mention",
+                "warning", "timeout", "kick", "ban", "message_delete"
+            ]
+
             if config:
                 self._server_config_cache = {
                     "mod_log_channel_id": config.mod_log_channel_id,
-                    "admin_role_ids": json.loads(config.admin_role_ids) if config.admin_role_ids else [],
-                    "moderator_role_ids": json.loads(config.moderator_role_ids) if config.moderator_role_ids else [],
-                    "global_allowed_domains": json.loads(config.global_allowed_domains) if config.global_allowed_domains else [],
+                    "admin_role_ids": deserialize_json_field(config.admin_role_ids, default=[]),
+                    "moderator_role_ids": deserialize_json_field(config.moderator_role_ids, default=[]),
+                    "global_allowed_domains": deserialize_json_field(config.global_allowed_domains, default=[]),
                     "warning_message_template": config.warning_message_template,
+                    "mod_log_events": deserialize_json_field(getattr(config, "mod_log_events", None), default=default_log_events),
                 }
             else:
                 self._server_config_cache = {
@@ -80,6 +88,7 @@ class ModerationEngine:
                     "moderator_role_ids": [],
                     "global_allowed_domains": [],
                     "warning_message_template": None,
+                    "mod_log_events": default_log_events,
                 }
 
             self._cache_valid = True
@@ -90,15 +99,13 @@ class ModerationEngine:
 
     def _policy_to_dict(self, policy) -> dict:
         """Convert a ChannelPolicy model to a dict for processing."""
-        allowed_domains = []
-        if policy.allowed_domains:
-            try:
-                allowed_domains = json.loads(policy.allowed_domains)
-            except json.JSONDecodeError:
-                allowed_domains = [d.strip() for d in policy.allowed_domains.split(",") if d.strip()]
+        from app.database.serializers import deserialize_json_field
 
         return {
             "channel_id": policy.discord_channel_id,
+            "channel_name": policy.channel_name,
+            "category_name": policy.category_name,
+            "preset_name": getattr(policy, "preset_name", None),
             "allow_text": policy.allow_text.value if isinstance(policy.allow_text, PolicyValue) else str(policy.allow_text),
             "allow_links": policy.allow_links.value if isinstance(policy.allow_links, PolicyValue) else str(policy.allow_links),
             "allow_images": policy.allow_images.value if isinstance(policy.allow_images, PolicyValue) else str(policy.allow_images),
@@ -109,11 +116,12 @@ class ModerationEngine:
             "allow_here": policy.allow_here.value if isinstance(policy.allow_here, PolicyValue) else str(policy.allow_here),
             "allow_role_mentions": policy.allow_role_mentions.value if isinstance(policy.allow_role_mentions, PolicyValue) else str(policy.allow_role_mentions),
             "allow_user_mentions": policy.allow_user_mentions.value if isinstance(policy.allow_user_mentions, PolicyValue) else str(policy.allow_user_mentions),
-            "allowed_domains": allowed_domains,
+            "allowed_domains": deserialize_json_field(policy.allowed_domains, default=[]),
             "warning_message": policy.warning_message,
-            "log_violations": policy.log_violations,
-            "delete_violations": policy.delete_violations,
-            "warn_on_violation": policy.warn_on_violation,
+            "log_violations": getattr(policy, "log_violations", True),
+            "delete_violations": getattr(policy, "delete_violations", True),
+            "warn_on_violation": getattr(policy, "warn_on_violation", True),
+            "send_dm_warning": getattr(policy, "send_dm_warning", False),
         }
 
     def _is_exempt(self, member: discord.Member) -> bool:
@@ -182,52 +190,34 @@ class ModerationEngine:
         if channel_key in self._exemption_cache:
             return None
 
-        # Run checks
-        violation = None
+        # Run checks via unified evaluator
+        from app.moderation.evaluator import evaluate_message_policy
 
-        # 1. Check mentions
-        mention_violation = check_mentions(message, policy)
-        if mention_violation:
-            violation = mention_violation
+        attachments_data = [
+            {"filename": a.filename, "content_type": getattr(a, "content_type", "")}
+            for a in message.attachments
+        ]
 
-        # 2. Check links
-        if not violation and policy.get("allow_links") == "deny":
-            if contains_url(message.content):
-                # Check allowlist
-                urls = filter_urls(message.content, policy.get("allowed_domains", []) +
-                                   self._server_config_cache.get("global_allowed_domains", []))
-                blocked_urls = [u for u in urls if not u["allowed"]]
-                if blocked_urls:
-                    violation = {
-                        "reason": "Links are not allowed in this channel",
-                        "rule": "links_denied",
-                        "urls": [u["url"] for u in blocked_urls],
-                    }
+        eval_result = evaluate_message_policy(
+            policy=policy,
+            content=message.content,
+            attachments=attachments_data,
+            stickers=list(message.stickers) if message.stickers else None,
+            role_mentions=list(message.role_mentions) if message.role_mentions else None,
+            user_mentions=list(message.mentions) if message.mentions else None,
+            server_config=self._server_config_cache,
+            channel_name=message.channel.name if hasattr(message.channel, "name") else "",
+        )
 
-        # 3. Check attachments
-        if not violation and message.attachments:
-            att_violations = validate_attachments(message.attachments, policy)
-            if att_violations:
-                violation = att_violations[0]  # Report first violation
-
-        # 4. Check stickers
-        if not violation and message.stickers and policy.get("allow_stickers") == "deny":
-            violation = {
-                "reason": "Stickers are not allowed in this channel",
-                "rule": "stickers_denied",
+        if not eval_result["allowed"]:
+            return {
+                "reason": eval_result["reason"],
+                "rule": eval_result.get("matched_rule") or "policy_violation",
+                "urls": eval_result.get("urls", []),
+                "matched_policy": eval_result.get("matched_policy"),
             }
 
-        # 5. Check text-only messages without required content
-        if not violation and policy.get("allow_text") == "deny":
-            # If text is denied, message must contain allowed media
-            has_allowed_content = bool(message.attachments) or bool(message.stickers)
-            if not has_allowed_content and message.content.strip():
-                violation = {
-                    "reason": "Text messages are not allowed in this channel",
-                    "rule": "text_denied",
-                }
-
-        return violation
+        return None
 
     async def handle_violation(self, message: discord.Message, violation: dict) -> None:
         """Handle a policy violation: delete, warn, log."""
@@ -244,18 +234,30 @@ class ModerationEngine:
             except discord.NotFound:
                 pass
 
-        # Send warning
+        # Send in-channel warning
         if policy.get("warn_on_violation", True):
             warning_text = policy.get("warning_message") or \
                            self._server_config_cache.get("warning_message_template") or \
                            f"⚠️ {violation['reason']}"
             try:
-                warn_msg = await message.channel.send(
+                await message.channel.send(
                     f"{message.author.mention} {warning_text}",
                     delete_after=10,
                     allowed_mentions=discord.AllowedMentions(users=[message.author]),
                 )
             except discord.Forbidden:
+                pass
+
+        # Send DM warning if enabled
+        if policy.get("send_dm_warning", False):
+            try:
+                dm_channel = await message.author.create_dm()
+                await dm_channel.send(
+                    f"⚠️ **PB HERO AutoMod Notification**: Your message in **#{message.channel.name}** was removed.\n"
+                    f"> **Reason**: {violation['reason']}\n"
+                    f"> **Rule**: `{violation.get('rule', 'Policy Rule')}`"
+                )
+            except (discord.Forbidden, discord.HTTPException):
                 pass
 
         # Log to database
@@ -279,7 +281,7 @@ class ModerationEngine:
             finally:
                 await session.close()
 
-        # Log to mod log channel
+        # Log to Discord mod log channel
         await self._send_mod_log(message, violation)
 
     async def _send_mod_log(self, message: discord.Message, violation: dict) -> None:
@@ -288,25 +290,57 @@ class ModerationEngine:
         if not mod_log_id:
             return
 
-        channel = self.bot.get_channel(mod_log_id)
-        if not channel:
+        enabled_events = set(self._server_config_cache.get("mod_log_events", []))
+        rule_key = violation.get("rule", "policy_violation")
+        event_tag = "policy_violation"
+        if "link" in rule_key:
+            event_tag = "blocked_link"
+        elif "image" in rule_key or "video" in rule_key or "file" in rule_key or "attachment" in rule_key:
+            event_tag = "blocked_attachment"
+        elif "mention" in rule_key or "everyone" in rule_key or "here" in rule_key:
+            event_tag = "blocked_mention"
+
+        if enabled_events and event_tag not in enabled_events and "policy_violation" not in enabled_events:
             return
 
         try:
+            channel = self.bot.get_channel(int(mod_log_id))
+        except (ValueError, TypeError):
+            return
+
+        if not channel:
+            logger.warning("Auto-Mod log channel %s not found on server", mod_log_id)
+            return
+
+        # Check permissions
+        if hasattr(channel, "guild") and channel.guild and channel.guild.me:
+            perms = channel.permissions_for(channel.guild.me)
+            if not perms.send_messages or not perms.embed_links:
+                logger.warning("Bot lacks Send Messages or Embed Links permission in mod log channel #%s", channel.name)
+                return
+
+        policy = self._policy_cache.get(message.channel.id, {})
+        policy_name = violation.get("matched_policy") or policy.get("preset_name") or "Channel Policy"
+
+        try:
             embed = discord.Embed(
-                title="🛡️ Message Blocked",
-                color=0xE74C3C,
+                title="🛡️ AUTO MODERATION",
+                color=0xED4245,
                 timestamp=message.created_at,
             )
-            embed.add_field(name="User", value=f"{message.author.mention} ({message.author})", inline=True)
+            embed.add_field(name="Action", value="`MESSAGE BLOCKED`", inline=True)
+            embed.add_field(name="User", value=f"{message.author.mention}\n`{message.author} ({message.author.id})`", inline=True)
             embed.add_field(name="Channel", value=f"<#{message.channel.id}>", inline=True)
-            embed.add_field(name="Rule", value=violation["rule"], inline=True)
             embed.add_field(name="Reason", value=violation["reason"], inline=False)
+            embed.add_field(name="Policy", value=str(policy_name), inline=True)
+            embed.add_field(name="Rule", value=f"`{violation['rule']}`", inline=True)
+            embed.add_field(name="Moderator", value="PB HERO AutoMod", inline=True)
             if message.content:
-                embed.add_field(name="Content", value=message.content[:500], inline=False)
-            embed.set_footer(text=f"Message ID: {message.id}")
+                clean_content = message.content[:500] + ("..." if len(message.content) > 500 else "")
+                embed.add_field(name="Content", value=f"```{clean_content}```", inline=False)
+            embed.set_footer(text=f"Incident ID: {message.id} • PB HERO Security")
 
-            await channel.send(embed=embed)
+            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         except Exception as e:
             logger.error("Failed to send mod log: %s", str(e))
 
@@ -314,16 +348,30 @@ class ModerationEngine:
                               content: str, has_attachment: bool = False,
                               attachment_type: str = "image") -> dict:
         """
-        Simulate policy check for the dashboard policy tester.
-
-        Returns dict with allowed/blocked status and reason.
+        Simulate policy check for the dashboard policy tester using evaluate_message_policy.
         """
         if not self._cache_valid:
             await self.refresh_cache()
 
         policy = self._policy_cache.get(channel_id)
         if not policy:
-            return {"allowed": True, "reason": "No policy configured for this channel"}
+            # Check DB directly in case channel hasn't loaded in cache yet
+            session = await get_session_direct()
+            try:
+                db_pol = await ChannelPolicyRepo.get_for_channel(session, channel_id)
+                if db_pol:
+                    policy = self._policy_to_dict(db_pol)
+            finally:
+                await session.close()
+
+        if not policy:
+            return {
+                "allowed": True,
+                "reason": "No policy configured for this channel (all allowed)",
+                "matched_rule": None,
+                "effective_value": "allow",
+                "matched_policy": "Default",
+            }
 
         # Check exemptions by role
         admin_roles = set(self._server_config_cache.get("admin_role_ids", []))
@@ -331,33 +379,28 @@ class ModerationEngine:
         exempt_roles = admin_roles | mod_roles
 
         for role_id in role_ids:
-            if role_id in exempt_roles:
-                return {"allowed": True, "reason": "Exempt: moderator/admin role"}
+            try:
+                if int(role_id) in exempt_roles:
+                    return {
+                        "allowed": True,
+                        "reason": "Exempt from moderation: user has moderator/admin role",
+                        "matched_rule": "role_exemption",
+                        "effective_value": "allow",
+                        "matched_policy": "Role Exemption",
+                    }
+            except (ValueError, TypeError):
+                pass
 
-        # Check mentions
-        if "@everyone" in content and policy.get("allow_everyone") == "deny":
-            return {"allowed": False, "reason": "@everyone mentions are blocked in this channel"}
-        if "@here" in content and policy.get("allow_here") == "deny":
-            return {"allowed": False, "reason": "@here mentions are blocked in this channel"}
-
-        # Check links
-        if policy.get("allow_links") == "deny" and contains_url(content):
-            urls = filter_urls(content, policy.get("allowed_domains", []))
-            blocked = [u for u in urls if not u["allowed"]]
-            if blocked:
-                return {"allowed": False, "reason": f"Links are blocked. Detected: {blocked[0]['url']}"}
-
-        # Check text
-        if policy.get("allow_text") == "deny" and content.strip() and not has_attachment:
-            return {"allowed": False, "reason": "Text messages are blocked in this channel"}
-
-        # Check attachment
+        attachments_mock = []
         if has_attachment:
-            if attachment_type == "image" and policy.get("allow_images") == "deny":
-                return {"allowed": False, "reason": "Images are blocked in this channel"}
-            elif attachment_type == "video" and policy.get("allow_videos") == "deny":
-                return {"allowed": False, "reason": "Videos are blocked in this channel"}
-            elif attachment_type == "file" and policy.get("allow_files") == "deny":
-                return {"allowed": False, "reason": "Files are blocked in this channel"}
+            ext_map = {"image": "test.png", "video": "test.mp4", "file": "test.pdf"}
+            attachments_mock = [{"filename": ext_map.get(attachment_type, "test.bin"), "content_type": f"{attachment_type}/test"}]
 
-        return {"allowed": True, "reason": "Message passes all policy checks"}
+        from app.moderation.evaluator import evaluate_message_policy
+        return evaluate_message_policy(
+            policy=policy,
+            content=content,
+            attachments=attachments_mock,
+            server_config=self._server_config_cache,
+            channel_name=policy.get("channel_name", ""),
+        )

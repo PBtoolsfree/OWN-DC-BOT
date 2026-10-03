@@ -367,7 +367,18 @@ class ChannelPolicyRepo:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def upsert(session: AsyncSession, channel_id: int, **kwargs) -> ChannelPolicy:
+    async def upsert(session: AsyncSession, channel_id: Optional[int] = None, **kwargs) -> ChannelPolicy:
+        from app.database.serializers import normalize_domain_list, serialize_json_field
+
+        if channel_id is None:
+            channel_id = kwargs.pop("discord_channel_id", None)
+        if channel_id is None:
+            raise ValueError("channel_id or discord_channel_id is required for policy upsert")
+        channel_id = int(channel_id)
+
+        if "allowed_domains" in kwargs:
+            kwargs["allowed_domains"] = serialize_json_field(normalize_domain_list(kwargs["allowed_domains"]))
+
         existing = await ChannelPolicyRepo.get_for_channel(session, channel_id)
         if existing:
             for key, value in kwargs.items():
@@ -404,8 +415,15 @@ class PolicyProfileRepo:
 
     @staticmethod
     async def get_all(session: AsyncSession) -> list[PolicyProfile]:
-        result = await session.execute(select(PolicyProfile).order_by(PolicyProfile.name))
+        result = await session.execute(
+            select(PolicyProfile).order_by(PolicyProfile.is_builtin.desc(), PolicyProfile.name)
+        )
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, profile_id: int) -> Optional[PolicyProfile]:
+        result = await session.execute(select(PolicyProfile).where(PolicyProfile.id == profile_id))
+        return result.scalar_one_or_none()
 
     @staticmethod
     async def get_by_name(session: AsyncSession, name: str) -> Optional[PolicyProfile]:
@@ -414,48 +432,99 @@ class PolicyProfileRepo:
 
     @staticmethod
     async def create(session: AsyncSession, name: str, **kwargs) -> PolicyProfile:
+        from app.database.serializers import normalize_domain_list, serialize_json_field
+
+        if "allowed_domains" in kwargs:
+            kwargs["allowed_domains"] = serialize_json_field(normalize_domain_list(kwargs["allowed_domains"]))
+
         profile = PolicyProfile(name=name, **kwargs)
         session.add(profile)
         await session.flush()
         return profile
 
     @staticmethod
+    async def update(session: AsyncSession, profile_id: int, **kwargs) -> Optional[PolicyProfile]:
+        from app.database.serializers import normalize_domain_list, serialize_json_field
+
+        profile = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not profile:
+            return None
+        if profile.is_builtin:
+            raise ValueError("Built-in policy presets cannot be modified.")
+
+        if "allowed_domains" in kwargs:
+            kwargs["allowed_domains"] = serialize_json_field(normalize_domain_list(kwargs["allowed_domains"]))
+
+        for key, value in kwargs.items():
+            if hasattr(profile, key) and key not in ("id", "is_builtin", "created_at"):
+                setattr(profile, key, value)
+
+        profile.updated_at = datetime.utcnow()
+        await session.flush()
+        return profile
+
+    @staticmethod
+    async def delete(session: AsyncSession, profile_id: int) -> bool:
+        profile = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not profile:
+            return False
+        if profile.is_builtin:
+            raise ValueError("Built-in policy presets cannot be deleted.")
+
+        await session.delete(profile)
+        await session.flush()
+        return True
+
+    @staticmethod
+    async def duplicate(session: AsyncSession, profile_id: int, new_name: Optional[str] = None) -> Optional[PolicyProfile]:
+        source = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not source:
+            return None
+
+        if not new_name:
+            base_name = f"{source.name}_CUSTOM"
+            candidate = base_name
+            idx = 1
+            while await PolicyProfileRepo.get_by_name(session, candidate):
+                candidate = f"{base_name}_{idx}"
+                idx += 1
+            new_name = candidate
+
+        clone = PolicyProfile(
+            name=new_name,
+            description=f"Custom copy of {source.name}. {source.description or ''}".strip(),
+            category=source.category or "Custom",
+            allow_text=source.allow_text,
+            allow_links=source.allow_links,
+            allow_images=source.allow_images,
+            allow_videos=source.allow_videos,
+            allow_files=source.allow_files,
+            allow_stickers=source.allow_stickers,
+            allow_everyone=source.allow_everyone,
+            allow_here=source.allow_here,
+            allow_role_mentions=source.allow_role_mentions,
+            allow_user_mentions=source.allow_user_mentions,
+            allowed_domains=source.allowed_domains,
+            delete_violations=source.delete_violations if hasattr(source, "delete_violations") else True,
+            warn_on_violation=source.warn_on_violation if hasattr(source, "warn_on_violation") else True,
+            log_violations=source.log_violations if hasattr(source, "log_violations") else True,
+            send_dm_warning=source.send_dm_warning if hasattr(source, "send_dm_warning") else False,
+            warning_message=source.warning_message if hasattr(source, "warning_message") else None,
+            is_builtin=False,
+        )
+        session.add(clone)
+        await session.flush()
+        return clone
+
+    @staticmethod
     async def create_defaults(session: AsyncSession) -> None:
-        """Create built-in policy presets."""
+        """Create or update all 15 professional built-in policy presets."""
         defaults = [
-            {
-                "name": "GENERAL_CHAT",
-                "description": "Standard chat: text, links, images, files allowed. @everyone/@here blocked.",
-                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.ALLOW,
-                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.ALLOW,
-                "allow_files": PolicyValue.ALLOW, "allow_stickers": PolicyValue.ALLOW,
-                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
-                "allow_role_mentions": PolicyValue.ALLOW, "allow_user_mentions": PolicyValue.ALLOW,
-                "is_builtin": True,
-            },
-            {
-                "name": "NO_LINK_CHAT",
-                "description": "Chat without links. Text and images allowed, no URLs or mentions.",
-                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.DENY,
-                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.DENY,
-                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.ALLOW,
-                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
-                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
-                "is_builtin": True,
-            },
-            {
-                "name": "IMAGE_ONLY",
-                "description": "Only images allowed. No text, links, files, or mentions.",
-                "allow_text": PolicyValue.DENY, "allow_links": PolicyValue.DENY,
-                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.DENY,
-                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
-                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
-                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
-                "is_builtin": True,
-            },
+            # 1 - Announcements
             {
                 "name": "ANNOUNCEMENTS",
-                "description": "Read-only for members. Only moderators/admins can post.",
+                "category": "Announcements",
+                "description": "Official announcement channels. Members cannot post; only moderators/admins may post.",
                 "allow_text": PolicyValue.DENY, "allow_links": PolicyValue.DENY,
                 "allow_images": PolicyValue.DENY, "allow_videos": PolicyValue.DENY,
                 "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
@@ -463,9 +532,35 @@ class PolicyProfileRepo:
                 "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
                 "is_builtin": True,
             },
+            # 2 - General Chat
+            {
+                "name": "GENERAL CHAT",
+                "category": "General",
+                "description": "Standard community chat: text, links, images, files allowed. @everyone/@here blocked.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.ALLOW,
+                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.ALLOW,
+                "allow_files": PolicyValue.ALLOW, "allow_stickers": PolicyValue.ALLOW,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.ALLOW, "allow_user_mentions": PolicyValue.ALLOW,
+                "is_builtin": True,
+            },
+            # 3 - Image Only
+            {
+                "name": "IMAGE ONLY",
+                "category": "Media",
+                "description": "Only images allowed. No text, links, videos, files, or mentions.",
+                "allow_text": PolicyValue.DENY, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 4 - Media
             {
                 "name": "MEDIA",
-                "description": "Media sharing: text, images, videos allowed. Links configurable.",
+                "category": "Media",
+                "description": "Media sharing: text, images, videos allowed. Links configurable / inherit.",
                 "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.INHERIT,
                 "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.ALLOW,
                 "allow_files": PolicyValue.ALLOW, "allow_stickers": PolicyValue.ALLOW,
@@ -473,14 +568,136 @@ class PolicyProfileRepo:
                 "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
                 "is_builtin": True,
             },
+            # 5 - No Link Chat
+            {
+                "name": "NO LINK CHAT",
+                "category": "Moderation",
+                "description": "Chat without links: text, images, and stickers allowed. No external URLs or mentions.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.ALLOW,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 6 - Support
             {
                 "name": "SUPPORT",
-                "description": "Support channel: text, images, links allowed. Threads enabled.",
+                "category": "Support",
+                "description": "Support channels: text, links, images, and files allowed. Videos and mass pings blocked.",
                 "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.ALLOW,
                 "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.DENY,
-                "allow_files": PolicyValue.ALLOW, "allow_stickers": PolicyValue.DENY,
+                "allow_files": PolicyValue.ALLOW, "allow_stickers": PolicyValue.ALLOW,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.ALLOW, "allow_user_mentions": PolicyValue.ALLOW,
+                "is_builtin": True,
+            },
+            # 7 - Bot Commands
+            {
+                "name": "BOT COMMANDS",
+                "category": "Bots",
+                "description": "Commands / bot interaction channels. Text commands allowed, attachments and links blocked.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.DENY, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 8 - Read Only
+            {
+                "name": "READ ONLY",
+                "category": "Other",
+                "description": "Information/archive channels. Normal members cannot post text, media, or mentions.",
+                "allow_text": PolicyValue.DENY, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.DENY, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 9 - Links Only
+            {
+                "name": "LINKS ONLY",
+                "category": "Community",
+                "description": "Resource and link-sharing channel. Text and URLs allowed; files and mass mentions blocked.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.ALLOW,
+                "allow_images": PolicyValue.INHERIT, "allow_videos": PolicyValue.INHERIT,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.ALLOW, "allow_user_mentions": PolicyValue.ALLOW,
+                "is_builtin": True,
+            },
+            # 10 - Giveaway
+            {
+                "name": "GIVEAWAY",
+                "category": "Community",
+                "description": "Giveaway channels: text, images, and stickers allowed. External links and role mentions blocked.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.ALLOW,
                 "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
                 "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.ALLOW,
+                "is_builtin": True,
+            },
+            # 11 - Clips / Showcase
+            {
+                "name": "CLIPS / SHOWCASE",
+                "category": "Media",
+                "description": "Community clips and screenshots. Media and files allowed, mass pings blocked.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.INHERIT,
+                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.ALLOW,
+                "allow_files": PolicyValue.ALLOW, "allow_stickers": PolicyValue.ALLOW,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.ALLOW,
+                "is_builtin": True,
+            },
+            # 12 - Verification
+            {
+                "name": "VERIFICATION",
+                "category": "Other",
+                "description": "Verification / onboarding channel. Text allowed for captcha/commands, links and media blocked.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.DENY, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 13 - Strict Chat
+            {
+                "name": "STRICT CHAT",
+                "category": "General",
+                "description": "Strict text-only discussion. Links, attachments, stickers, and role pings strictly blocked.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.DENY, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 14 - Free Discussion
+            {
+                "name": "FREE DISCUSSION",
+                "category": "General",
+                "description": "Open community discussion. Text, links, media, files, and member mentions fully allowed.",
+                "allow_text": PolicyValue.ALLOW, "allow_links": PolicyValue.ALLOW,
+                "allow_images": PolicyValue.ALLOW, "allow_videos": PolicyValue.ALLOW,
+                "allow_files": PolicyValue.ALLOW, "allow_stickers": PolicyValue.ALLOW,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.ALLOW, "allow_user_mentions": PolicyValue.ALLOW,
+                "is_builtin": True,
+            },
+            # 15 - Moderator Only
+            {
+                "name": "MODERATOR ONLY",
+                "category": "Moderation",
+                "description": "Staff only channel. All non-staff member posting blocked.",
+                "allow_text": PolicyValue.DENY, "allow_links": PolicyValue.DENY,
+                "allow_images": PolicyValue.DENY, "allow_videos": PolicyValue.DENY,
+                "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
+                "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
+                "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
                 "is_builtin": True,
             },
         ]
@@ -489,6 +706,10 @@ class PolicyProfileRepo:
             existing = await PolicyProfileRepo.get_by_name(session, preset["name"])
             if not existing:
                 await PolicyProfileRepo.create(session, **preset)
+            else:
+                if hasattr(existing, "category") and not existing.category:
+                    existing.category = preset["category"]
+                existing.is_builtin = True
 
 
 # ─── Moderation Cases ────────────────────────────────────────────────────────
@@ -674,6 +895,16 @@ class ServerConfigRepo:
 
     @staticmethod
     async def update(session: AsyncSession, **kwargs) -> ServerConfig:
+        from app.database.serializers import normalize_domain_list, serialize_json_field
+
+        json_fields = ["admin_role_ids", "moderator_role_ids", "global_allowed_domains", "mod_log_events"]
+        for jf in json_fields:
+            if jf in kwargs:
+                if jf == "global_allowed_domains":
+                    kwargs[jf] = serialize_json_field(normalize_domain_list(kwargs[jf]))
+                else:
+                    kwargs[jf] = serialize_json_field(kwargs[jf])
+
         config = await ServerConfigRepo.get_or_create(session)
         for key, value in kwargs.items():
             if hasattr(config, key):

@@ -1,11 +1,12 @@
 import React from 'react';
 import { PolicyProfile, PolicyValue } from '../types';
-import { Shield, Check, X, Minus, Copy, Trash2, ArrowRight } from 'lucide-react';
+import { Shield, Check, X, Minus, Copy, Trash2, ArrowRight, Edit3 } from 'lucide-react';
 
 interface PolicyPresetCardProps {
   profile: PolicyProfile;
   onApply: (profile: PolicyProfile) => void;
   onClone?: (profile: PolicyProfile) => void;
+  onEdit?: (profile: PolicyProfile) => void;
   onDelete?: (id: number, name: string) => void;
 }
 
@@ -13,6 +14,7 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
   profile,
   onApply,
   onClone,
+  onEdit,
   onDelete,
 }) => {
   const renderRuleBadge = (label: string, value: PolicyValue) => {
@@ -30,7 +32,7 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
     return (
       <span
         key={label}
-        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold border ${color}`}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border ${color}`}
       >
         <span>{label}</span>
         {icon}
@@ -39,22 +41,35 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
   };
 
   return (
-    <div className="bg-[#151921] border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-all flex flex-col justify-between shadow-lg">
-      <div className="space-y-3">
+    <div className="bg-[#151921] border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all flex flex-col justify-between shadow-xl relative overflow-hidden group">
+      <div className="space-y-3.5">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-[#5865F2]/10 text-[#5865F2]">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl ${profile.is_builtin ? 'bg-[#5865F2]/10 text-[#5865F2]' : 'bg-amber-500/10 text-amber-400'}`}>
               <Shield className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="text-sm font-bold text-white tracking-wide">
-                {profile.name.replace(/_/g, ' ')}
-              </h4>
-              {profile.is_builtin && (
-                <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
-                  Built-in Preset
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-white tracking-wide">
+                  {profile.name.replace(/_/g, ' ')}
+                </h4>
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                {profile.is_builtin ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#5865F2]/20 text-[#5865F2] font-semibold uppercase tracking-wider">
+                    BUILT-IN
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold uppercase tracking-wider">
+                    CUSTOM
+                  </span>
+                )}
+                {profile.category && (
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-medium">
+                    {profile.category}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -66,8 +81,8 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
         )}
 
         {/* Visual Summary Badges */}
-        <div className="pt-2 border-t border-gray-800">
-          <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider block mb-2">
+        <div className="pt-2 border-t border-gray-800/80">
+          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-2">
             Rule Summary
           </span>
           <div className="flex flex-wrap gap-1.5">
@@ -76,8 +91,9 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
             {renderRuleBadge('IMAGES', profile.allow_images)}
             {renderRuleBadge('VIDEOS', profile.allow_videos)}
             {renderRuleBadge('FILES', profile.allow_files)}
-            {renderRuleBadge('MENTIONS', profile.allow_user_mentions)}
+            {renderRuleBadge('STICKERS', profile.allow_stickers)}
             {renderRuleBadge('@EVERYONE', profile.allow_everyone)}
+            {renderRuleBadge('MENTIONS', profile.allow_user_mentions)}
           </div>
         </div>
       </div>
@@ -86,7 +102,7 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
       <div className="flex items-center justify-between pt-4 mt-4 border-t border-gray-800 text-xs">
         <button
           onClick={() => onApply(profile)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#5865F2] hover:bg-[#4752c4] text-white font-medium rounded-lg transition-colors shadow"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#5865F2] hover:bg-[#4752c4] text-white font-semibold rounded-xl transition-all shadow"
         >
           <span>Apply to Channel</span>
           <ArrowRight className="w-3.5 h-3.5" />
@@ -96,17 +112,27 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
           {onClone && (
             <button
               onClick={() => onClone(profile)}
-              title="Clone preset"
+              title="Duplicate / Create Custom"
               className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
             >
               <Copy className="w-4 h-4" />
             </button>
           )}
 
+          {!profile.is_builtin && onEdit && (
+            <button
+              onClick={() => onEdit(profile)}
+              title="Edit custom policy"
+              className="p-1.5 text-gray-400 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors"
+            >
+              <Edit3 className="w-4 h-4" />
+            </button>
+          )}
+
           {!profile.is_builtin && onDelete && (
             <button
               onClick={() => onDelete(profile.id, profile.name)}
-              title="Delete preset"
+              title="Delete custom policy"
               className="p-1.5 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
             >
               <Trash2 className="w-4 h-4" />
@@ -117,3 +143,4 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
     </div>
   );
 };
+

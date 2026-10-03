@@ -8,6 +8,7 @@ import Moderator from './pages/Moderator';
 import ChannelPolicies from './pages/ChannelPolicies';
 import PolicyProfiles from './pages/PolicyProfiles';
 import ModerationLogs from './pages/ModerationLogs';
+import ModeratorSettings from './pages/ModeratorSettings';
 import Channels from './pages/Channels';
 import Security from './pages/Security';
 import System from './pages/System';
@@ -29,7 +30,7 @@ function App() {
           <Route path="moderator/policies/:channelId" element={<ChannelPolicies />} />
           <Route path="moderator/profiles" element={<PolicyProfiles />} />
           <Route path="moderator/logs" element={<ModerationLogs />} />
-          <Route path="moderator/settings" element={<Moderator />} />
+          <Route path="moderator/settings" element={<ModeratorSettings />} />
           <Route path="channels" element={<Channels />} />
           <Route path="security" element={<Security />} />
           <Route path="system" element={<System />} />

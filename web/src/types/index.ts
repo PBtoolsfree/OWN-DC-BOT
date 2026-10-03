@@ -96,6 +96,7 @@ export interface ChannelPolicy {
   delete_violations: boolean;
   warn_on_violation: boolean;
   log_violations: boolean;
+  send_dm_warning?: boolean;
   warning_message?: string | null;
 }
 
@@ -103,6 +104,7 @@ export interface PolicyProfile {
   id: number;
   name: string;
   description?: string;
+  category?: string;
   is_builtin: boolean;
   allow_text: PolicyValue;
   allow_links: PolicyValue;
@@ -114,6 +116,36 @@ export interface PolicyProfile {
   allow_here: PolicyValue;
   allow_role_mentions: PolicyValue;
   allow_user_mentions: PolicyValue;
+  delete_violations?: boolean;
+  warn_on_violation?: boolean;
+  log_violations?: boolean;
+  send_dm_warning?: boolean;
+  warning_message?: string | null;
+}
+
+export interface ModLogSettings {
+  mod_log_channel_id: string | null;
+  mod_log_events: string[];
+  channel_status?: {
+    status: 'ok' | 'missing_channel' | 'missing_permissions' | 'bot_offline' | 'not_configured' | 'error';
+    channel_name: string | null;
+    can_view: boolean;
+    can_send: boolean;
+    can_embed: boolean;
+    warning: string | null;
+  };
+}
+
+export interface ModerationChannelInfo {
+  id: string;
+  name: string;
+  type: 'text' | 'voice' | 'stage' | 'forum';
+  category: string;
+  category_id?: string | null;
+  position: number;
+  has_override: boolean;
+  preset_name: string;
+  enabled: boolean;
 }
 
 export interface ModerationCase {

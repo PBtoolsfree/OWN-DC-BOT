@@ -219,6 +219,7 @@ class ChannelPolicy(Base):
     log_violations = Column(Boolean, default=True)
     delete_violations = Column(Boolean, default=True)
     warn_on_violation = Column(Boolean, default=True)
+    send_dm_warning = Column(Boolean, default=False)
     enabled = Column(Boolean, default=True)
 
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -232,6 +233,7 @@ class PolicyProfile(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(64), unique=True, nullable=False)
     description = Column(Text, nullable=True)
+    category = Column(String(64), default="General", nullable=True)
 
     allow_text = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
     allow_links = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
@@ -245,8 +247,14 @@ class PolicyProfile(Base):
     allow_user_mentions = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
 
     allowed_domains = Column(Text, nullable=True)
+    delete_violations = Column(Boolean, default=True)
+    warn_on_violation = Column(Boolean, default=True)
+    log_violations = Column(Boolean, default=True)
+    send_dm_warning = Column(Boolean, default=False)
+    warning_message = Column(Text, nullable=True)
     is_builtin = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class RoleOverride(Base):
@@ -347,5 +355,6 @@ class ServerConfig(Base):
     moderator_role_ids = Column(Text, nullable=True)  # JSON list
     global_allowed_domains = Column(Text, nullable=True)  # JSON list
     warning_message_template = Column(Text, nullable=True)
+    mod_log_events = Column(Text, nullable=True)  # JSON list of enabled log events
     default_timeout_duration = Column(Integer, default=300)  # seconds
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

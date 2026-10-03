@@ -83,7 +83,7 @@ export default function ChannelPolicies() {
     if (!selectedChannelId) return;
     try {
       await policiesApi.saveChannelPolicy(selectedChannelId, policyData);
-      toast.success('Channel policy saved successfully.');
+      toast.success('✅ Policy saved successfully');
 
       // Refresh policies list
       const updatedList = await policiesApi.getPolicies();
@@ -91,7 +91,7 @@ export default function ChannelPolicies() {
       const foundPol = updatedList.find((p) => p.discord_channel_id === selectedChannelId) || null;
       setActivePolicy(foundPol);
     } catch (err: any) {
-      toast.error(err.message || 'Could not save channel policy.');
+      toast.error(err.message || '❌ Could not save policy');
       throw err;
     }
   };

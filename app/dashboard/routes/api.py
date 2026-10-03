@@ -28,6 +28,13 @@ from app.dashboard.auth import (
 from app.dashboard.dependencies import check_ip_allowlist, require_auth, session_manager
 from app.database.engine import get_session_direct, test_connection
 from app.database.models import EventType, PolicyValue
+from app.database.serializers import (
+    deserialize_json_field,
+    normalize_domain,
+    normalize_domain_list,
+    serialize_json_field,
+)
+from app.moderation.evaluator import evaluate_message_policy
 from app.database.repositories import (
     AdminUserRepo,
     AuditLogRepo,
@@ -708,37 +715,83 @@ async def reset_youtube_template(event_type: str, username: str = Depends(requir
         await session.close()
 
 
+# ─── Policy Response Helpers ──────────────────────────────────────────────────
+
+def _format_policy_response(p) -> dict | None:
+    if not p:
+        return None
+    raw_domains = p.allowed_domains
+    if isinstance(raw_domains, str):
+        domains = deserialize_json_field(raw_domains, default=[])
+    elif isinstance(raw_domains, list):
+        domains = raw_domains
+    else:
+        domains = []
+
+    return {
+        "id": p.id,
+        "discord_channel_id": str(p.discord_channel_id),
+        "channel_name": p.channel_name,
+        "category_name": p.category_name,
+        "channel_type": p.channel_type,
+        "allow_text": p.allow_text.value if hasattr(p.allow_text, "value") else str(p.allow_text),
+        "allow_links": p.allow_links.value if hasattr(p.allow_links, "value") else str(p.allow_links),
+        "allow_images": p.allow_images.value if hasattr(p.allow_images, "value") else str(p.allow_images),
+        "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, "value") else str(p.allow_videos),
+        "allow_files": p.allow_files.value if hasattr(p.allow_files, "value") else str(p.allow_files),
+        "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, "value") else str(p.allow_stickers),
+        "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, "value") else str(p.allow_everyone),
+        "allow_here": p.allow_here.value if hasattr(p.allow_here, "value") else str(p.allow_here),
+        "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, "value") else str(p.allow_role_mentions),
+        "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, "value") else str(p.allow_user_mentions),
+        "allowed_domains": domains,
+        "preset_name": p.preset_name,
+        "enabled": bool(p.enabled),
+        "delete_violations": bool(p.delete_violations),
+        "warn_on_violation": bool(p.warn_on_violation),
+        "log_violations": bool(p.log_violations),
+        "send_dm_warning": bool(getattr(p, "send_dm_warning", False)),
+        "warning_message": p.warning_message,
+    }
+
+
+def _format_profile_response(p) -> dict | None:
+    if not p:
+        return None
+    return {
+        "id": p.id,
+        "name": p.name,
+        "description": p.description,
+        "category": getattr(p, "category", "General") or "General",
+        "is_builtin": bool(p.is_builtin),
+        "allow_text": p.allow_text.value if hasattr(p.allow_text, "value") else str(p.allow_text),
+        "allow_links": p.allow_links.value if hasattr(p.allow_links, "value") else str(p.allow_links),
+        "allow_images": p.allow_images.value if hasattr(p.allow_images, "value") else str(p.allow_images),
+        "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, "value") else str(p.allow_videos),
+        "allow_files": p.allow_files.value if hasattr(p.allow_files, "value") else str(p.allow_files),
+        "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, "value") else str(p.allow_stickers),
+        "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, "value") else str(p.allow_everyone),
+        "allow_here": p.allow_here.value if hasattr(p.allow_here, "value") else str(p.allow_here),
+        "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, "value") else str(p.allow_role_mentions),
+        "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, "value") else str(p.allow_user_mentions),
+        "delete_violations": bool(getattr(p, "delete_violations", True)),
+        "warn_on_violation": bool(getattr(p, "warn_on_violation", True)),
+        "log_violations": bool(getattr(p, "log_violations", True)),
+        "send_dm_warning": bool(getattr(p, "send_dm_warning", False)),
+        "warning_message": getattr(p, "warning_message", None),
+    }
+
+
 # ─── Channel Policies ────────────────────────────────────────────────────────
 
 @router.get("/policies")
+@router.get("/moderation/policies")
 async def list_policies(username: str = Depends(require_auth)):
-    """List all channel policies."""
+    """List all channel policies with clean deserialized fields."""
     session = await get_session_direct()
     try:
         policies = await ChannelPolicyRepo.get_all(session)
-        return [{
-            "id": p.id,
-            "discord_channel_id": str(p.discord_channel_id),
-            "channel_name": p.channel_name,
-            "category_name": p.category_name,
-            "channel_type": p.channel_type,
-            "allow_text": p.allow_text.value if hasattr(p.allow_text, 'value') else str(p.allow_text),
-            "allow_links": p.allow_links.value if hasattr(p.allow_links, 'value') else str(p.allow_links),
-            "allow_images": p.allow_images.value if hasattr(p.allow_images, 'value') else str(p.allow_images),
-            "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, 'value') else str(p.allow_videos),
-            "allow_files": p.allow_files.value if hasattr(p.allow_files, 'value') else str(p.allow_files),
-            "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, 'value') else str(p.allow_stickers),
-            "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, 'value') else str(p.allow_everyone),
-            "allow_here": p.allow_here.value if hasattr(p.allow_here, 'value') else str(p.allow_here),
-            "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, 'value') else str(p.allow_role_mentions),
-            "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, 'value') else str(p.allow_user_mentions),
-            "allowed_domains": p.allowed_domains,
-            "preset_name": p.preset_name,
-            "enabled": p.enabled,
-            "delete_violations": p.delete_violations,
-            "warn_on_violation": p.warn_on_violation,
-            "log_violations": p.log_violations,
-        } for p in policies]
+        return [_format_policy_response(p) for p in policies]
     finally:
         await session.close()
 
@@ -760,97 +813,357 @@ async def get_guild_info(username: str = Depends(require_auth)):
     }
 
 
-# ─── Policy Profiles ─────────────────────────────────────────────────────────
+# ─── Policy Profiles (Built-in & Custom Presets) ─────────────────────────────
 
 @router.get("/policies/profiles")
+@router.get("/moderation/profiles")
 async def list_profiles(username: str = Depends(require_auth)):
-    """List policy profiles/presets."""
+    """List all policy profiles/presets."""
     session = await get_session_direct()
     try:
         profiles = await PolicyProfileRepo.get_all(session)
-        return [{
-            "id": p.id,
-            "name": p.name,
-            "description": p.description,
-            "is_builtin": p.is_builtin,
-            "allow_text": p.allow_text.value if hasattr(p.allow_text, 'value') else str(p.allow_text),
-            "allow_links": p.allow_links.value if hasattr(p.allow_links, 'value') else str(p.allow_links),
-            "allow_images": p.allow_images.value if hasattr(p.allow_images, 'value') else str(p.allow_images),
-            "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, 'value') else str(p.allow_videos),
-            "allow_files": p.allow_files.value if hasattr(p.allow_files, 'value') else str(p.allow_files),
-            "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, 'value') else str(p.allow_stickers),
-            "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, 'value') else str(p.allow_everyone),
-            "allow_here": p.allow_here.value if hasattr(p.allow_here, 'value') else str(p.allow_here),
-            "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, 'value') else str(p.allow_role_mentions),
-            "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, 'value') else str(p.allow_user_mentions),
-        } for p in profiles]
+        if not profiles:
+            await PolicyProfileRepo.create_defaults(session)
+            await session.commit()
+            profiles = await PolicyProfileRepo.get_all(session)
+        return [_format_profile_response(p) for p in profiles]
     finally:
         await session.close()
 
 
+@router.get("/policies/profiles/{profile_id}")
+@router.get("/moderation/profiles/{profile_id}")
+async def get_profile(profile_id: int, username: str = Depends(require_auth)):
+    """Get a specific policy profile."""
+    session = await get_session_direct()
+    try:
+        prof = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not prof:
+            raise HTTPException(status_code=404, detail="Policy profile not found")
+        return _format_profile_response(prof)
+    finally:
+        await session.close()
+
+
+@router.post("/policies/profiles")
+@router.post("/moderation/profiles")
+async def create_profile(request: Request, username: str = Depends(require_auth)):
+    """Create a new custom policy profile."""
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Profile name is required")
+
+    session = await get_session_direct()
+    try:
+        # Check name collision
+        existing = await PolicyProfileRepo.get_by_name(session, name)
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Profile '{name}' already exists")
+
+        # Parse rule enums
+        kwargs = {
+            "name": name,
+            "description": data.get("description", ""),
+            "category": data.get("category", "General"),
+            "is_builtin": False,
+        }
+        for field in ["allow_text", "allow_links", "allow_images", "allow_videos",
+                      "allow_files", "allow_stickers", "allow_everyone", "allow_here",
+                      "allow_role_mentions", "allow_user_mentions"]:
+            if field in data and data[field] is not None:
+                kwargs[field] = PolicyValue(str(data[field]).lower())
+
+        for field in ["delete_violations", "warn_on_violation", "log_violations", "send_dm_warning"]:
+            if field in data:
+                kwargs[field] = bool(data[field])
+
+        if "warning_message" in data:
+            kwargs["warning_message"] = data["warning_message"]
+
+        created = await PolicyProfileRepo.create(session, **kwargs)
+        await AuditLogRepo.log(session, username, "profile_created", details=name)
+        await session.commit()
+        return _format_profile_response(created)
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to create custom policy profile")
+        raise HTTPException(status_code=500, detail="Could not create custom policy profile")
+    finally:
+        await session.close()
+
+
+@router.put("/policies/profiles/{profile_id}")
+@router.put("/moderation/profiles/{profile_id}")
+async def update_profile(profile_id: int, request: Request, username: str = Depends(require_auth)):
+    """Update an existing custom policy profile (built-ins are protected)."""
+    data = await request.json()
+    session = await get_session_direct()
+    try:
+        prof = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not prof:
+            raise HTTPException(status_code=404, detail="Policy profile not found")
+        if prof.is_builtin:
+            raise HTTPException(status_code=400, detail="Built-in presets cannot be modified")
+
+        updates = {}
+        if "name" in data and data["name"].strip():
+            updates["name"] = data["name"].strip()
+        if "description" in data:
+            updates["description"] = data["description"]
+        if "category" in data:
+            updates["category"] = data["category"]
+
+        for field in ["allow_text", "allow_links", "allow_images", "allow_videos",
+                      "allow_files", "allow_stickers", "allow_everyone", "allow_here",
+                      "allow_role_mentions", "allow_user_mentions"]:
+            if field in data and data[field] is not None:
+                updates[field] = PolicyValue(str(data[field]).lower())
+
+        for field in ["delete_violations", "warn_on_violation", "log_violations", "send_dm_warning"]:
+            if field in data:
+                updates[field] = bool(data[field])
+
+        if "warning_message" in data:
+            updates["warning_message"] = data["warning_message"]
+
+        updated = await PolicyProfileRepo.update(session, profile_id, **updates)
+        await AuditLogRepo.log(session, username, "profile_updated", target=str(profile_id))
+        await session.commit()
+        return _format_profile_response(updated)
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to update policy profile")
+        raise HTTPException(status_code=500, detail="Could not update policy profile")
+    finally:
+        await session.close()
+
+
+@router.delete("/policies/profiles/{profile_id}")
+@router.delete("/moderation/profiles/{profile_id}")
+async def delete_profile(profile_id: int, username: str = Depends(require_auth)):
+    """Delete a custom policy profile (built-ins cannot be deleted)."""
+    session = await get_session_direct()
+    try:
+        prof = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not prof:
+            raise HTTPException(status_code=404, detail="Policy profile not found")
+        if prof.is_builtin:
+            raise HTTPException(status_code=400, detail="Built-in presets cannot be deleted")
+
+        deleted = await PolicyProfileRepo.delete(session, profile_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Policy profile not found")
+
+        await AuditLogRepo.log(session, username, "profile_deleted", target=str(profile_id))
+        await session.commit()
+        return {"success": True, "message": "Policy profile deleted successfully"}
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to delete policy profile")
+        raise HTTPException(status_code=500, detail="Could not delete policy profile")
+    finally:
+        await session.close()
+
+
+@router.post("/policies/profiles/{profile_id}/duplicate")
+@router.post("/moderation/profiles/{profile_id}/duplicate")
+async def duplicate_profile(profile_id: int, request: Request, username: str = Depends(require_auth)):
+    """Duplicate a profile (built-in or custom) to create a new custom profile."""
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+
+    session = await get_session_direct()
+    try:
+        prof = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not prof:
+            raise HTTPException(status_code=404, detail="Policy profile not found")
+
+        target_name = (data.get("new_name") or f"{prof.name} (Copy)").strip()
+        # Ensure unique name
+        suffix = 1
+        test_name = target_name
+        while await PolicyProfileRepo.get_by_name(session, test_name):
+            suffix += 1
+            test_name = f"{target_name} {suffix}"
+
+        duplicated = await PolicyProfileRepo.duplicate(session, profile_id, test_name)
+        if not duplicated:
+            raise HTTPException(status_code=500, detail="Failed to duplicate policy profile")
+
+        await AuditLogRepo.log(session, username, "profile_duplicated", target=str(profile_id), details=test_name)
+        await session.commit()
+        return _format_profile_response(duplicated)
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to duplicate policy profile")
+        raise HTTPException(status_code=500, detail="Could not duplicate policy profile")
+    finally:
+        await session.close()
+
+
+@router.post("/policies/profiles/{profile_id}/apply")
+@router.post("/moderation/profiles/{profile_id}/apply")
+async def apply_profile_to_channels(profile_id: int, request: Request, username: str = Depends(require_auth)):
+    """Apply a profile to one or multiple Discord channels."""
+    data = await request.json()
+    raw_ids = data.get("channel_ids") or []
+    if "channel_id" in data and not raw_ids:
+        raw_ids = [data["channel_id"]]
+
+    channel_ids = []
+    for cid in raw_ids:
+        try:
+            channel_ids.append(int(cid))
+        except (ValueError, TypeError):
+            continue
+
+    if not channel_ids:
+        raise HTTPException(status_code=400, detail="No valid channel IDs provided")
+
+    session = await get_session_direct()
+    try:
+        prof = await PolicyProfileRepo.get_by_id(session, profile_id)
+        if not prof:
+            raise HTTPException(status_code=404, detail="Policy profile not found")
+
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        guild = bot.guild if bot else None
+
+        applied = []
+        for cid in channel_ids:
+            # Look up Discord channel metadata if available
+            ch = guild.get_channel(cid) if guild else None
+            ch_name = ch.name if ch else f"channel-{cid}"
+            cat_name = ch.category.name if ch and ch.category else "Uncategorized"
+            ch_type = "text"
+            if ch and isinstance(ch, discord.VoiceChannel):
+                ch_type = "voice"
+
+            await ChannelPolicyRepo.upsert(
+                session,
+                discord_channel_id=cid,
+                channel_name=ch_name,
+                category_name=cat_name,
+                channel_type=ch_type,
+                allow_text=prof.allow_text,
+                allow_links=prof.allow_links,
+                allow_images=prof.allow_images,
+                allow_videos=prof.allow_videos,
+                allow_files=prof.allow_files,
+                allow_stickers=prof.allow_stickers,
+                allow_everyone=prof.allow_everyone,
+                allow_here=prof.allow_here,
+                allow_role_mentions=prof.allow_role_mentions,
+                allow_user_mentions=prof.allow_user_mentions,
+                preset_name=prof.name,
+                delete_violations=prof.delete_violations,
+                warn_on_violation=prof.warn_on_violation,
+                log_violations=prof.log_violations,
+                send_dm_warning=getattr(prof, "send_dm_warning", False),
+                warning_message=prof.warning_message,
+                enabled=True,
+                updated_by=username,
+            )
+            applied.append(cid)
+
+        await AuditLogRepo.log(session, username, "profile_applied", target=str(profile_id),
+                               details=f"Applied {prof.name} to {len(applied)} channels")
+        await session.commit()
+
+        # Invalidate moderation engine cache
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {
+            "success": True,
+            "message": f"Successfully applied '{prof.name}' to {len(applied)} channel(s)",
+            "applied_count": len(applied),
+            "channel_ids": [str(c) for c in applied],
+        }
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to apply policy profile to channels")
+        raise HTTPException(status_code=500, detail="Could not apply policy profile to channels")
+    finally:
+        await session.close()
+
+
+# ─── Channel Policy Detail & CRUD ───────────────────────────────────────────
+
 @router.get("/policies/{channel_id}")
+@router.get("/moderation/policies/{channel_id}")
 async def get_channel_policy(channel_id: int, username: str = Depends(require_auth)):
-    """Get policy for a specific channel."""
+    """Get policy for a specific channel with clean deserialized domain array."""
     session = await get_session_direct()
     try:
         p = await ChannelPolicyRepo.get_for_channel(session, channel_id)
         if not p:
             return None
-        return {
-            "id": p.id,
-            "discord_channel_id": str(p.discord_channel_id),
-            "channel_name": p.channel_name,
-            "category_name": p.category_name,
-            "channel_type": p.channel_type,
-            "allow_text": p.allow_text.value if hasattr(p.allow_text, 'value') else str(p.allow_text),
-            "allow_links": p.allow_links.value if hasattr(p.allow_links, 'value') else str(p.allow_links),
-            "allow_images": p.allow_images.value if hasattr(p.allow_images, 'value') else str(p.allow_images),
-            "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, 'value') else str(p.allow_videos),
-            "allow_files": p.allow_files.value if hasattr(p.allow_files, 'value') else str(p.allow_files),
-            "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, 'value') else str(p.allow_stickers),
-            "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, 'value') else str(p.allow_everyone),
-            "allow_here": p.allow_here.value if hasattr(p.allow_here, 'value') else str(p.allow_here),
-            "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, 'value') else str(p.allow_role_mentions),
-            "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, 'value') else str(p.allow_user_mentions),
-            "allowed_domains": p.allowed_domains,
-            "preset_name": p.preset_name,
-            "enabled": p.enabled,
-            "delete_violations": p.delete_violations,
-            "warn_on_violation": p.warn_on_violation,
-            "log_violations": p.log_violations,
-            "warning_message": p.warning_message,
-        }
+        return _format_policy_response(p)
     finally:
         await session.close()
 
 
 @router.post("/policies/{channel_id}")
+@router.post("/moderation/policies/{channel_id}")
+@router.put("/moderation/policies/{channel_id}")
 async def save_policy(channel_id: int, request: Request, username: str = Depends(require_auth)):
-    """Save or update a channel policy."""
+    """Save or update a channel policy with guaranteed safe domain list serialization."""
     data = await request.json()
 
     session = await get_session_direct()
     try:
-        # Convert string values to PolicyValue enums
         policy_fields = {}
         for field in ["allow_text", "allow_links", "allow_images", "allow_videos",
                       "allow_files", "allow_stickers", "allow_everyone", "allow_here",
                       "allow_role_mentions", "allow_user_mentions"]:
-            if field in data:
-                policy_fields[field] = PolicyValue(data[field])
+            if field in data and data[field] is not None:
+                val = str(data[field]).lower()
+                policy_fields[field] = PolicyValue(val)
 
         for field in ["channel_name", "category_name", "channel_type", "preset_name",
-                      "warning_message", "allowed_domains"]:
+                      "warning_message"]:
             if field in data:
                 policy_fields[field] = data[field]
 
-        for field in ["enabled", "delete_violations", "warn_on_violation", "log_violations"]:
+        # Allowed domains: list or string is parsed and normalized safely
+        if "allowed_domains" in data:
+            raw_domains = data["allowed_domains"]
+            if isinstance(raw_domains, str):
+                parsed = [d.strip() for d in raw_domains.split(",") if d.strip()]
+            elif isinstance(raw_domains, list):
+                parsed = [str(d).strip() for d in raw_domains if str(d).strip()]
+            else:
+                parsed = []
+            policy_fields["allowed_domains"] = normalize_domain_list(parsed)
+
+        for field in ["enabled", "delete_violations", "warn_on_violation", "log_violations", "send_dm_warning"]:
             if field in data:
-                policy_fields[field] = data[field]
+                policy_fields[field] = bool(data[field])
 
         policy_fields["updated_by"] = username
 
-        await ChannelPolicyRepo.upsert(session, channel_id, **policy_fields)
+        saved = await ChannelPolicyRepo.upsert(session, channel_id, **policy_fields)
         await AuditLogRepo.log(session, username, "policy_updated", str(channel_id))
         await session.commit()
 
@@ -860,17 +1173,28 @@ async def save_policy(channel_id: int, request: Request, username: str = Depends
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()
 
-        return {"success": True}
+        return {
+            "success": True,
+            "message": "Policy saved successfully",
+            "policy": _format_policy_response(saved),
+        }
+    except ValueError as ve:
+        await session.rollback()
+        logger.warning("Validation error saving policy %s: %s", channel_id, str(ve))
+        raise HTTPException(status_code=400, detail=f"Invalid policy value: {str(ve)}")
     except Exception as e:
         await session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to save channel policy %s", channel_id)
+        # Safe human-readable message, no raw SQL traceback
+        raise HTTPException(status_code=500, detail="Could not save policy. Please check input parameters or server logs.")
     finally:
         await session.close()
 
 
 @router.delete("/policies/{channel_id}")
+@router.delete("/moderation/policies/{channel_id}")
 async def delete_policy(channel_id: int, username: str = Depends(require_auth)):
-    """Delete a channel policy."""
+    """Delete a channel policy override."""
     session = await get_session_direct()
     try:
         deleted = await ChannelPolicyRepo.delete_policy(session, channel_id)
@@ -885,36 +1209,292 @@ async def delete_policy(channel_id: int, username: str = Depends(require_auth)):
         if bot and bot.moderation_engine:
             await bot.moderation_engine.refresh_cache()
 
-        return {"success": True}
+        return {"success": True, "message": "Policy reset to default server inheritance"}
     except HTTPException:
         raise
     except Exception as e:
         await session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to delete channel policy %s", channel_id)
+        raise HTTPException(status_code=500, detail="Could not delete channel policy")
     finally:
         await session.close()
 
 
-# ─── Policy Simulator ────────────────────────────────────────────────────────
+# ─── Policy Simulator & Policy Tester ────────────────────────────────────────
 
 @router.post("/policies/simulate")
+@router.post("/moderation/policy-test")
 async def simulate_policy(request: Request, username: str = Depends(require_auth)):
-    """Simulate a policy check (policy tester)."""
+    """
+    Simulate a policy check (dry run) using the shared evaluate_message_policy function.
+    Supports evaluating against stored channel policy or an on-the-fly custom draft policy.
+    """
     data = await request.json()
-    channel_id = int(data.get("channel_id", 0))
+    channel_id_raw = data.get("channel_id", 0)
+    try:
+        channel_id = int(channel_id_raw)
+    except (ValueError, TypeError):
+        channel_id = 0
+
     content = data.get("content", "")
     role_ids = data.get("role_ids", [])
-    has_attachment = data.get("has_attachment", False)
+    has_attachment = bool(data.get("has_attachment", False))
     attachment_type = data.get("attachment_type", "image")
+    policy_override = data.get("policy_override") or data.get("policy")
 
+    # Get server config
+    session = await get_session_direct()
+    server_config_dict = {}
+    try:
+        cfg = await ServerConfigRepo.get_or_create(session)
+        server_config_dict = {
+            "admin_role_ids": deserialize_json_field(cfg.admin_role_ids, default=[]),
+            "moderator_role_ids": deserialize_json_field(cfg.moderator_role_ids, default=[]),
+            "global_allowed_domains": deserialize_json_field(cfg.global_allowed_domains, default=[]),
+        }
+    finally:
+        await session.close()
+
+    # Check exemptions by role
+    admin_roles = set(server_config_dict.get("admin_role_ids", []))
+    mod_roles = set(server_config_dict.get("moderator_role_ids", []))
+    exempt_roles = admin_roles | mod_roles
+    for r in role_ids:
+        try:
+            if int(r) in exempt_roles:
+                return {
+                    "allowed": True,
+                    "reason": "Exempt from moderation: user has moderator/admin role",
+                    "matched_rule": "role_exemption",
+                    "effective_value": "allow",
+                    "matched_policy": "Role Exemption",
+                }
+        except (ValueError, TypeError):
+            pass
+
+    # Determine effective policy dict
+    target_policy_dict = None
+    if isinstance(policy_override, dict) and policy_override:
+        target_policy_dict = policy_override
+    elif channel_id > 0:
+        session = await get_session_direct()
+        try:
+            db_pol = await ChannelPolicyRepo.get_for_channel(session, channel_id)
+            if db_pol:
+                target_policy_dict = {
+                    "allow_text": db_pol.allow_text,
+                    "allow_links": db_pol.allow_links,
+                    "allow_images": db_pol.allow_images,
+                    "allow_videos": db_pol.allow_videos,
+                    "allow_files": db_pol.allow_files,
+                    "allow_stickers": db_pol.allow_stickers,
+                    "allow_everyone": db_pol.allow_everyone,
+                    "allow_here": db_pol.allow_here,
+                    "allow_role_mentions": db_pol.allow_role_mentions,
+                    "allow_user_mentions": db_pol.allow_user_mentions,
+                    "allowed_domains": deserialize_json_field(db_pol.allowed_domains, default=[]),
+                    "preset_name": db_pol.preset_name,
+                    "channel_name": db_pol.channel_name,
+                }
+        finally:
+            await session.close()
+
+    if not target_policy_dict:
+        # Default allow
+        target_policy_dict = {
+            "allow_text": "allow",
+            "allow_links": "allow",
+            "allow_images": "allow",
+            "allow_videos": "allow",
+            "allow_files": "allow",
+            "allow_stickers": "allow",
+            "allow_everyone": "deny",
+            "allow_here": "deny",
+            "allow_role_mentions": "allow",
+            "allow_user_mentions": "allow",
+            "preset_name": "Default (Inherited)",
+        }
+
+    attachments_mock = []
+    if has_attachment:
+        ext_map = {"image": "test.png", "video": "test.mp4", "file": "test.pdf"}
+        attachments_mock = [{
+            "filename": ext_map.get(attachment_type, "test.bin"),
+            "content_type": f"{attachment_type}/test",
+        }]
+
+    return evaluate_message_policy(
+        policy=target_policy_dict,
+        content=content,
+        attachments=attachments_mock,
+        server_config=server_config_dict,
+        channel_name=target_policy_dict.get("channel_name", "Test Channel"),
+    )
+
+
+# ─── Moderation Log Settings & Guild Channels ───────────────────────────────
+
+@router.get("/moderation/log-settings")
+async def get_mod_log_settings(username: str = Depends(require_auth)):
+    """Get Discord auto-mod log channel settings and bot permission status."""
+    session = await get_session_direct()
+    try:
+        config = await ServerConfigRepo.get_or_create(session)
+        await session.commit()
+
+        mod_log_channel_id = str(config.mod_log_channel_id) if config.mod_log_channel_id else None
+        events = deserialize_json_field(
+            config.mod_log_events,
+            default=[
+                "policy_violation", "blocked_link", "blocked_attachment", "blocked_mention",
+                "warning", "timeout", "kick", "ban",
+            ],
+        )
+
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        guild = bot.guild if bot else None
+
+        channel_status = {
+            "status": "not_configured" if not mod_log_channel_id else "ok",
+            "channel_name": None,
+            "can_view": False,
+            "can_send": False,
+            "can_embed": False,
+            "warning": None,
+        }
+
+        if mod_log_channel_id:
+            if not guild:
+                channel_status["status"] = "bot_offline"
+                channel_status["warning"] = "Bot is currently offline. Cannot verify Discord channel permissions."
+            else:
+                try:
+                    cid = int(mod_log_channel_id)
+                    ch = guild.get_channel(cid)
+                    if not ch:
+                        channel_status["status"] = "missing_channel"
+                        channel_status["warning"] = "Selected Discord log channel does not exist or was deleted."
+                    else:
+                        channel_status["channel_name"] = ch.name
+                        perms = ch.permissions_for(guild.me)
+                        channel_status["can_view"] = perms.view_channel
+                        channel_status["can_send"] = perms.send_messages
+                        channel_status["can_embed"] = perms.embed_links
+
+                        if not (perms.view_channel and perms.send_messages and perms.embed_links):
+                            channel_status["status"] = "missing_permissions"
+                            channel_status["warning"] = "Bot is missing required permissions (View Channel, Send Messages, or Embed Links)."
+                except Exception as e:
+                    channel_status["status"] = "error"
+                    channel_status["warning"] = str(e)
+
+        return {
+            "mod_log_channel_id": mod_log_channel_id,
+            "mod_log_events": events,
+            "channel_status": channel_status,
+        }
+    finally:
+        await session.close()
+
+
+@router.put("/moderation/log-settings")
+@router.post("/moderation/log-settings")
+async def update_mod_log_settings(request: Request, username: str = Depends(require_auth)):
+    """Update auto-mod log channel and enabled log event toggles."""
+    data = await request.json()
+    session = await get_session_direct()
+    try:
+        updates = {}
+        if "mod_log_channel_id" in data:
+            raw_cid = data["mod_log_channel_id"]
+            updates["mod_log_channel_id"] = int(raw_cid) if raw_cid else None
+
+        if "mod_log_events" in data:
+            events = data["mod_log_events"]
+            if isinstance(events, list):
+                updates["mod_log_events"] = serialize_json_field(events)
+
+        await ServerConfigRepo.update(session, **updates)
+        await AuditLogRepo.log(session, username, "mod_log_settings_updated",
+                               details=str(list(updates.keys())))
+        await session.commit()
+
+        # Invalidate moderation engine cache so it picks up the new log channel
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True, "message": "Log settings updated successfully"}
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to update mod log settings")
+        raise HTTPException(status_code=500, detail="Could not update log settings")
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/channels")
+async def list_moderation_channels(username: str = Depends(require_auth)):
+    """List all Discord guild channels annotated with their current moderation policies."""
     from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
-    if bot and bot.moderation_engine:
-        result = await bot.moderation_engine.simulate_policy(
-            channel_id, role_ids, content, has_attachment, attachment_type
-        )
-        return result
-    return {"allowed": True, "reason": "Moderation engine not available"}
+    guild = bot.guild if bot else None
+
+    session = await get_session_direct()
+    try:
+        policies = await ChannelPolicyRepo.get_all(session)
+        pol_map = {str(p.discord_channel_id): p for p in policies}
+    finally:
+        await session.close()
+
+    result = []
+    if guild:
+        # Categorized channels
+        for category in guild.categories:
+            for ch in category.channels:
+                ch_type = "text"
+                if isinstance(ch, discord.VoiceChannel):
+                    ch_type = "voice"
+                elif isinstance(ch, discord.StageChannel):
+                    ch_type = "stage"
+                elif isinstance(ch, discord.ForumChannel):
+                    ch_type = "forum"
+
+                pol = pol_map.get(str(ch.id))
+                result.append({
+                    "id": str(ch.id),
+                    "name": ch.name,
+                    "type": ch_type,
+                    "category": category.name,
+                    "category_id": str(category.id),
+                    "position": ch.position,
+                    "has_override": bool(pol),
+                    "preset_name": pol.preset_name if pol else "INHERITED",
+                    "enabled": pol.enabled if pol else True,
+                })
+
+        # Uncategorized channels
+        for ch in guild.channels:
+            if ch.category is None and not isinstance(ch, discord.CategoryChannel):
+                ch_type = "text"
+                if isinstance(ch, discord.VoiceChannel):
+                    ch_type = "voice"
+                pol = pol_map.get(str(ch.id))
+                result.append({
+                    "id": str(ch.id),
+                    "name": ch.name,
+                    "type": ch_type,
+                    "category": "Uncategorized",
+                    "category_id": None,
+                    "position": ch.position,
+                    "has_override": bool(pol),
+                    "preset_name": pol.preset_name if pol else "INHERITED",
+                    "enabled": pol.enabled if pol else True,
+                })
+
+    return result
 
 
 # ─── Moderation ───────────────────────────────────────────────────────────────

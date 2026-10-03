@@ -124,24 +124,52 @@ export const PolicyTesterModal: React.FC<PolicyTesterModalProps> = ({
             <span className="text-gray-500 py-0.5">Quick fill:</span>
             <button
               type="button"
-              onClick={() => setSampleContent('https://example.com/test')}
-              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 font-mono"
+              onClick={() => { setSampleContent('Hello general chat, how is everyone doing today?'); setHasAttachment(false); }}
+              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300"
             >
-              https://link.com
+              Plain Text
             </button>
             <button
               type="button"
-              onClick={() => setSampleContent('@everyone Attention required!')}
-              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 font-mono"
+              onClick={() => { setSampleContent('https://youtube.com/watch?v=dQw4w9WgXcQ'); setHasAttachment(false); }}
+              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-emerald-400 font-mono"
+            >
+              YouTube URL
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSampleContent('Check out this link https://unauthorized-domain.com'); setHasAttachment(false); }}
+              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-rose-400 font-mono"
+            >
+              Blocked URL
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSampleContent('@everyone announcement ping'); setHasAttachment(false); }}
+              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-amber-400 font-mono"
             >
               @everyone
             </button>
             <button
               type="button"
-              onClick={() => setSampleContent('Normal conversation message with no violations')}
-              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300"
+              onClick={() => { setSampleContent('@here urgent update'); setHasAttachment(false); }}
+              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-amber-400 font-mono"
             >
-              Normal Text
+              @here
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSampleContent('<@&987654321> moderator ping'); setHasAttachment(false); }}
+              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-indigo-400 font-mono"
+            >
+              Role Mention
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSampleContent('<@!123456789> user ping'); setHasAttachment(false); }}
+              className="px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-blue-400 font-mono"
+            >
+              User Mention
             </button>
           </div>
 
@@ -170,7 +198,7 @@ export const PolicyTesterModal: React.FC<PolicyTesterModalProps> = ({
                     onChange={() => setAttachmentType('image')}
                     className="text-[#5865F2]"
                   />
-                  <span>Image</span>
+                  <span>Image (.png/.jpg)</span>
                 </label>
                 <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
                   <input
@@ -180,7 +208,7 @@ export const PolicyTesterModal: React.FC<PolicyTesterModalProps> = ({
                     onChange={() => setAttachmentType('video')}
                     className="text-[#5865F2]"
                   />
-                  <span>Video</span>
+                  <span>Video (.mp4/.mov)</span>
                 </label>
                 <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
                   <input
@@ -190,7 +218,7 @@ export const PolicyTesterModal: React.FC<PolicyTesterModalProps> = ({
                     onChange={() => setAttachmentType('file')}
                     className="text-[#5865F2]"
                   />
-                  <span>File</span>
+                  <span>Document / File (.pdf/.zip)</span>
                 </label>
               </div>
             )}
@@ -226,16 +254,26 @@ export const PolicyTesterModal: React.FC<PolicyTesterModalProps> = ({
               ) : (
                 <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
               )}
-              <div className="space-y-1">
-                <span className="text-sm font-bold block">
-                  {result.allowed ? 'ALLOWED' : 'BLOCKED'}
-                </span>
-                <p className="text-xs leading-relaxed text-gray-300">{result.reason}</p>
-                {result.rule && (
-                  <span className="text-[10px] text-gray-400 font-mono block">
-                    Triggered Rule: {result.rule}
+              <div className="space-y-1.5 flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold block">
+                    {result.allowed ? 'ALLOW' : 'DENY'}
                   </span>
-                )}
+                  {(result as any).effective_value && (
+                    <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold uppercase bg-gray-800 text-gray-300">
+                      EFFECTIVE: {(result as any).effective_value}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs leading-relaxed text-gray-200">{result.reason}</p>
+                <div className="flex flex-wrap gap-3 pt-1 text-[11px] text-gray-400 font-mono">
+                  {((result as any).matched_policy || (result as any).preset_name) && (
+                    <span>Policy: <strong className="text-white">{(result as any).matched_policy || (result as any).preset_name}</strong></span>
+                  )}
+                  {((result as any).matched_rule || result.rule) && (
+                    <span>Rule: <strong className="text-white">{(result as any).matched_rule || result.rule}</strong></span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
