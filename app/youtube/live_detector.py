@@ -9,7 +9,10 @@ import asyncio
 import json
 import logging
 import re
+import shutil
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -20,6 +23,20 @@ logger = logging.getLogger("pbhero.youtube")
 
 # Pattern for YouTube Channel ID
 CHANNEL_ID_PATTERN = re.compile(r"^UC[\w-]+$")
+
+
+def _get_ytdlp_binary() -> str:
+    """Find yt-dlp binary from current Python virtualenv or system PATH."""
+    venv_bin = Path(sys.executable).parent
+    for candidate in [venv_bin / "yt-dlp", venv_bin / "yt-dlp.exe"]:
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+
+    found = shutil.which("yt-dlp")
+    if found:
+        return found
+
+    return "yt-dlp"
 
 
 @dataclass
@@ -98,8 +115,9 @@ async def check_live_status(video_id: str) -> LiveStatus:
 
     try:
         # Use yt-dlp to extract metadata (no download)
+        ytdlp_bin = _get_ytdlp_binary()
         process = await asyncio.create_subprocess_exec(
-            "yt-dlp",
+            ytdlp_bin,
             "--dump-json",
             "--no-download",
             "--no-playlist",
@@ -370,8 +388,9 @@ async def check_channel_live_status(
 async def is_yt_dlp_available() -> bool:
     """Check if yt-dlp is installed and accessible."""
     try:
+        ytdlp_bin = _get_ytdlp_binary()
         process = await asyncio.create_subprocess_exec(
-            "yt-dlp", "--version",
+            ytdlp_bin, "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
