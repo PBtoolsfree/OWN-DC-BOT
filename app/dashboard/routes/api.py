@@ -28,7 +28,7 @@ from app.dashboard.auth import (
 )
 from app.dashboard.dependencies import check_ip_allowlist, require_auth, session_manager
 from app.database.engine import get_session_direct, test_connection
-from app.database.models import EventType, PolicyValue
+from app.database.models import EventType, ModerationAction, PolicyValue
 from app.database.serializers import (
     deserialize_json_field,
     normalize_domain,
@@ -1978,6 +1978,7 @@ async def delete_moderation_exemption(exemption_id: int, username: str = Depends
 # ─── Automod Rules ────────────────────────────────────────────────────────────
 
 @router.get("/moderation/automod-rules")
+@router.get("/moderation/automod/rules")
 async def list_automod_rules(username: str = Depends(require_auth)):
     """List all configured automod detection rules."""
     session = await get_session_direct()
@@ -2205,6 +2206,7 @@ async def get_warnings_stats(username: str = Depends(require_auth)):
 # ─── Escalation Ladder ────────────────────────────────────────────────────────
 
 @router.get("/moderation/escalation-rules")
+@router.get("/moderation/warnings/escalation")
 async def list_escalation_rules(username: str = Depends(require_auth)):
     """List strike/point escalation ladder rules."""
     session = await get_session_direct()
