@@ -53,5 +53,9 @@ build.log
 Thumbs.db
 desktop.ini
 
+# Local Runner Scripts
+start.ps1
+start.sh
+
 # Docker
 docker-data/

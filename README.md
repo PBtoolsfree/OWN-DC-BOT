@@ -116,49 +116,45 @@ TIMEZONE=Asia/Kolkata
 
 ---
 
-### 2. Windows Installation
+### 2. Windows Installation (Automated)
+
+Run the automated PowerShell installer:
 
 ```powershell
-# Create and activate virtual environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\install.ps1
+```
 
-# Install backend dependencies
-pip install -r requirements.txt
+Or for non-interactive / headless setup:
 
-# Build the frontend SPA
-cd web
-npm install
-npm run build
-cd ..
+```powershell
+.\install.ps1 -NonInteractive -BotToken "your_bot_token" -GuildId "your_guild_id" -AdminPassword "YourPassword123!"
+```
 
-# Run the application
-python -m app.main
+To start the bot and dashboard:
+```powershell
+.\start.ps1
 ```
 
 ---
 
-### 3. Linux / Ubuntu / Debian Installation
+### 3. Linux / Ubuntu / Debian Installation (Automated)
+
+Run the automated Bash installer:
 
 ```bash
-# System packages
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip nodejs npm
+chmod +x install.sh
+./install.sh
+```
 
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+Or for non-interactive setup:
 
-# Install backend dependencies
-pip install -r requirements.txt
+```bash
+./install.sh --non-interactive --bot-token "your_bot_token" --guild-id "your_guild_id" --admin-pass "YourPassword123!"
+```
 
-# Build frontend
-cd web
-npm install
-npm run build
-cd ..
-
-# Run application
-python3 -m app.main
+To start the bot and dashboard:
+```bash
+./start.sh
 ```
 
 ---
