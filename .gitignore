@@ -57,5 +57,6 @@ desktop.ini
 start.ps1
 start.sh
 
-# Docker
-docker-data/
+# Test Installs
+test_fresh_install/
+
