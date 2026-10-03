@@ -15,8 +15,8 @@ import uvicorn
 from app.bot.client import PBHeroBot
 from app.config import get_settings
 from app.dashboard.app import create_dashboard_app
-from app.dashboard.auth import hash_password
 from app.database.engine import close_engine, get_session_direct, init_engine
+from app.database.models import Base
 from app.database.repositories import (
     AdminUserRepo,
     AutomodRuleRepo,
