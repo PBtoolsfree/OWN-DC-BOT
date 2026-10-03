@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ChannelPolicy, DiscordChannel, PolicyProfile, PolicyValue } from '../types';
 import { PermissionToggle } from './PermissionToggle';
-import { Shield, Save, RotateCcw, Play, Check, X, Minus, Globe, Trash2 } from 'lucide-react';
+import { Shield, Save, RotateCcw, Play, Check, X, Minus, Globe, Trash2, Volume2 } from 'lucide-react';
 
 interface ChannelPolicyEditorProps {
   channel: DiscordChannel;
@@ -20,7 +20,9 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
   onDeletePolicy,
   onOpenSimulator,
 }) => {
-  // Policy states
+  const isVoice = channel.type === 'voice';
+
+  // Text Policy states
   const [allowText, setAllowText] = useState<PolicyValue>('inherit');
   const [allowLinks, setAllowLinks] = useState<PolicyValue>('inherit');
   const [allowImages, setAllowImages] = useState<PolicyValue>('inherit');
@@ -31,6 +33,18 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
   const [allowHere, setAllowHere] = useState<PolicyValue>('inherit');
   const [allowRoleMentions, setAllowRoleMentions] = useState<PolicyValue>('inherit');
   const [allowUserMentions, setAllowUserMentions] = useState<PolicyValue>('inherit');
+
+  // Voice Policy states
+  const [allowConnect, setAllowConnect] = useState<PolicyValue>('inherit');
+  const [allowSpeak, setAllowSpeak] = useState<PolicyValue>('inherit');
+  const [allowVideo, setAllowVideo] = useState<PolicyValue>('inherit');
+  const [allowStream, setAllowStream] = useState<PolicyValue>('inherit');
+  const [allowSoundboard, setAllowSoundboard] = useState<PolicyValue>('inherit');
+  const [allowVoiceActivity, setAllowVoiceActivity] = useState<PolicyValue>('inherit');
+  const [allowPrioritySpeaker, setAllowPrioritySpeaker] = useState<PolicyValue>('inherit');
+  const [allowMuteMembers, setAllowMuteMembers] = useState<PolicyValue>('inherit');
+  const [allowDeafenMembers, setAllowDeafenMembers] = useState<PolicyValue>('inherit');
+  const [allowMoveMembers, setAllowMoveMembers] = useState<PolicyValue>('inherit');
 
   // Rules and actions
   const [allowedDomains, setAllowedDomains] = useState<string>('');
@@ -59,6 +73,18 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
       setAllowRoleMentions(policy.allow_role_mentions || 'inherit');
       setAllowUserMentions(policy.allow_user_mentions || 'inherit');
 
+      // Voice fields
+      setAllowConnect(policy.allow_connect || 'inherit');
+      setAllowSpeak(policy.allow_speak || 'inherit');
+      setAllowVideo(policy.allow_video || 'inherit');
+      setAllowStream(policy.allow_stream || 'inherit');
+      setAllowSoundboard(policy.allow_soundboard || 'inherit');
+      setAllowVoiceActivity(policy.allow_voice_activity || 'inherit');
+      setAllowPrioritySpeaker(policy.allow_priority_speaker || 'inherit');
+      setAllowMuteMembers(policy.allow_mute_members || 'inherit');
+      setAllowDeafenMembers(policy.allow_deafen_members || 'inherit');
+      setAllowMoveMembers(policy.allow_move_members || 'inherit');
+
       if (Array.isArray(policy.allowed_domains)) {
         setAllowedDomains(policy.allowed_domains.join(', '));
       } else if (typeof policy.allowed_domains === 'string') {
@@ -86,6 +112,18 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
       setAllowHere('inherit');
       setAllowRoleMentions('inherit');
       setAllowUserMentions('inherit');
+
+      setAllowConnect('inherit');
+      setAllowSpeak('inherit');
+      setAllowVideo('inherit');
+      setAllowStream('inherit');
+      setAllowSoundboard('inherit');
+      setAllowVoiceActivity('inherit');
+      setAllowPrioritySpeaker('inherit');
+      setAllowMuteMembers('inherit');
+      setAllowDeafenMembers('inherit');
+      setAllowMoveMembers('inherit');
+
       setAllowedDomains('');
       setWarningMessage('');
       setPresetName('INHERITED');
@@ -109,6 +147,18 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
     setAllowHere(profile.allow_here);
     setAllowRoleMentions(profile.allow_role_mentions);
     setAllowUserMentions(profile.allow_user_mentions);
+
+    if (profile.allow_connect !== undefined) setAllowConnect(profile.allow_connect);
+    if (profile.allow_speak !== undefined) setAllowSpeak(profile.allow_speak);
+    if (profile.allow_video !== undefined) setAllowVideo(profile.allow_video);
+    if (profile.allow_stream !== undefined) setAllowStream(profile.allow_stream);
+    if (profile.allow_soundboard !== undefined) setAllowSoundboard(profile.allow_soundboard);
+    if (profile.allow_voice_activity !== undefined) setAllowVoiceActivity(profile.allow_voice_activity);
+    if (profile.allow_priority_speaker !== undefined) setAllowPrioritySpeaker(profile.allow_priority_speaker);
+    if (profile.allow_mute_members !== undefined) setAllowMuteMembers(profile.allow_mute_members);
+    if (profile.allow_deafen_members !== undefined) setAllowDeafenMembers(profile.allow_deafen_members);
+    if (profile.allow_move_members !== undefined) setAllowMoveMembers(profile.allow_move_members);
+
     setPresetName(profile.name);
     setHasChanges(true);
   };
@@ -125,6 +175,18 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
       setAllowHere(policy.allow_here || 'inherit');
       setAllowRoleMentions(policy.allow_role_mentions || 'inherit');
       setAllowUserMentions(policy.allow_user_mentions || 'inherit');
+
+      setAllowConnect(policy.allow_connect || 'inherit');
+      setAllowSpeak(policy.allow_speak || 'inherit');
+      setAllowVideo(policy.allow_video || 'inherit');
+      setAllowStream(policy.allow_stream || 'inherit');
+      setAllowSoundboard(policy.allow_soundboard || 'inherit');
+      setAllowVoiceActivity(policy.allow_voice_activity || 'inherit');
+      setAllowPrioritySpeaker(policy.allow_priority_speaker || 'inherit');
+      setAllowMuteMembers(policy.allow_mute_members || 'inherit');
+      setAllowDeafenMembers(policy.allow_deafen_members || 'inherit');
+      setAllowMoveMembers(policy.allow_move_members || 'inherit');
+
       setAllowedDomains(Array.isArray(policy.allowed_domains) ? policy.allowed_domains.join(', ') : policy.allowed_domains || '');
       setWarningMessage(policy.warning_message || '');
       setPresetName(policy.preset_name || 'CUSTOM');
@@ -154,6 +216,17 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
         allow_here: allowHere,
         allow_role_mentions: allowRoleMentions,
         allow_user_mentions: allowUserMentions,
+        // Voice controls
+        allow_connect: allowConnect,
+        allow_speak: allowSpeak,
+        allow_video: allowVideo,
+        allow_stream: allowStream,
+        allow_soundboard: allowSoundboard,
+        allow_voice_activity: allowVoiceActivity,
+        allow_priority_speaker: allowPrioritySpeaker,
+        allow_mute_members: allowMuteMembers,
+        allow_deafen_members: allowDeafenMembers,
+        allow_move_members: allowMoveMembers,
         allowed_domains: parsedDomains,
         warning_message: warningMessage,
         preset_name: presetName,
@@ -191,6 +264,12 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
     );
   };
 
+  const relevantProfiles = profiles.filter((p) =>
+    isVoice
+      ? p.policy_type === 'voice' || p.name.startsWith('VOICE')
+      : p.policy_type !== 'voice' && !p.name.startsWith('VOICE')
+  );
+
   return (
     <div className="bg-[#151921] border border-gray-800 rounded-2xl shadow-xl overflow-hidden flex flex-col h-full">
       {/* Header bar */}
@@ -209,20 +288,23 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
             )}
           </div>
           <span className="text-xs text-gray-400 mt-1 block">
-            Category: <strong className="text-gray-200">{channel.category || 'None'}</strong> • Type: <strong className="text-gray-200">{channel.type.toUpperCase()}</strong>
+            Category: <strong className="text-gray-200">{channel.category || 'None'}</strong> • Type:{' '}
+            <strong className="text-gray-200">{channel.type.toUpperCase()}</strong>
           </span>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenSimulator}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-medium transition-colors shadow"
-          >
-            <Play className="w-3.5 h-3.5 text-amber-400" />
-            <span>Policy Tester</span>
-          </button>
+          {!isVoice && (
+            <button
+              type="button"
+              onClick={onOpenSimulator}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-medium transition-colors shadow"
+            >
+              <Play className="w-3.5 h-3.5 text-amber-400" />
+              <span>Policy Tester</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -257,26 +339,42 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
             <span className="text-[11px] text-gray-500">Auto updates while configuring</span>
           </div>
           <div className="flex flex-wrap gap-2 pt-1">
-            {renderSummaryBadge('TEXT', allowText)}
-            {renderSummaryBadge('IMAGE', allowImages)}
-            {renderSummaryBadge('LINK', allowLinks)}
-            {renderSummaryBadge('VIDEOS', allowVideos)}
-            {renderSummaryBadge('FILES', allowFiles)}
-            {renderSummaryBadge('MENTIONS', allowUserMentions)}
-            {renderSummaryBadge('@EVERYONE', allowEveryone)}
+            {isVoice ? (
+              <>
+                {renderSummaryBadge('CONNECT', allowConnect)}
+                {renderSummaryBadge('SPEAK', allowSpeak)}
+                {renderSummaryBadge('VIDEO', allowVideo)}
+                {renderSummaryBadge('STREAM', allowStream)}
+                {renderSummaryBadge('SOUNDBOARD', allowSoundboard)}
+                {renderSummaryBadge('VAD', allowVoiceActivity)}
+                {renderSummaryBadge('PRIORITY', allowPrioritySpeaker)}
+              </>
+            ) : (
+              <>
+                {renderSummaryBadge('TEXT', allowText)}
+                {renderSummaryBadge('IMAGE', allowImages)}
+                {renderSummaryBadge('LINK', allowLinks)}
+                {renderSummaryBadge('VIDEOS', allowVideos)}
+                {renderSummaryBadge('FILES', allowFiles)}
+                {renderSummaryBadge('MENTIONS', allowUserMentions)}
+                {renderSummaryBadge('@EVERYONE', allowEveryone)}
+              </>
+            )}
           </div>
         </div>
 
         {/* Quick Presets Dropdown */}
         <div className="bg-[#12161f] border border-gray-800 rounded-xl p-4 flex items-center justify-between gap-4">
           <div>
-            <span className="text-xs font-semibold text-white block">Load from Preset</span>
+            <span className="text-xs font-semibold text-white block">
+              Load from {isVoice ? 'Voice' : 'Text'} Preset
+            </span>
             <span className="text-[11px] text-gray-400">Quickly apply standard rule presets</span>
           </div>
           <div className="flex items-center gap-2">
             <select
               onChange={(e) => {
-                const found = profiles.find((p) => p.name === e.target.value);
+                const found = relevantProfiles.find((p) => p.name === e.target.value);
                 if (found) handleApplyPreset(found);
               }}
               defaultValue=""
@@ -285,7 +383,7 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
               <option value="" disabled>
                 Select preset to apply...
               </option>
-              {profiles.map((p) => (
+              {relevantProfiles.map((p) => (
                 <option key={p.id} value={p.name}>
                   {p.name.replace(/_/g, ' ')}
                 </option>
@@ -294,147 +392,253 @@ export const ChannelPolicyEditor: React.FC<ChannelPolicyEditorProps> = ({
           </div>
         </div>
 
-        {/* Section: Message & Content Filtering */}
-        <div className="space-y-3">
-          <h4 className="text-xs font-bold text-[#5865F2] uppercase tracking-wider flex items-center gap-2">
-            <Shield className="w-4 h-4" />
-            <span>Message Content Filtering</span>
-          </h4>
+        {/* VOICE CHANNEL RULES */}
+        {isVoice ? (
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-[#5865F2] uppercase tracking-wider flex items-center gap-2">
+              <Volume2 className="w-4 h-4" />
+              <span>Voice Channel Permissions & Moderation</span>
+            </h4>
 
-          <div className="bg-[#0B0E14] border border-gray-800 rounded-xl divide-y divide-gray-800/60 overflow-hidden">
-            <PermissionToggle
-              label="Allow Text Messages"
-              description="Permit plain text conversations"
-              value={allowText}
-              onChange={(v) => {
-                setAllowText(v);
-                setHasChanges(true);
-              }}
-            />
-
-            <PermissionToggle
-              label="Allow Embedded Links (URLs)"
-              description="Permit URLs and hyperlinks"
-              value={allowLinks}
-              onChange={(v) => {
-                setAllowLinks(v);
-                setHasChanges(true);
-              }}
-            />
-
-            <PermissionToggle
-              label="Allow Images"
-              description="Permit JPEG, PNG, WEBP and GIF attachments"
-              value={allowImages}
-              onChange={(v) => {
-                setAllowImages(v);
-                setHasChanges(true);
-              }}
-            />
-
-            <PermissionToggle
-              label="Allow Videos"
-              description="Permit MP4, MOV, WEBM video uploads"
-              value={allowVideos}
-              onChange={(v) => {
-                setAllowVideos(v);
-                setHasChanges(true);
-              }}
-            />
-
-            <PermissionToggle
-              label="Allow Files & Documents"
-              description="Permit PDF, ZIP and generic binary attachments"
-              value={allowFiles}
-              onChange={(v) => {
-                setAllowFiles(v);
-                setHasChanges(true);
-              }}
-            />
-
-            <PermissionToggle
-              label="Allow Stickers & External Emojis"
-              description="Permit Discord custom stickers and external emote usage"
-              value={allowStickers}
-              onChange={(v) => {
-                setAllowStickers(v);
-                setHasChanges(true);
-              }}
-            />
+            <div className="bg-[#0B0E14] border border-gray-800 rounded-xl divide-y divide-gray-800/60 overflow-hidden">
+              <PermissionToggle
+                label="Allow Connect"
+                description="Permit members to join and connect to this voice channel"
+                value={allowConnect}
+                onChange={(v) => {
+                  setAllowConnect(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Speak"
+                description="Permit members to transmit microphone audio and talk"
+                value={allowSpeak}
+                onChange={(v) => {
+                  setAllowSpeak(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Video (Camera)"
+                description="Permit members to share webcam / camera video stream"
+                value={allowVideo}
+                onChange={(v) => {
+                  setAllowVideo(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Screen Share / Stream"
+                description="Permit members to screen share or stream application windows"
+                value={allowStream}
+                onChange={(v) => {
+                  setAllowStream(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Soundboard"
+                description="Permit playing server soundboard audio effects"
+                value={allowSoundboard}
+                onChange={(v) => {
+                  setAllowSoundboard(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Voice Activity (VAD)"
+                description="Permit automatic voice detection instead of enforcing Push-to-Talk"
+                value={allowVoiceActivity}
+                onChange={(v) => {
+                  setAllowVoiceActivity(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Priority Speaker"
+                description="Permit priority speaker status to reduce others' volume"
+                value={allowPrioritySpeaker}
+                onChange={(v) => {
+                  setAllowPrioritySpeaker(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Mute Members"
+                description="Permit moderators to server-mute other participants"
+                value={allowMuteMembers}
+                onChange={(v) => {
+                  setAllowMuteMembers(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Deafen Members"
+                description="Permit moderators to server-deafen other participants"
+                value={allowDeafenMembers}
+                onChange={(v) => {
+                  setAllowDeafenMembers(v);
+                  setHasChanges(true);
+                }}
+              />
+              <PermissionToggle
+                label="Allow Move / Disconnect Members"
+                description="Permit moving members to another channel or disconnecting them"
+                value={allowMoveMembers}
+                onChange={(v) => {
+                  setAllowMoveMembers(v);
+                  setHasChanges(true);
+                }}
+              />
+            </div>
           </div>
-        </div>
+        ) : (
+          /* TEXT CHANNEL RULES */
+          <>
+            {/* Section: Message & Content Filtering */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-[#5865F2] uppercase tracking-wider flex items-center gap-2">
+                <Shield className="w-4 h-4" />
+                <span>Message Content Filtering</span>
+              </h4>
 
-        {/* Section: Mentions */}
-        <div className="space-y-3">
-          <h4 className="text-xs font-bold text-[#5865F2] uppercase tracking-wider">
-            Mentions & Pings
-          </h4>
+              <div className="bg-[#0B0E14] border border-gray-800 rounded-xl divide-y divide-gray-800/60 overflow-hidden">
+                <PermissionToggle
+                  label="Allow Text Messages"
+                  description="Permit plain text conversations"
+                  value={allowText}
+                  onChange={(v) => {
+                    setAllowText(v);
+                    setHasChanges(true);
+                  }}
+                />
 
-          <div className="bg-[#0B0E14] border border-gray-800 rounded-xl divide-y divide-gray-800/60 overflow-hidden">
-            <PermissionToggle
-              label="Allow @everyone"
-              description="Permit server-wide announcement broadcast ping"
-              value={allowEveryone}
-              onChange={(v) => {
-                setAllowEveryone(v);
-                setHasChanges(true);
-              }}
-            />
+                <PermissionToggle
+                  label="Allow Embedded Links (URLs)"
+                  description="Permit URLs and hyperlinks"
+                  value={allowLinks}
+                  onChange={(v) => {
+                    setAllowLinks(v);
+                    setHasChanges(true);
+                  }}
+                />
 
-            <PermissionToggle
-              label="Allow @here"
-              description="Permit active online members ping"
-              value={allowHere}
-              onChange={(v) => {
-                setAllowHere(v);
-                setHasChanges(true);
-              }}
-            />
+                <PermissionToggle
+                  label="Allow Images"
+                  description="Permit JPEG, PNG, WEBP and GIF attachments"
+                  value={allowImages}
+                  onChange={(v) => {
+                    setAllowImages(v);
+                    setHasChanges(true);
+                  }}
+                />
 
-            <PermissionToggle
-              label="Allow Role Mentions"
-              description="Permit pinging specific Discord roles"
-              value={allowRoleMentions}
-              onChange={(v) => {
-                setAllowRoleMentions(v);
-                setHasChanges(true);
-              }}
-            />
+                <PermissionToggle
+                  label="Allow Videos"
+                  description="Permit MP4, MOV, WEBM video uploads"
+                  value={allowVideos}
+                  onChange={(v) => {
+                    setAllowVideos(v);
+                    setHasChanges(true);
+                  }}
+                />
 
-            <PermissionToggle
-              label="Allow User Mentions"
-              description="Permit direct @user pings"
-              value={allowUserMentions}
-              onChange={(v) => {
-                setAllowUserMentions(v);
-                setHasChanges(true);
-              }}
-            />
-          </div>
-        </div>
+                <PermissionToggle
+                  label="Allow Files & Documents"
+                  description="Permit PDF, ZIP and generic binary attachments"
+                  value={allowFiles}
+                  onChange={(v) => {
+                    setAllowFiles(v);
+                    setHasChanges(true);
+                  }}
+                />
 
-        {/* Section: Allowed Domains */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-gray-400" />
-            <label className="text-xs font-semibold text-gray-300 block">
-              Channel Allowed Domains (Link Exceptions)
-            </label>
-          </div>
-          <input
-            type="text"
-            value={allowedDomains}
-            onChange={(e) => {
-              setAllowedDomains(e.target.value);
-              setHasChanges(true);
-            }}
-            placeholder="youtube.com, github.com, twitter.com"
-            className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-4 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#5865F2] font-mono"
-          />
-          <p className="text-[11px] text-gray-500">
-            Comma-separated domains permitted even when link blocking is enabled.
-          </p>
-        </div>
+                <PermissionToggle
+                  label="Allow Stickers & External Emojis"
+                  description="Permit Discord custom stickers and external emote usage"
+                  value={allowStickers}
+                  onChange={(v) => {
+                    setAllowStickers(v);
+                    setHasChanges(true);
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Section: Mentions */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-[#5865F2] uppercase tracking-wider">
+                Mentions & Pings
+              </h4>
+
+              <div className="bg-[#0B0E14] border border-gray-800 rounded-xl divide-y divide-gray-800/60 overflow-hidden">
+                <PermissionToggle
+                  label="Allow @everyone"
+                  description="Permit server-wide announcement broadcast ping"
+                  value={allowEveryone}
+                  onChange={(v) => {
+                    setAllowEveryone(v);
+                    setHasChanges(true);
+                  }}
+                />
+
+                <PermissionToggle
+                  label="Allow @here"
+                  description="Permit active online members ping"
+                  value={allowHere}
+                  onChange={(v) => {
+                    setAllowHere(v);
+                    setHasChanges(true);
+                  }}
+                />
+
+                <PermissionToggle
+                  label="Allow Role Mentions"
+                  description="Permit pinging specific Discord roles"
+                  value={allowRoleMentions}
+                  onChange={(v) => {
+                    setAllowRoleMentions(v);
+                    setHasChanges(true);
+                  }}
+                />
+
+                <PermissionToggle
+                  label="Allow User Mentions"
+                  description="Permit direct @user pings"
+                  value={allowUserMentions}
+                  onChange={(v) => {
+                    setAllowUserMentions(v);
+                    setHasChanges(true);
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Section: Allowed Domains */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-gray-400" />
+                <label className="text-xs font-semibold text-gray-300 block">
+                  Channel Allowed Domains (Link Exceptions)
+                </label>
+              </div>
+              <input
+                type="text"
+                value={allowedDomains}
+                onChange={(e) => {
+                  setAllowedDomains(e.target.value);
+                  setHasChanges(true);
+                }}
+                placeholder="youtube.com, github.com, twitter.com"
+                className="w-full bg-[#0B0E14] border border-gray-700 rounded-xl px-4 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#5865F2] font-mono"
+              />
+              <p className="text-[11px] text-gray-500">
+                Comma-separated domains permitted even when link blocking is enabled.
+              </p>
+            </div>
+          </>
+        )}
 
         {/* Section: Warning Message & Violation Enforcement */}
         <div className="bg-[#0B0E14] border border-gray-800 rounded-xl p-4 space-y-4">

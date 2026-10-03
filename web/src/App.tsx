@@ -7,6 +7,9 @@ import YouTubeChannelDetails from './pages/YouTubeChannel';
 import Moderator from './pages/Moderator';
 import ChannelPolicies from './pages/ChannelPolicies';
 import PolicyProfiles from './pages/PolicyProfiles';
+import ExemptionsBypass from './pages/ExemptionsBypass';
+import AutomodRules from './pages/AutomodRules';
+import WarningsActions from './pages/WarningsActions';
 import ModerationLogs from './pages/ModerationLogs';
 import ModeratorSettings from './pages/ModeratorSettings';
 import Channels from './pages/Channels';
@@ -29,6 +32,9 @@ function App() {
           <Route path="moderator/policies" element={<ChannelPolicies />} />
           <Route path="moderator/policies/:channelId" element={<ChannelPolicies />} />
           <Route path="moderator/profiles" element={<PolicyProfiles />} />
+          <Route path="moderator/exemptions" element={<ExemptionsBypass />} />
+          <Route path="moderator/automod" element={<AutomodRules />} />
+          <Route path="moderator/warnings" element={<WarningsActions />} />
           <Route path="moderator/logs" element={<ModerationLogs />} />
           <Route path="moderator/settings" element={<ModeratorSettings />} />
           <Route path="channels" element={<Channels />} />

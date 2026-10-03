@@ -16,6 +16,7 @@ from app.database.models import (
     AdminUser,
     AppConfig,
     AuditLog,
+    AutomodRule,
     BlockedMessage,
     ChannelPolicy,
     EventStatus,
@@ -23,10 +24,13 @@ from app.database.models import (
     ExemptionRule,
     ModerationAction,
     ModerationCase,
+    ModerationExemption,
     PolicyProfile,
     PolicyValue,
     RoleOverride,
     ServerConfig,
+    WarningEscalationRule,
+    WarningRecord,
     YouTubeChannel,
     YouTubeDestination,
     YouTubeEvent,
@@ -494,6 +498,7 @@ class PolicyProfileRepo:
             name=new_name,
             description=f"Custom copy of {source.name}. {source.description or ''}".strip(),
             category=source.category or "Custom",
+            policy_type=getattr(source, "policy_type", "text"),
             allow_text=source.allow_text,
             allow_links=source.allow_links,
             allow_images=source.allow_images,
@@ -504,6 +509,16 @@ class PolicyProfileRepo:
             allow_here=source.allow_here,
             allow_role_mentions=source.allow_role_mentions,
             allow_user_mentions=source.allow_user_mentions,
+            allow_connect=getattr(source, "allow_connect", PolicyValue.ALLOW),
+            allow_speak=getattr(source, "allow_speak", PolicyValue.ALLOW),
+            allow_video=getattr(source, "allow_video", PolicyValue.ALLOW),
+            allow_stream=getattr(source, "allow_stream", PolicyValue.ALLOW),
+            allow_soundboard=getattr(source, "allow_soundboard", PolicyValue.ALLOW),
+            allow_voice_activity=getattr(source, "allow_voice_activity", PolicyValue.ALLOW),
+            allow_priority_speaker=getattr(source, "allow_priority_speaker", PolicyValue.DENY),
+            allow_mute_members=getattr(source, "allow_mute_members", PolicyValue.DENY),
+            allow_deafen_members=getattr(source, "allow_deafen_members", PolicyValue.DENY),
+            allow_move_members=getattr(source, "allow_move_members", PolicyValue.DENY),
             allowed_domains=source.allowed_domains,
             delete_violations=source.delete_violations if hasattr(source, "delete_violations") else True,
             warn_on_violation=source.warn_on_violation if hasattr(source, "warn_on_violation") else True,
@@ -692,12 +707,143 @@ class PolicyProfileRepo:
             {
                 "name": "MODERATOR ONLY",
                 "category": "Moderation",
+                "policy_type": "text",
                 "description": "Staff only channel. All non-staff member posting blocked.",
                 "allow_text": PolicyValue.DENY, "allow_links": PolicyValue.DENY,
                 "allow_images": PolicyValue.DENY, "allow_videos": PolicyValue.DENY,
                 "allow_files": PolicyValue.DENY, "allow_stickers": PolicyValue.DENY,
                 "allow_everyone": PolicyValue.DENY, "allow_here": PolicyValue.DENY,
                 "allow_role_mentions": PolicyValue.DENY, "allow_user_mentions": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 16 - Voice General
+            {
+                "name": "VOICE GENERAL",
+                "category": "General",
+                "policy_type": "voice",
+                "description": "Standard voice chat: members can connect, speak, stream video and screen, and use soundboard.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.ALLOW,
+                "allow_video": PolicyValue.ALLOW, "allow_stream": PolicyValue.ALLOW,
+                "allow_soundboard": PolicyValue.ALLOW, "allow_voice_activity": PolicyValue.ALLOW,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 17 - Voice Staff
+            {
+                "name": "VOICE STAFF",
+                "category": "Moderation",
+                "policy_type": "voice",
+                "description": "Staff voice lounge: full permissions including Priority Speaker, Member Muting, and Member Moving.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.ALLOW,
+                "allow_video": PolicyValue.ALLOW, "allow_stream": PolicyValue.ALLOW,
+                "allow_soundboard": PolicyValue.ALLOW, "allow_voice_activity": PolicyValue.ALLOW,
+                "allow_priority_speaker": PolicyValue.ALLOW, "allow_mute_members": PolicyValue.ALLOW,
+                "allow_deafen_members": PolicyValue.ALLOW, "allow_move_members": PolicyValue.ALLOW,
+                "is_builtin": True,
+            },
+            # 18 - Voice No Stream
+            {
+                "name": "VOICE NO STREAM",
+                "category": "Media",
+                "policy_type": "voice",
+                "description": "Voice only: connect and speak allowed. Video camera, screen sharing, and soundboard denied.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.ALLOW,
+                "allow_video": PolicyValue.DENY, "allow_stream": PolicyValue.DENY,
+                "allow_soundboard": PolicyValue.DENY, "allow_voice_activity": PolicyValue.ALLOW,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 19 - Voice No Speak
+            {
+                "name": "VOICE NO SPEAK",
+                "category": "Moderation",
+                "policy_type": "voice",
+                "description": "Muted room: members can connect to listen, but cannot speak, transmit video, or stream.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.DENY,
+                "allow_video": PolicyValue.DENY, "allow_stream": PolicyValue.DENY,
+                "allow_soundboard": PolicyValue.DENY, "allow_voice_activity": PolicyValue.DENY,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 20 - Voice Listen Only
+            {
+                "name": "VOICE LISTEN ONLY",
+                "category": "Events",
+                "policy_type": "voice",
+                "description": "Podcast / auditorium style: connect allowed, speak and streaming denied. Strict listen-only channel.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.DENY,
+                "allow_video": PolicyValue.DENY, "allow_stream": PolicyValue.DENY,
+                "allow_soundboard": PolicyValue.DENY, "allow_voice_activity": PolicyValue.DENY,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 21 - Voice Gaming
+            {
+                "name": "VOICE GAMING",
+                "category": "Community",
+                "policy_type": "voice",
+                "description": "Gaming session voice: open voice, screen share, video, and soundboard enabled for team gameplay.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.ALLOW,
+                "allow_video": PolicyValue.ALLOW, "allow_stream": PolicyValue.ALLOW,
+                "allow_soundboard": PolicyValue.ALLOW, "allow_voice_activity": PolicyValue.ALLOW,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 22 - Voice Event
+            {
+                "name": "VOICE EVENT",
+                "category": "Events",
+                "policy_type": "voice",
+                "description": "Community stage / event voice: audience can connect; stage hosts have Priority Speaker; regular speaking blocked.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.DENY,
+                "allow_video": PolicyValue.DENY, "allow_stream": PolicyValue.DENY,
+                "allow_soundboard": PolicyValue.DENY, "allow_voice_activity": PolicyValue.DENY,
+                "allow_priority_speaker": PolicyValue.ALLOW, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 23 - Voice Private
+            {
+                "name": "VOICE PRIVATE",
+                "category": "Private",
+                "policy_type": "voice",
+                "description": "Private / locked room: non-whitelisted members cannot connect or speak.",
+                "allow_connect": PolicyValue.DENY, "allow_speak": PolicyValue.DENY,
+                "allow_video": PolicyValue.DENY, "allow_stream": PolicyValue.DENY,
+                "allow_soundboard": PolicyValue.DENY, "allow_voice_activity": PolicyValue.DENY,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 24 - Voice Music
+            {
+                "name": "VOICE MUSIC",
+                "category": "Community",
+                "policy_type": "voice",
+                "description": "Music bot listening room: connect and stream allowed; member mic speaking and soundboards disabled.",
+                "allow_connect": PolicyValue.ALLOW, "allow_speak": PolicyValue.DENY,
+                "allow_video": PolicyValue.DENY, "allow_stream": PolicyValue.ALLOW,
+                "allow_soundboard": PolicyValue.DENY, "allow_voice_activity": PolicyValue.DENY,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
+                "is_builtin": True,
+            },
+            # 25 - Voice Moderator
+            {
+                "name": "VOICE MODERATOR",
+                "category": "Moderation",
+                "policy_type": "voice",
+                "description": "Moderator only voice room: strictly denied to normal members, reserved for server moderators.",
+                "allow_connect": PolicyValue.DENY, "allow_speak": PolicyValue.DENY,
+                "allow_video": PolicyValue.DENY, "allow_stream": PolicyValue.DENY,
+                "allow_soundboard": PolicyValue.DENY, "allow_voice_activity": PolicyValue.DENY,
+                "allow_priority_speaker": PolicyValue.DENY, "allow_mute_members": PolicyValue.DENY,
+                "allow_deafen_members": PolicyValue.DENY, "allow_move_members": PolicyValue.DENY,
                 "is_builtin": True,
             },
         ]
@@ -736,10 +882,17 @@ class ModerationCaseRepo:
     async def create(session: AsyncSession, target_user_id: int, moderator_user_id: int,
                      action: ModerationAction, reason: str = None, duration: int = None,
                      channel_id: int = None, message_id: int = None,
-                     target_username: str = None, moderator_username: str = None) -> ModerationCase:
+                     target_username: str = None, moderator_username: str = None,
+                     case_id: str = None, rule: str = None, policy_name: str = None,
+                     channel_name: str = None, warning_id: str = None, severity: str = None,
+                     dm_status: str = None, discord_log_status: str = None,
+                     executor: str = "PB HERO AutoMod") -> ModerationCase:
         case_number = await ModerationCaseRepo.get_next_case_number(session)
+        if not case_id:
+            case_id = f"CASE-{case_number:04d}"
         case = ModerationCase(
             case_number=case_number,
+            case_id=case_id,
             target_user_id=target_user_id,
             target_username=target_username,
             moderator_user_id=moderator_user_id,
@@ -748,7 +901,15 @@ class ModerationCaseRepo:
             reason=reason,
             duration=duration,
             channel_id=channel_id,
+            channel_name=channel_name,
             message_id=message_id,
+            rule=rule,
+            policy_name=policy_name,
+            warning_id=warning_id,
+            severity=severity,
+            dm_status=dm_status,
+            discord_log_status=discord_log_status,
+            executor=executor,
         )
         session.add(case)
         await session.flush()
@@ -758,6 +919,13 @@ class ModerationCaseRepo:
     async def get_by_case_number(session: AsyncSession, case_number: int) -> Optional[ModerationCase]:
         result = await session.execute(
             select(ModerationCase).where(ModerationCase.case_number == case_number)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_case_id(session: AsyncSession, case_id: str) -> Optional[ModerationCase]:
+        result = await session.execute(
+            select(ModerationCase).where(ModerationCase.case_id == case_id)
         )
         return result.scalar_one_or_none()
 
@@ -785,6 +953,29 @@ class ModerationCaseRepo:
             select(func.count(ModerationCase.id)).where(ModerationCase.created_at >= today_start)
         )
         return result.scalar() or 0
+
+    @staticmethod
+    async def count_action_today(session: AsyncSession, action: ModerationAction) -> int:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        result = await session.execute(
+            select(func.count(ModerationCase.id)).where(
+                ModerationCase.action == action,
+                ModerationCase.created_at >= today_start,
+            )
+        )
+        return result.scalar() or 0
+
+    @staticmethod
+    async def get_top_violations(session: AsyncSession, limit: int = 5) -> list[dict]:
+        """Aggregate top violation reasons/rules."""
+        result = await session.execute(
+            select(ModerationCase.reason, func.count(ModerationCase.id).label("count"))
+            .where(ModerationCase.reason.is_not(None))
+            .group_by(ModerationCase.reason)
+            .order_by(func.count(ModerationCase.id).desc())
+            .limit(limit)
+        )
+        return [{"reason": row[0], "count": row[1]} for row in result.all()]
 
 
 # ─── Blocked Messages ────────────────────────────────────────────────────────
@@ -941,3 +1132,509 @@ class ServerConfigRepo:
             except json.JSONDecodeError:
                 return []
         return []
+
+
+# ─── Moderation Exemptions (Granular Bypass) ───────────────────────────────────
+
+class ModerationExemptionRepo:
+    """Repository for granular moderation bypass rules."""
+
+    @staticmethod
+    async def get_all(session: AsyncSession) -> list[ModerationExemption]:
+        result = await session.execute(
+            select(ModerationExemption).order_by(ModerationExemption.target_type, ModerationExemption.target_name)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, exemption_id: int) -> Optional[ModerationExemption]:
+        result = await session.execute(
+            select(ModerationExemption).where(ModerationExemption.id == exemption_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def create(session: AsyncSession, target_type: str, target_id: int, **kwargs) -> ModerationExemption:
+        exemption = ModerationExemption(
+            target_type=target_type.lower(),
+            target_id=int(target_id),
+            **kwargs,
+        )
+        session.add(exemption)
+        await session.flush()
+        return exemption
+
+    @staticmethod
+    async def update(session: AsyncSession, exemption_id: int, **kwargs) -> Optional[ModerationExemption]:
+        exemption = await ModerationExemptionRepo.get_by_id(session, exemption_id)
+        if not exemption:
+            return None
+        for key, value in kwargs.items():
+            if hasattr(exemption, key) and key not in ("id", "created_at"):
+                setattr(exemption, key, value)
+        exemption.updated_at = datetime.utcnow()
+        await session.flush()
+        return exemption
+
+    @staticmethod
+    async def delete(session: AsyncSession, exemption_id: int) -> bool:
+        result = await session.execute(
+            delete(ModerationExemption).where(ModerationExemption.id == exemption_id)
+        )
+        return result.rowcount > 0
+
+    @staticmethod
+    async def check_exemption(
+        session: AsyncSession,
+        user_id: int,
+        role_ids: list[int],
+        is_bot: bool,
+        channel_id: int,
+        category_name: Optional[str] = None,
+        channel_type: str = "text",
+        rule_name: str = "all",
+    ) -> tuple[bool, Optional[ModerationExemption]]:
+        """
+        Check if user/role/bot/channel is exempt from a specific moderation rule.
+
+        Deterministic Precedence:
+        1. Explicit user exemption
+        2. Role exemption (highest priority role)
+        3. Bot exemption
+        4. Channel exemption
+        5. Category exemption
+        """
+        exemptions = await ModerationExemptionRepo.get_all(session)
+        if not exemptions:
+            return False, None
+
+        # Filter by scope relevance first
+        def scope_matches(ex: ModerationExemption) -> bool:
+            if ex.scope == "global":
+                return True
+            if ex.scope == "channel":
+                return ex.scope_id == channel_id
+            if ex.scope == "category":
+                return (category_name and ex.scope_name and ex.scope_name.lower() == category_name.lower()) or (ex.scope_id and category_name and str(ex.scope_id) == str(category_name))
+            if ex.scope == "channel_type":
+                return ex.channel_type == channel_type
+            return True
+
+        def rule_matches(ex: ModerationExemption) -> bool:
+            if ex.bypass_all:
+                return True
+            attr_name = f"bypass_{rule_name.lower()}"
+            if hasattr(ex, attr_name):
+                return bool(getattr(ex, attr_name))
+            return False
+
+        # 1. User exemption
+        user_exs = [e for e in exemptions if e.target_type == "user" and e.target_id == user_id and scope_matches(e)]
+        for ex in user_exs:
+            if rule_matches(ex):
+                return True, ex
+
+        # 2. Role exemptions
+        role_id_set = set(role_ids or [])
+        role_exs = [e for e in exemptions if e.target_type == "role" and e.target_id in role_id_set and scope_matches(e)]
+        for ex in role_exs:
+            if rule_matches(ex):
+                return True, ex
+
+        # 3. Bot exemption
+        if is_bot:
+            bot_exs = [e for e in exemptions if e.target_type == "bot" and (e.target_id == 0 or e.target_id == user_id) and scope_matches(e)]
+            for ex in bot_exs:
+                if rule_matches(ex):
+                    return True, ex
+
+        # 4. Channel exemption (target_type == 'channel' or scope == 'channel')
+        chan_exs = [e for e in exemptions if (e.target_type == "channel" and e.target_id == channel_id) or (e.scope == "channel" and e.scope_id == channel_id)]
+        for ex in chan_exs:
+            if rule_matches(ex):
+                return True, ex
+
+        # 5. Category exemption
+        if category_name:
+            cat_exs = [e for e in exemptions if (e.target_type == "category" and e.scope_name and e.scope_name.lower() == category_name.lower()) or (e.scope == "category" and e.scope_name and e.scope_name.lower() == category_name.lower())]
+            for ex in cat_exs:
+                if rule_matches(ex):
+                    return True, ex
+
+        return False, None
+
+
+# ─── Automod Rules ────────────────────────────────────────────────────────────
+
+class AutomodRuleRepo:
+    """Repository for configurable automated detection and action rules."""
+
+    @staticmethod
+    async def get_all(session: AsyncSession) -> list[AutomodRule]:
+        result = await session.execute(select(AutomodRule).order_by(AutomodRule.name))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, rule_id: int) -> Optional[AutomodRule]:
+        result = await session.execute(select(AutomodRule).where(AutomodRule.id == rule_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_type(session: AsyncSession, rule_type: str) -> Optional[AutomodRule]:
+        result = await session.execute(select(AutomodRule).where(AutomodRule.rule_type == rule_type))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def create(session: AsyncSession, rule_type: str, name: str, **kwargs) -> AutomodRule:
+        from app.database.serializers import serialize_json_field
+
+        for jf in ("channels", "categories", "exemptions", "custom_keywords"):
+            if jf in kwargs and not isinstance(kwargs[jf], str):
+                kwargs[jf] = serialize_json_field(kwargs[jf])
+
+        rule = AutomodRule(rule_type=rule_type, name=name, **kwargs)
+        session.add(rule)
+        await session.flush()
+        return rule
+
+    @staticmethod
+    async def update(session: AsyncSession, rule_id: int, **kwargs) -> Optional[AutomodRule]:
+        from app.database.serializers import serialize_json_field
+
+        rule = await AutomodRuleRepo.get_by_id(session, rule_id)
+        if not rule:
+            return None
+
+        for jf in ("channels", "categories", "exemptions", "custom_keywords"):
+            if jf in kwargs and not isinstance(kwargs[jf], str):
+                kwargs[jf] = serialize_json_field(kwargs[jf])
+
+        for key, value in kwargs.items():
+            if hasattr(rule, key) and key not in ("id", "created_at"):
+                setattr(rule, key, value)
+        rule.updated_at = datetime.utcnow()
+        await session.flush()
+        return rule
+
+    @staticmethod
+    async def delete(session: AsyncSession, rule_id: int) -> bool:
+        result = await session.execute(delete(AutomodRule).where(AutomodRule.id == rule_id))
+        return result.rowcount > 0
+
+    @staticmethod
+    async def create_defaults(session: AsyncSession) -> None:
+        """Seed professional default automod rules."""
+        defaults = [
+            {
+                "rule_type": "keyword_filter",
+                "name": "Keyword Filter",
+                "description": "Scans message text for prohibited words, slurs, or patterns.",
+                "threshold": 1,
+                "action": "delete_warn",
+                "severity": "medium",
+                "enabled": True,
+            },
+            {
+                "rule_type": "invite_filter",
+                "name": "Invite Link Filter",
+                "description": "Detects unauthorized Discord invite links (discord.gg, discord.com/invite).",
+                "threshold": 1,
+                "action": "delete_warn",
+                "severity": "high",
+                "enabled": True,
+            },
+            {
+                "rule_type": "link_filter",
+                "name": "Link Filter",
+                "description": "Restricts external URLs according to channel and global allowlists.",
+                "threshold": 1,
+                "action": "delete_warn",
+                "severity": "medium",
+                "enabled": True,
+            },
+            {
+                "rule_type": "mention_spam",
+                "name": "Mention Spam",
+                "description": "Detects excessive user or role mentions in a single message.",
+                "threshold": 5,
+                "action": "delete_timeout",
+                "timeout_duration": 600,
+                "severity": "high",
+                "enabled": True,
+            },
+            {
+                "rule_type": "message_spam",
+                "name": "Message Spam",
+                "description": "Rate-limits excessive message volume in a short window.",
+                "threshold": 5,
+                "time_window": 5,
+                "action": "delete_timeout",
+                "timeout_duration": 300,
+                "severity": "medium",
+                "enabled": True,
+            },
+            {
+                "rule_type": "attachment_restriction",
+                "name": "Attachment Restriction",
+                "description": "Restricts mass file uploads or disallowed file extensions.",
+                "threshold": 3,
+                "action": "delete_warn",
+                "severity": "low",
+                "enabled": True,
+            },
+            {
+                "rule_type": "repeated_message",
+                "name": "Repeated Message Detection",
+                "description": "Blocks duplicate copy-paste messages sent across channels.",
+                "threshold": 3,
+                "time_window": 10,
+                "action": "delete_warn",
+                "severity": "medium",
+                "enabled": True,
+            },
+            {
+                "rule_type": "caps_spam",
+                "name": "Caps / Character Spam",
+                "description": "Detects messages with excessive capital letters or repeated characters.",
+                "threshold": 70,
+                "action": "delete_warn",
+                "severity": "low",
+                "enabled": False,
+            },
+            {
+                "rule_type": "flood_protection",
+                "name": "Flood Protection",
+                "description": "Emergency raid and flood suppression.",
+                "threshold": 10,
+                "time_window": 5,
+                "action": "timeout",
+                "timeout_duration": 900,
+                "severity": "critical",
+                "enabled": True,
+            },
+        ]
+        for item in defaults:
+            existing = await AutomodRuleRepo.get_by_type(session, item["rule_type"])
+            if not existing:
+                await AutomodRuleRepo.create(session, **item)
+
+
+# ─── Warning Records ──────────────────────────────────────────────────────────
+
+class WarningRecordRepo:
+    """Repository for user warning records and active strikes."""
+
+    @staticmethod
+    async def get_next_warning_number(session: AsyncSession) -> int:
+        result = await session.execute(select(func.count(WarningRecord.id)))
+        return (result.scalar() or 0) + 1
+
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        user_id: int,
+        username: str,
+        rule: str,
+        reason: str,
+        channel_id: Optional[int] = None,
+        channel_name: Optional[str] = None,
+        severity: str = "medium",
+        points: int = 1,
+        moderator: str = "PB HERO AutoMod",
+        action_taken: str = "warn",
+        dm_status: str = "disabled",
+        case_number: Optional[int] = None,
+        case_id: Optional[str] = None,
+        expires_days: int = 30,
+    ) -> WarningRecord:
+        from datetime import timedelta
+
+        warn_num = await WarningRecordRepo.get_next_warning_number(session)
+        warning_id = f"WARN-{warn_num:04d}"
+        if not case_id:
+            case_id = f"CASE-{warn_num:04d}"
+
+        now = datetime.utcnow()
+        expires_at = now + timedelta(days=expires_days) if expires_days > 0 else None
+
+        record = WarningRecord(
+            warning_id=warning_id,
+            case_id=case_id,
+            case_number=case_number,
+            user_id=int(user_id),
+            username=username,
+            channel_id=int(channel_id) if channel_id else None,
+            channel_name=channel_name,
+            rule=rule,
+            reason=reason,
+            moderator=moderator,
+            severity=severity.lower(),
+            points=points,
+            status="active",
+            action_taken=action_taken,
+            dm_status=dm_status,
+            created_at=now,
+            expires_at=expires_at,
+        )
+        session.add(record)
+        await session.flush()
+        return record
+
+    @staticmethod
+    async def get_all(session: AsyncSession, user_id: Optional[int] = None, limit: int = 100) -> list[WarningRecord]:
+        query = select(WarningRecord)
+        if user_id:
+            query = query.where(WarningRecord.user_id == int(user_id))
+        result = await session.execute(query.order_by(WarningRecord.created_at.desc()).limit(limit))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_warning_id(session: AsyncSession, warning_id: str) -> Optional[WarningRecord]:
+        result = await session.execute(
+            select(WarningRecord).where(WarningRecord.warning_id == warning_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_active_for_user(session: AsyncSession, user_id: int, decay_days: int = 30) -> list[WarningRecord]:
+        """Fetch active warnings for a user, taking decay into account."""
+        from datetime import timedelta
+
+        now = datetime.utcnow()
+        query = select(WarningRecord).where(
+            WarningRecord.user_id == int(user_id),
+            WarningRecord.status == "active",
+        )
+        if decay_days > 0:
+            cutoff = now - timedelta(days=decay_days)
+            query = query.where(WarningRecord.created_at >= cutoff)
+
+        result = await session.execute(query.order_by(WarningRecord.created_at.asc()))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_user_strikes_and_points(session: AsyncSession, user_id: int, decay_days: int = 30) -> tuple[int, int]:
+        active_list = await WarningRecordRepo.get_active_for_user(session, user_id, decay_days)
+        strikes = len(active_list)
+        points = sum(w.points or 1 for w in active_list)
+        return strikes, points
+
+    @staticmethod
+    async def count_active_total(session: AsyncSession, decay_days: int = 30) -> int:
+        from datetime import timedelta
+
+        query = select(func.count(WarningRecord.id)).where(WarningRecord.status == "active")
+        if decay_days > 0:
+            cutoff = datetime.utcnow() - timedelta(days=decay_days)
+            query = query.where(WarningRecord.created_at >= cutoff)
+        result = await session.execute(query)
+        return result.scalar() or 0
+
+    @staticmethod
+    async def count_today(session: AsyncSession) -> int:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        result = await session.execute(
+            select(func.count(WarningRecord.id)).where(WarningRecord.created_at >= today_start)
+        )
+        return result.scalar() or 0
+
+    @staticmethod
+    async def revoke(session: AsyncSession, warning_id: str, revoked_by: str, reason: Optional[str] = None) -> bool:
+        record = await WarningRecordRepo.get_by_warning_id(session, warning_id)
+        if not record:
+            return False
+        record.status = "revoked"
+        record.revoked_at = datetime.utcnow()
+        record.revoked_by = revoked_by
+        record.revoke_reason = reason or "Revoked by moderator"
+        await session.flush()
+        return True
+
+    @staticmethod
+    async def clear_user(session: AsyncSession, user_id: int, revoked_by: str) -> int:
+        active = await WarningRecordRepo.get_active_for_user(session, user_id, decay_days=0)
+        now = datetime.utcnow()
+        for w in active:
+            w.status = "revoked"
+            w.revoked_at = now
+            w.revoked_by = revoked_by
+            w.revoke_reason = "All warnings cleared by moderator"
+        await session.flush()
+        return len(active)
+
+
+# ─── Warning Escalation Rules ─────────────────────────────────────────────────
+
+class WarningEscalationRepo:
+    """Repository for configurable strike/point escalation ladder."""
+
+    @staticmethod
+    async def get_all(session: AsyncSession, mode: Optional[str] = None) -> list[WarningEscalationRule]:
+        query = select(WarningEscalationRule)
+        if mode:
+            query = query.where(WarningEscalationRule.mode == mode)
+        result = await session.execute(query.order_by(WarningEscalationRule.threshold.asc()))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, rule_id: int) -> Optional[WarningEscalationRule]:
+        result = await session.execute(
+            select(WarningEscalationRule).where(WarningEscalationRule.id == rule_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def create(session: AsyncSession, threshold: int, mode: str, action: str, **kwargs) -> WarningEscalationRule:
+        rule = WarningEscalationRule(threshold=threshold, mode=mode, action=action, **kwargs)
+        session.add(rule)
+        await session.flush()
+        return rule
+
+    @staticmethod
+    async def update(session: AsyncSession, rule_id: int, **kwargs) -> Optional[WarningEscalationRule]:
+        rule = await WarningEscalationRepo.get_by_id(session, rule_id)
+        if not rule:
+            return None
+        for key, value in kwargs.items():
+            if hasattr(rule, key) and key not in ("id", "created_at"):
+                setattr(rule, key, value)
+        rule.updated_at = datetime.utcnow()
+        await session.flush()
+        return rule
+
+    @staticmethod
+    async def delete(session: AsyncSession, rule_id: int) -> bool:
+        result = await session.execute(
+            delete(WarningEscalationRule).where(WarningEscalationRule.id == rule_id)
+        )
+        return result.rowcount > 0
+
+    @staticmethod
+    async def find_escalation(session: AsyncSession, current_val: int, mode: str = "count") -> Optional[WarningEscalationRule]:
+        """Find the matching escalation rule for the given threshold level."""
+        rules = await WarningEscalationRepo.get_all(session, mode=mode)
+        matched = None
+        for r in rules:
+            if r.threshold == current_val:
+                return r
+            if r.threshold <= current_val:
+                matched = r
+        return matched
+
+    @staticmethod
+    async def create_defaults(session: AsyncSession) -> None:
+        """Seed standard professional warning escalation ladder."""
+        count = await session.execute(select(func.count(WarningEscalationRule.id)))
+        if (count.scalar() or 0) > 0:
+            return
+
+        ladder = [
+            {"threshold": 1, "mode": "count", "action": "warn", "duration": None, "send_dm": True, "reason_template": "First warning: message policy violation"},
+            {"threshold": 2, "mode": "count", "action": "warn", "duration": None, "send_dm": True, "reason_template": "Second warning: repeated policy violation"},
+            {"threshold": 3, "mode": "count", "action": "timeout", "duration": 600, "send_dm": True, "reason_template": "Third violation: 10 minute timeout"},
+            {"threshold": 4, "mode": "count", "action": "timeout", "duration": 3600, "send_dm": True, "reason_template": "Fourth violation: 1 hour timeout"},
+            {"threshold": 5, "mode": "count", "action": "kick", "duration": None, "send_dm": True, "reason_template": "Fifth violation: removed from server"},
+            {"threshold": 6, "mode": "count", "action": "ban", "duration": None, "send_dm": True, "delete_message_history_days": 1, "reason_template": "Sixth violation: permanently banned for repeated infractions"},
+        ]
+        for item in ladder:
+            await WarningEscalationRepo.create(session, **item)

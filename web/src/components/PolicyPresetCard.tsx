@@ -7,6 +7,7 @@ interface PolicyPresetCardProps {
   onApply: (profile: PolicyProfile) => void;
   onClone?: (profile: PolicyProfile) => void;
   onEdit?: (profile: PolicyProfile) => void;
+  onView?: (profile: PolicyProfile) => void;
   onDelete?: (id: number, name: string) => void;
 }
 
@@ -15,9 +16,13 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
   onApply,
   onClone,
   onEdit,
+  onView,
   onDelete,
 }) => {
-  const renderRuleBadge = (label: string, value: PolicyValue) => {
+  const isVoice = profile.policy_type === 'voice' || profile.name.startsWith('VOICE');
+
+  const renderRuleBadge = (label: string, value?: PolicyValue) => {
+    if (!value) return null;
     let color = 'bg-gray-800 text-gray-400 border-gray-700';
     let icon = <Minus className="w-3 h-3" />;
 
@@ -64,6 +69,9 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
                     CUSTOM
                   </span>
                 )}
+                <span className="text-[10px] px-2 py-0.5 rounded bg-purple-900/30 text-purple-300 font-semibold uppercase tracking-wider border border-purple-800/40">
+                  {isVoice ? 'VOICE POLICY' : 'TEXT POLICY'}
+                </span>
                 {profile.category && (
                   <span className="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-medium">
                     {profile.category}
@@ -86,14 +94,28 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
             Rule Summary
           </span>
           <div className="flex flex-wrap gap-1.5">
-            {renderRuleBadge('TEXT', profile.allow_text)}
-            {renderRuleBadge('LINKS', profile.allow_links)}
-            {renderRuleBadge('IMAGES', profile.allow_images)}
-            {renderRuleBadge('VIDEOS', profile.allow_videos)}
-            {renderRuleBadge('FILES', profile.allow_files)}
-            {renderRuleBadge('STICKERS', profile.allow_stickers)}
-            {renderRuleBadge('@EVERYONE', profile.allow_everyone)}
-            {renderRuleBadge('MENTIONS', profile.allow_user_mentions)}
+            {isVoice ? (
+              <>
+                {renderRuleBadge('CONNECT', profile.allow_connect)}
+                {renderRuleBadge('SPEAK', profile.allow_speak)}
+                {renderRuleBadge('VIDEO', profile.allow_video)}
+                {renderRuleBadge('STREAM', profile.allow_stream)}
+                {renderRuleBadge('SOUNDBOARD', profile.allow_soundboard)}
+                {renderRuleBadge('VAD', profile.allow_voice_activity)}
+                {renderRuleBadge('PRIORITY', profile.allow_priority_speaker)}
+              </>
+            ) : (
+              <>
+                {renderRuleBadge('TEXT', profile.allow_text)}
+                {renderRuleBadge('LINKS', profile.allow_links)}
+                {renderRuleBadge('IMAGES', profile.allow_images)}
+                {renderRuleBadge('VIDEOS', profile.allow_videos)}
+                {renderRuleBadge('FILES', profile.allow_files)}
+                {renderRuleBadge('STICKERS', profile.allow_stickers)}
+                {renderRuleBadge('@EVERYONE', profile.allow_everyone)}
+                {renderRuleBadge('MENTIONS', profile.allow_user_mentions)}
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -109,6 +131,16 @@ export const PolicyPresetCard: React.FC<PolicyPresetCardProps> = ({
         </button>
 
         <div className="flex items-center gap-1">
+          {profile.is_builtin && onView && (
+            <button
+              onClick={() => onView(profile)}
+              title="View Built-in Details"
+              className="px-2 py-1 text-xs text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors font-medium"
+            >
+              View
+            </button>
+          )}
+
           {onClone && (
             <button
               onClick={() => onClone(profile)}

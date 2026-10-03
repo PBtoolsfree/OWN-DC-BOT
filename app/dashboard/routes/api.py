@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import discord
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -34,16 +35,24 @@ from app.database.serializers import (
     normalize_domain_list,
     serialize_json_field,
 )
-from app.moderation.evaluator import evaluate_message_policy
+from app.moderation.evaluator import (
+    evaluate_automod_rules,
+    evaluate_message_policy,
+    evaluate_voice_policy,
+)
 from app.database.repositories import (
     AdminUserRepo,
     AuditLogRepo,
+    AutomodRuleRepo,
     BlockedMessageRepo,
     ChannelPolicyRepo,
     ExemptionRuleRepo,
     ModerationCaseRepo,
+    ModerationExemptionRepo,
     PolicyProfileRepo,
     ServerConfigRepo,
+    WarningEscalationRepo,
+    WarningRecordRepo,
     YouTubeChannelRepo,
     YouTubeDestinationRepo,
     YouTubeEventRepo,
@@ -727,23 +736,36 @@ def _format_policy_response(p) -> dict | None:
         domains = raw_domains
     else:
         domains = []
+    def _val(attr, default="inherit"):
+        v = getattr(p, attr, default)
+        return v.value if hasattr(v, "value") else str(v or default)
 
     return {
         "id": p.id,
         "discord_channel_id": str(p.discord_channel_id),
         "channel_name": p.channel_name,
         "category_name": p.category_name,
-        "channel_type": p.channel_type,
-        "allow_text": p.allow_text.value if hasattr(p.allow_text, "value") else str(p.allow_text),
-        "allow_links": p.allow_links.value if hasattr(p.allow_links, "value") else str(p.allow_links),
-        "allow_images": p.allow_images.value if hasattr(p.allow_images, "value") else str(p.allow_images),
-        "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, "value") else str(p.allow_videos),
-        "allow_files": p.allow_files.value if hasattr(p.allow_files, "value") else str(p.allow_files),
-        "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, "value") else str(p.allow_stickers),
-        "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, "value") else str(p.allow_everyone),
-        "allow_here": p.allow_here.value if hasattr(p.allow_here, "value") else str(p.allow_here),
-        "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, "value") else str(p.allow_role_mentions),
-        "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, "value") else str(p.allow_user_mentions),
+        "channel_type": getattr(p, "channel_type", "text") or "text",
+        "allow_text": _val("allow_text"),
+        "allow_links": _val("allow_links"),
+        "allow_images": _val("allow_images"),
+        "allow_videos": _val("allow_videos"),
+        "allow_files": _val("allow_files"),
+        "allow_stickers": _val("allow_stickers"),
+        "allow_everyone": _val("allow_everyone"),
+        "allow_here": _val("allow_here"),
+        "allow_role_mentions": _val("allow_role_mentions"),
+        "allow_user_mentions": _val("allow_user_mentions"),
+        "allow_connect": _val("allow_connect"),
+        "allow_speak": _val("allow_speak"),
+        "allow_video": _val("allow_video"),
+        "allow_stream": _val("allow_stream"),
+        "allow_soundboard": _val("allow_soundboard"),
+        "allow_voice_activity": _val("allow_voice_activity"),
+        "allow_priority_speaker": _val("allow_priority_speaker"),
+        "allow_mute_members": _val("allow_mute_members"),
+        "allow_deafen_members": _val("allow_deafen_members"),
+        "allow_move_members": _val("allow_move_members"),
         "allowed_domains": domains,
         "preset_name": p.preset_name,
         "enabled": bool(p.enabled),
@@ -758,22 +780,41 @@ def _format_policy_response(p) -> dict | None:
 def _format_profile_response(p) -> dict | None:
     if not p:
         return None
+    raw_domains = getattr(p, "allowed_domains", None)
+    domains = deserialize_json_field(raw_domains, default=[])
+
+    def _val(attr, default="allow"):
+        v = getattr(p, attr, default)
+        return v.value if hasattr(v, "value") else str(v or default)
+
     return {
         "id": p.id,
         "name": p.name,
         "description": p.description,
         "category": getattr(p, "category", "General") or "General",
+        "policy_type": getattr(p, "policy_type", "text") or "text",
         "is_builtin": bool(p.is_builtin),
-        "allow_text": p.allow_text.value if hasattr(p.allow_text, "value") else str(p.allow_text),
-        "allow_links": p.allow_links.value if hasattr(p.allow_links, "value") else str(p.allow_links),
-        "allow_images": p.allow_images.value if hasattr(p.allow_images, "value") else str(p.allow_images),
-        "allow_videos": p.allow_videos.value if hasattr(p.allow_videos, "value") else str(p.allow_videos),
-        "allow_files": p.allow_files.value if hasattr(p.allow_files, "value") else str(p.allow_files),
-        "allow_stickers": p.allow_stickers.value if hasattr(p.allow_stickers, "value") else str(p.allow_stickers),
-        "allow_everyone": p.allow_everyone.value if hasattr(p.allow_everyone, "value") else str(p.allow_everyone),
-        "allow_here": p.allow_here.value if hasattr(p.allow_here, "value") else str(p.allow_here),
-        "allow_role_mentions": p.allow_role_mentions.value if hasattr(p.allow_role_mentions, "value") else str(p.allow_role_mentions),
-        "allow_user_mentions": p.allow_user_mentions.value if hasattr(p.allow_user_mentions, "value") else str(p.allow_user_mentions),
+        "allow_text": _val("allow_text"),
+        "allow_links": _val("allow_links"),
+        "allow_images": _val("allow_images"),
+        "allow_videos": _val("allow_videos"),
+        "allow_files": _val("allow_files"),
+        "allow_stickers": _val("allow_stickers"),
+        "allow_everyone": _val("allow_everyone", "deny"),
+        "allow_here": _val("allow_here", "deny"),
+        "allow_role_mentions": _val("allow_role_mentions"),
+        "allow_user_mentions": _val("allow_user_mentions"),
+        "allow_connect": _val("allow_connect"),
+        "allow_speak": _val("allow_speak"),
+        "allow_video": _val("allow_video"),
+        "allow_stream": _val("allow_stream"),
+        "allow_soundboard": _val("allow_soundboard"),
+        "allow_voice_activity": _val("allow_voice_activity"),
+        "allow_priority_speaker": _val("allow_priority_speaker", "deny"),
+        "allow_mute_members": _val("allow_mute_members", "deny"),
+        "allow_deafen_members": _val("allow_deafen_members", "deny"),
+        "allow_move_members": _val("allow_move_members", "deny"),
+        "allowed_domains": domains,
         "delete_violations": bool(getattr(p, "delete_violations", True)),
         "warn_on_violation": bool(getattr(p, "warn_on_violation", True)),
         "log_violations": bool(getattr(p, "log_violations", True)),
@@ -871,9 +912,22 @@ async def create_profile(request: Request, username: str = Depends(require_auth)
         }
         for field in ["allow_text", "allow_links", "allow_images", "allow_videos",
                       "allow_files", "allow_stickers", "allow_everyone", "allow_here",
-                      "allow_role_mentions", "allow_user_mentions"]:
+                      "allow_role_mentions", "allow_user_mentions",
+                      "allow_connect", "allow_speak", "allow_video", "allow_stream",
+                      "allow_soundboard", "allow_voice_activity", "allow_priority_speaker",
+                      "allow_mute_members", "allow_deafen_members", "allow_move_members"]:
             if field in data and data[field] is not None:
                 kwargs[field] = PolicyValue(str(data[field]).lower())
+
+        if "policy_type" in data and data["policy_type"]:
+            kwargs["policy_type"] = str(data["policy_type"]).lower()
+
+        if "allowed_domains" in data:
+            raw_d = data["allowed_domains"]
+            if isinstance(raw_d, str):
+                kwargs["allowed_domains"] = [x.strip() for x in raw_d.split(",") if x.strip()]
+            elif isinstance(raw_d, list):
+                kwargs["allowed_domains"] = [str(x).strip() for x in raw_d if str(x).strip()]
 
         for field in ["delete_violations", "warn_on_violation", "log_violations", "send_dm_warning"]:
             if field in data:
@@ -917,10 +971,22 @@ async def update_profile(profile_id: int, request: Request, username: str = Depe
             updates["description"] = data["description"]
         if "category" in data:
             updates["category"] = data["category"]
+        if "policy_type" in data and data["policy_type"]:
+            updates["policy_type"] = str(data["policy_type"]).lower()
+
+        if "allowed_domains" in data:
+            raw_d = data["allowed_domains"]
+            if isinstance(raw_d, str):
+                updates["allowed_domains"] = [x.strip() for x in raw_d.split(",") if x.strip()]
+            elif isinstance(raw_d, list):
+                updates["allowed_domains"] = [str(x).strip() for x in raw_d if str(x).strip()]
 
         for field in ["allow_text", "allow_links", "allow_images", "allow_videos",
                       "allow_files", "allow_stickers", "allow_everyone", "allow_here",
-                      "allow_role_mentions", "allow_user_mentions"]:
+                      "allow_role_mentions", "allow_user_mentions",
+                      "allow_connect", "allow_speak", "allow_video", "allow_stream",
+                      "allow_soundboard", "allow_voice_activity", "allow_priority_speaker",
+                      "allow_mute_members", "allow_deafen_members", "allow_move_members"]:
             if field in data and data[field] is not None:
                 updates[field] = PolicyValue(str(data[field]).lower())
 
@@ -1073,6 +1139,17 @@ async def apply_profile_to_channels(profile_id: int, request: Request, username:
                 allow_here=prof.allow_here,
                 allow_role_mentions=prof.allow_role_mentions,
                 allow_user_mentions=prof.allow_user_mentions,
+                allow_connect=getattr(prof, "allow_connect", PolicyValue.ALLOW),
+                allow_speak=getattr(prof, "allow_speak", PolicyValue.ALLOW),
+                allow_video=getattr(prof, "allow_video", PolicyValue.ALLOW),
+                allow_stream=getattr(prof, "allow_stream", PolicyValue.ALLOW),
+                allow_soundboard=getattr(prof, "allow_soundboard", PolicyValue.ALLOW),
+                allow_voice_activity=getattr(prof, "allow_voice_activity", PolicyValue.ALLOW),
+                allow_priority_speaker=getattr(prof, "allow_priority_speaker", PolicyValue.DENY),
+                allow_mute_members=getattr(prof, "allow_mute_members", PolicyValue.DENY),
+                allow_deafen_members=getattr(prof, "allow_deafen_members", PolicyValue.DENY),
+                allow_move_members=getattr(prof, "allow_move_members", PolicyValue.DENY),
+                allowed_domains=prof.allowed_domains,
                 preset_name=prof.name,
                 delete_violations=prof.delete_violations,
                 warn_on_violation=prof.warn_on_violation,
@@ -1137,7 +1214,10 @@ async def save_policy(channel_id: int, request: Request, username: str = Depends
         policy_fields = {}
         for field in ["allow_text", "allow_links", "allow_images", "allow_videos",
                       "allow_files", "allow_stickers", "allow_everyone", "allow_here",
-                      "allow_role_mentions", "allow_user_mentions"]:
+                      "allow_role_mentions", "allow_user_mentions",
+                      "allow_connect", "allow_speak", "allow_video", "allow_stream",
+                      "allow_soundboard", "allow_voice_activity", "allow_priority_speaker",
+                      "allow_mute_members", "allow_deafen_members", "allow_move_members"]:
             if field in data and data[field] is not None:
                 val = str(data[field]).lower()
                 policy_fields[field] = PolicyValue(val)
@@ -1324,6 +1404,17 @@ async def simulate_policy(request: Request, username: str = Depends(require_auth
             "content_type": f"{attachment_type}/test",
         }]
 
+    action_type = data.get("action_type")
+    is_voice = (data.get("channel_type") == "voice") or bool(action_type)
+
+    if is_voice:
+        action = action_type or "connect"
+        return evaluate_voice_policy(
+            policy=target_policy_dict,
+            action=action,
+            channel_name=target_policy_dict.get("channel_name", "Test Voice Channel"),
+        )
+
     return evaluate_message_policy(
         policy=target_policy_dict,
         content=content,
@@ -1501,13 +1592,43 @@ async def list_moderation_channels(username: str = Depends(require_auth)):
 # ─── Moderation ───────────────────────────────────────────────────────────────
 
 @router.get("/moderation/cases")
-async def list_cases(username: str = Depends(require_auth), limit: int = 50):
-    """List recent moderation cases."""
+async def list_cases(
+    username: str = Depends(require_auth),
+    limit: int = 50,
+    search: Optional[str] = None,
+    action: Optional[str] = None,
+    user_id: Optional[str] = None,
+    channel_id: Optional[str] = None,
+    case_id: Optional[str] = None,
+):
+    """List moderation cases with filter support."""
     session = await get_session_direct()
     try:
-        cases = await ModerationCaseRepo.get_recent(session, limit=min(limit, 100))
+        cases = await ModerationCaseRepo.get_recent(session, limit=min(limit, 200))
+        # In-memory filter for flexible search
+        filtered = cases
+        if search:
+            q = search.lower()
+            filtered = [
+                c for c in filtered
+                if (c.target_username and q in c.target_username.lower())
+                or (c.reason and q in c.reason.lower())
+                or (c.rule and q in c.rule.lower())
+                or (c.case_id and q in c.case_id.lower())
+            ]
+        if action and action != "all":
+            filtered = [c for c in filtered if (c.action.value if hasattr(c.action, "value") else str(c.action)).lower() == action.lower()]
+        if user_id:
+            filtered = [c for c in filtered if str(c.target_user_id) == str(user_id)]
+        if channel_id and channel_id != "all":
+            filtered = [c for c in filtered if str(c.channel_id) == str(channel_id)]
+        if case_id:
+            filtered = [c for c in filtered if (c.case_id and case_id.lower() in c.case_id.lower())]
+
         return [{
+            "id": c.id,
             "case_number": c.case_number,
+            "case_id": c.case_id or f"CASE-{c.case_number:04d}",
             "target_user_id": str(c.target_user_id),
             "target_username": c.target_username,
             "moderator_user_id": str(c.moderator_user_id),
@@ -1515,8 +1636,738 @@ async def list_cases(username: str = Depends(require_auth), limit: int = 50):
             "action": c.action.value if hasattr(c.action, 'value') else str(c.action),
             "reason": c.reason,
             "duration": c.duration,
+            "channel_id": str(c.channel_id) if c.channel_id else None,
+            "channel_name": c.channel_name,
+            "rule": c.rule,
+            "policy_name": c.policy_name,
+            "warning_id": c.warning_id,
+            "severity": c.severity or "medium",
+            "dm_status": c.dm_status or "disabled",
+            "discord_log_status": c.discord_log_status or "delivered",
+            "executor": c.executor or "PB HERO AutoMod",
             "created_at": c.created_at.isoformat() if c.created_at else None,
-        } for c in cases]
+        } for c in filtered]
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/cases/{case_identifier}")
+async def get_case_details(case_identifier: str, username: str = Depends(require_auth)):
+    """Get full case details by Case ID or Case Number."""
+    session = await get_session_direct()
+    try:
+        case = None
+        if case_identifier.isdigit():
+            case = await ModerationCaseRepo.get_by_case_number(session, int(case_identifier))
+        if not case:
+            case = await ModerationCaseRepo.get_by_case_id(session, case_identifier.upper())
+        if not case:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        # Get target member avatar if bot is online
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        avatar_url = None
+        if bot and bot.guild:
+            member = bot.guild.get_member(case.target_user_id)
+            if member and hasattr(member, "display_avatar"):
+                avatar_url = member.display_avatar.url
+
+        return {
+            "id": case.id,
+            "case_number": case.case_number,
+            "case_id": case.case_id or f"CASE-{case.case_number:04d}",
+            "target_user_id": str(case.target_user_id),
+            "target_username": case.target_username,
+            "target_avatar_url": avatar_url,
+            "moderator_user_id": str(case.moderator_user_id),
+            "moderator_username": case.moderator_username,
+            "action": case.action.value if hasattr(case.action, 'value') else str(case.action),
+            "reason": case.reason,
+            "duration": case.duration,
+            "channel_id": str(case.channel_id) if case.channel_id else None,
+            "channel_name": case.channel_name,
+            "rule": case.rule,
+            "policy_name": case.policy_name,
+            "warning_id": case.warning_id,
+            "severity": case.severity or "medium",
+            "dm_status": case.dm_status or "disabled",
+            "discord_log_status": case.discord_log_status or "delivered",
+            "executor": case.executor or "PB HERO AutoMod",
+            "created_at": case.created_at.isoformat() if case.created_at else None,
+        }
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/stats")
+async def get_moderation_stats(username: str = Depends(require_auth)):
+    """Get accurate live moderation overview statistics."""
+    session = await get_session_direct()
+    try:
+        active_warnings = await WarningRecordRepo.count_active_total(session)
+        warnings_today = await WarningRecordRepo.count_today(session)
+        timeouts_today = await ModerationCaseRepo.count_action_today(session, ModerationAction.TIMEOUT)
+        kicks_today = await ModerationCaseRepo.count_action_today(session, ModerationAction.KICK)
+        bans_today = await ModerationCaseRepo.count_action_today(session, ModerationAction.BAN)
+        messages_blocked = await BlockedMessageRepo.count_today(session)
+        cases_today = await ModerationCaseRepo.count_today(session)
+
+        recent_cases = await ModerationCaseRepo.get_recent(session, limit=6)
+        top_violations = await ModerationCaseRepo.get_top_violations(session, limit=5)
+
+        return {
+            "active_warnings": active_warnings,
+            "warnings_today": warnings_today,
+            "timeouts_today": timeouts_today,
+            "kicks_today": kicks_today,
+            "bans_today": bans_today,
+            "messages_blocked": messages_blocked,
+            "cases_today": cases_today,
+            "top_violations": top_violations,
+            "recent_cases": [{
+                "case_number": c.case_number,
+                "case_id": c.case_id or f"CASE-{c.case_number:04d}",
+                "target_username": c.target_username,
+                "action": c.action.value if hasattr(c.action, "value") else str(c.action),
+                "reason": c.reason,
+                "channel_name": c.channel_name,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            } for c in recent_cases],
+        }
+    finally:
+        await session.close()
+
+
+# ─── Granular Bypass & Exemptions ─────────────────────────────────────────────
+
+@router.get("/moderation/guild-targets")
+async def get_guild_targets(username: str = Depends(require_auth)):
+    """Fetch real dynamic roles, members, bots, and channels from the connected guild."""
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    if not bot or not bot.guild:
+        return {"roles": [], "members": [], "bots": [], "channels": [], "categories": []}
+
+    guild = bot.guild
+
+    roles = []
+    for r in guild.roles:
+        if r.name != "@everyone":
+            p = r.permissions
+            roles.append({
+                "id": str(r.id),
+                "name": r.name,
+                "color": str(r.color),
+                "position": r.position,
+                "permissions": {
+                    "administrator": p.administrator,
+                    "manage_guild": p.manage_guild,
+                    "manage_messages": p.manage_messages,
+                    "moderate_members": p.moderate_members,
+                    "kick_members": p.kick_members,
+                    "ban_members": p.ban_members,
+                },
+            })
+
+    members = []
+    bots = []
+    for m in guild.members:
+        p = m.guild_permissions
+        info = {
+            "id": str(m.id),
+            "username": str(m),
+            "display_name": m.display_name,
+            "bot": m.bot,
+            "roles": [str(r.id) for r in m.roles if r.name != "@everyone"],
+            "permissions": {
+                "administrator": p.administrator,
+                "manage_guild": p.manage_guild,
+                "manage_messages": p.manage_messages,
+                "moderate_members": p.moderate_members,
+                "kick_members": p.kick_members,
+                "ban_members": p.ban_members,
+            },
+        }
+        if m.bot:
+            bots.append(info)
+        else:
+            members.append(info)
+
+    channels = []
+    for ch in guild.channels:
+        if not isinstance(ch, discord.CategoryChannel):
+            channels.append({
+                "id": str(ch.id),
+                "name": ch.name,
+                "type": "voice" if isinstance(ch, discord.VoiceChannel) else "text",
+                "category": ch.category.name if ch.category else "Uncategorized",
+                "category_id": str(ch.category.id) if ch.category else None,
+            })
+
+    categories = [{"id": str(c.id), "name": c.name} for c in guild.categories]
+
+    return {
+        "roles": roles,
+        "members": members,
+        "bots": bots,
+        "channels": channels,
+        "categories": categories,
+    }
+
+
+@router.get("/moderation/exemptions")
+async def list_moderation_exemptions(username: str = Depends(require_auth)):
+    """List all granular moderation exemptions."""
+    session = await get_session_direct()
+    try:
+        rules = await ModerationExemptionRepo.get_all(session)
+        return [{
+            "id": r.id,
+            "target_type": r.target_type,
+            "target_id": str(r.target_id),
+            "target_name": r.target_name,
+            "scope": r.scope,
+            "scope_id": str(r.scope_id) if r.scope_id else None,
+            "scope_name": r.scope_name,
+            "channel_type": r.channel_type,
+            "bypass_all": bool(r.bypass_all),
+            "bypass_text": bool(r.bypass_text),
+            "bypass_links": bool(r.bypass_links),
+            "bypass_images": bool(r.bypass_images),
+            "bypass_videos": bool(r.bypass_videos),
+            "bypass_files": bool(r.bypass_files),
+            "bypass_stickers": bool(r.bypass_stickers),
+            "bypass_mentions": bool(r.bypass_mentions),
+            "bypass_spam": bool(r.bypass_spam),
+            "bypass_keywords": bool(r.bypass_keywords),
+            "bypass_invites": bool(r.bypass_invites),
+            "bypass_warnings": bool(r.bypass_warnings),
+            "bypass_timeout": bool(r.bypass_timeout),
+            "bypass_kick": bool(r.bypass_kick),
+            "bypass_ban": bool(r.bypass_ban),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in rules]
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/exemptions")
+async def create_moderation_exemption(request: Request, username: str = Depends(require_auth)):
+    """Create a granular moderation exemption rule."""
+    data = await request.json()
+    target_type = str(data.get("target_type") or "").strip().lower()
+    target_id_raw = data.get("target_id")
+    if not target_type or target_id_raw is None:
+        raise HTTPException(status_code=400, detail="target_type and target_id are required")
+
+    session = await get_session_direct()
+    try:
+        target_id = int(target_id_raw)
+        scope_id = int(data["scope_id"]) if data.get("scope_id") else None
+
+        fields = {
+            "target_name": data.get("target_name"),
+            "scope": data.get("scope", "global"),
+            "scope_id": scope_id,
+            "scope_name": data.get("scope_name"),
+            "channel_type": data.get("channel_type"),
+        }
+        bypass_keys = [
+            "bypass_all", "bypass_text", "bypass_links", "bypass_images", "bypass_videos",
+            "bypass_files", "bypass_stickers", "bypass_mentions", "bypass_spam",
+            "bypass_keywords", "bypass_invites", "bypass_warnings", "bypass_timeout",
+            "bypass_kick", "bypass_ban"
+        ]
+        for bk in bypass_keys:
+            if bk in data:
+                fields[bk] = bool(data[bk])
+
+        created = await ModerationExemptionRepo.create(
+            session=session,
+            target_type=target_type,
+            target_id=target_id,
+            **fields,
+        )
+        await AuditLogRepo.log(session, username, "exemption_created", f"{target_type}:{target_id}")
+        await session.commit()
+
+        # Refresh bot engine cache
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True, "id": created.id}
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to create moderation exemption")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await session.close()
+
+
+@router.put("/moderation/exemptions/{exemption_id}")
+async def update_moderation_exemption(exemption_id: int, request: Request, username: str = Depends(require_auth)):
+    """Update a granular moderation exemption rule."""
+    data = await request.json()
+    session = await get_session_direct()
+    try:
+        fields = {}
+        for k in ["target_name", "scope", "scope_name", "channel_type"]:
+            if k in data:
+                fields[k] = data[k]
+        if "scope_id" in data:
+            fields["scope_id"] = int(data["scope_id"]) if data["scope_id"] else None
+
+        bypass_keys = [
+            "bypass_all", "bypass_text", "bypass_links", "bypass_images", "bypass_videos",
+            "bypass_files", "bypass_stickers", "bypass_mentions", "bypass_spam",
+            "bypass_keywords", "bypass_invites", "bypass_warnings", "bypass_timeout",
+            "bypass_kick", "bypass_ban"
+        ]
+        for bk in bypass_keys:
+            if bk in data:
+                fields[bk] = bool(data[bk])
+
+        updated = await ModerationExemptionRepo.update(session, exemption_id, **fields)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Exemption not found")
+
+        await AuditLogRepo.log(session, username, "exemption_updated", str(exemption_id))
+        await session.commit()
+
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True}
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await session.close()
+
+
+@router.delete("/moderation/exemptions/{exemption_id}")
+async def delete_moderation_exemption(exemption_id: int, username: str = Depends(require_auth)):
+    """Delete a moderation exemption rule."""
+    session = await get_session_direct()
+    try:
+        deleted = await ModerationExemptionRepo.delete(session, exemption_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Exemption not found")
+
+        await AuditLogRepo.log(session, username, "exemption_deleted", str(exemption_id))
+        await session.commit()
+
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True}
+    finally:
+        await session.close()
+
+
+# ─── Automod Rules ────────────────────────────────────────────────────────────
+
+@router.get("/moderation/automod-rules")
+async def list_automod_rules(username: str = Depends(require_auth)):
+    """List all configured automod detection rules."""
+    session = await get_session_direct()
+    try:
+        rules = await AutomodRuleRepo.get_all(session)
+        if not rules:
+            await AutomodRuleRepo.create_defaults(session)
+            await session.commit()
+            rules = await AutomodRuleRepo.get_all(session)
+
+        return [{
+            "id": r.id,
+            "rule_type": r.rule_type,
+            "name": r.name,
+            "description": r.description,
+            "enabled": bool(r.enabled),
+            "scope": r.scope,
+            "channels": deserialize_json_field(r.channels, default=[]),
+            "categories": deserialize_json_field(r.categories, default=[]),
+            "threshold": r.threshold,
+            "time_window": r.time_window,
+            "action": r.action,
+            "timeout_duration": r.timeout_duration,
+            "cooldown": r.cooldown,
+            "custom_keywords": deserialize_json_field(r.custom_keywords, default=[]),
+            "log_event": bool(r.log_event),
+            "severity": r.severity or "medium",
+        } for r in rules]
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/automod-rules")
+async def create_automod_rule(request: Request, username: str = Depends(require_auth)):
+    """Create a new automod rule."""
+    data = await request.json()
+    rule_type = data.get("rule_type", "custom_rule")
+    name = data.get("name", "New Rule")
+
+    session = await get_session_direct()
+    try:
+        created = await AutomodRuleRepo.create(session, rule_type=rule_type, name=name, **data)
+        await AuditLogRepo.log(session, username, "automod_rule_created", name)
+        await session.commit()
+
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True, "id": created.id}
+    finally:
+        await session.close()
+
+
+@router.put("/moderation/automod-rules/{rule_id}")
+async def update_automod_rule(rule_id: int, request: Request, username: str = Depends(require_auth)):
+    """Update an automod rule."""
+    data = await request.json()
+    session = await get_session_direct()
+    try:
+        updated = await AutomodRuleRepo.update(session, rule_id, **data)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
+        await AuditLogRepo.log(session, username, "automod_rule_updated", str(rule_id))
+        await session.commit()
+
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True}
+    finally:
+        await session.close()
+
+
+@router.delete("/moderation/automod-rules/{rule_id}")
+async def delete_automod_rule(rule_id: int, username: str = Depends(require_auth)):
+    """Delete an automod rule."""
+    session = await get_session_direct()
+    try:
+        deleted = await AutomodRuleRepo.delete(session, rule_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
+        await AuditLogRepo.log(session, username, "automod_rule_deleted", str(rule_id))
+        await session.commit()
+
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True}
+    finally:
+        await session.close()
+
+
+# ─── Warnings & Actions ───────────────────────────────────────────────────────
+
+@router.get("/moderation/warnings")
+async def list_warnings(
+    username: str = Depends(require_auth),
+    user_id: Optional[str] = None,
+    limit: int = 100,
+):
+    """List warning audit records with decay awareness."""
+    session = await get_session_direct()
+    try:
+        uid = int(user_id) if user_id else None
+        warnings = await WarningRecordRepo.get_all(session, user_id=uid, limit=min(limit, 200))
+        return [{
+            "id": w.id,
+            "warning_id": w.warning_id,
+            "case_id": w.case_id,
+            "case_number": w.case_number,
+            "user_id": str(w.user_id),
+            "username": w.username,
+            "channel_id": str(w.channel_id) if w.channel_id else None,
+            "channel_name": w.channel_name,
+            "rule": w.rule,
+            "reason": w.reason,
+            "moderator": w.moderator,
+            "severity": w.severity,
+            "points": w.points,
+            "status": w.status,
+            "action_taken": w.action_taken,
+            "dm_status": w.dm_status,
+            "created_at": w.created_at.isoformat() if w.created_at else None,
+            "expires_at": w.expires_at.isoformat() if w.expires_at else None,
+            "revoked_at": w.revoked_at.isoformat() if w.revoked_at else None,
+            "revoked_by": w.revoked_by,
+        } for w in warnings]
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/warnings")
+async def issue_warning(request: Request, username: str = Depends(require_auth)):
+    """Manually issue a warning to a member."""
+    data = await request.json()
+    user_id_raw = data.get("user_id")
+    if not user_id_raw:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    session = await get_session_direct()
+    try:
+        user_id = int(user_id_raw)
+        created = await WarningRecordRepo.create(
+            session=session,
+            user_id=user_id,
+            username=data.get("username", f"User-{user_id}"),
+            rule=data.get("rule", "Manual Warning"),
+            reason=data.get("reason", "Manual warning issued by administrator"),
+            channel_id=int(data["channel_id"]) if data.get("channel_id") else None,
+            channel_name=data.get("channel_name"),
+            severity=data.get("severity", "medium"),
+            points=int(data.get("points", 1)),
+            moderator=username,
+            action_taken="warn",
+        )
+        await AuditLogRepo.log(session, username, "warning_issued", str(user_id), details=data.get("reason"))
+        await session.commit()
+        return {"success": True, "warning_id": created.warning_id, "case_id": created.case_id}
+    finally:
+        await session.close()
+
+
+@router.delete("/moderation/warnings/{warning_id}")
+async def revoke_warning(warning_id: str, request: Request, username: str = Depends(require_auth)):
+    """Revoke a specific warning."""
+    reason = "Revoked via dashboard"
+    try:
+        data = await request.json()
+        if data.get("reason"):
+            reason = data["reason"]
+    except Exception:
+        pass
+
+    session = await get_session_direct()
+    try:
+        success = await WarningRecordRepo.revoke(session, warning_id, revoked_by=username, reason=reason)
+        if not success:
+            raise HTTPException(status_code=404, detail="Warning not found")
+        await AuditLogRepo.log(session, username, "warning_revoked", warning_id, details=reason)
+        await session.commit()
+        return {"success": True}
+    finally:
+        await session.close()
+
+
+@router.delete("/moderation/warnings/user/{user_id}")
+async def clear_user_warnings(user_id: int, username: str = Depends(require_auth)):
+    """Clear all active warnings for a user."""
+    session = await get_session_direct()
+    try:
+        cleared_count = await WarningRecordRepo.clear_user(session, user_id, revoked_by=username)
+        await AuditLogRepo.log(session, username, "user_warnings_cleared", str(user_id), details=f"Cleared {cleared_count} warnings")
+        await session.commit()
+        return {"success": True, "cleared_count": cleared_count}
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/warnings/stats")
+async def get_warnings_stats(username: str = Depends(require_auth)):
+    """Get warning statistics."""
+    session = await get_session_direct()
+    try:
+        active = await WarningRecordRepo.count_active_total(session)
+        today = await WarningRecordRepo.count_today(session)
+        config = await ServerConfigRepo.get_or_create(session)
+        return {
+            "active_warnings": active,
+            "warnings_today": today,
+            "decay_days": config.warning_decay_days,
+            "mode": config.warning_mode,
+        }
+    finally:
+        await session.close()
+
+
+# ─── Escalation Ladder ────────────────────────────────────────────────────────
+
+@router.get("/moderation/escalation-rules")
+async def list_escalation_rules(username: str = Depends(require_auth)):
+    """List strike/point escalation ladder rules."""
+    session = await get_session_direct()
+    try:
+        rules = await WarningEscalationRepo.get_all(session)
+        if not rules:
+            await WarningEscalationRepo.create_defaults(session)
+            await session.commit()
+            rules = await WarningEscalationRepo.get_all(session)
+
+        return [{
+            "id": r.id,
+            "threshold": r.threshold,
+            "mode": r.mode,
+            "action": r.action,
+            "duration": r.duration,
+            "send_dm": bool(r.send_dm),
+            "delete_message_history_days": r.delete_message_history_days,
+            "reason_template": r.reason_template,
+        } for r in rules]
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/escalation-rules")
+async def create_escalation_rule(request: Request, username: str = Depends(require_auth)):
+    """Create an escalation rule."""
+    data = await request.json()
+    session = await get_session_direct()
+    try:
+        created = await WarningEscalationRepo.create(
+            session=session,
+            threshold=int(data["threshold"]),
+            mode=data.get("mode", "count"),
+            action=data["action"],
+            duration=int(data["duration"]) if data.get("duration") else None,
+            send_dm=bool(data.get("send_dm", True)),
+            delete_message_history_days=int(data.get("delete_message_history_days", 0)),
+            reason_template=data.get("reason_template"),
+        )
+        await AuditLogRepo.log(session, username, "escalation_rule_created", str(created.threshold))
+        await session.commit()
+        return {"success": True, "id": created.id}
+    finally:
+        await session.close()
+
+
+@router.put("/moderation/escalation-rules/{rule_id}")
+async def update_escalation_rule(rule_id: int, request: Request, username: str = Depends(require_auth)):
+    """Update an escalation rule."""
+    data = await request.json()
+    session = await get_session_direct()
+    try:
+        updated = await WarningEscalationRepo.update(session, rule_id, **data)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        await AuditLogRepo.log(session, username, "escalation_rule_updated", str(rule_id))
+        await session.commit()
+        return {"success": True}
+    finally:
+        await session.close()
+
+
+@router.delete("/moderation/escalation-rules/{rule_id}")
+async def delete_escalation_rule(rule_id: int, username: str = Depends(require_auth)):
+    """Delete an escalation rule."""
+    session = await get_session_direct()
+    try:
+        deleted = await WarningEscalationRepo.delete(session, rule_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        await AuditLogRepo.log(session, username, "escalation_rule_deleted", str(rule_id))
+        await session.commit()
+        return {"success": True}
+    finally:
+        await session.close()
+
+
+# ─── Quick Setup / Easy Mode ──────────────────────────────────────────────────
+
+@router.get("/moderation/quick-setup")
+async def get_quick_setup_preview(username: str = Depends(require_auth)):
+    """Get preview descriptions of quick moderation styles."""
+    return {
+        "styles": {
+            "light": {
+                "name": "Light",
+                "description": "Warnings + limited deletes. Friendly community atmosphere.",
+                "actions": ["Warnings on first 3 strikes", "10-minute timeout on 4th strike", "1-hour timeout on 5th strike", "No automatic bans"],
+                "decay_days": 14,
+            },
+            "balanced": {
+                "name": "Balanced (Recommended)",
+                "description": "Standard community moderation: warnings, progressive timeouts, kick on repeated offenses.",
+                "actions": ["Warnings on strikes 1-2", "10m timeout on strike 3", "1h timeout on strike 4", "Kick on strike 5", "Ban on strike 6"],
+                "decay_days": 30,
+            },
+            "strict": {
+                "name": "Strict",
+                "description": "Fast escalation for zero-tolerance or high-security community.",
+                "actions": ["Warning on strike 1", "1h timeout on strike 2", "1-day timeout on strike 3", "Kick on strike 4", "Permanent ban on strike 5"],
+                "decay_days": 60,
+            },
+        }
+    }
+
+
+@router.post("/moderation/quick-setup")
+async def apply_quick_setup(request: Request, username: str = Depends(require_auth)):
+    """Apply a chosen quick setup moderation style."""
+    data = await request.json()
+    style = data.get("style", "balanced").lower()
+
+    session = await get_session_direct()
+    try:
+        config = await ServerConfigRepo.get_or_create(session)
+        config.quick_setup_style = style
+
+        # Clear old escalation rules and apply style ladder
+        await session.execute(delete(WarningEscalationRule))
+
+        if style == "light":
+            config.warning_decay_days = 14
+            ladder = [
+                {"threshold": 1, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "First warning"},
+                {"threshold": 2, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "Second warning"},
+                {"threshold": 3, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "Third warning"},
+                {"threshold": 4, "mode": "count", "action": "timeout", "duration": 600, "send_dm": True, "reason_template": "10-minute timeout"},
+                {"threshold": 5, "mode": "count", "action": "timeout", "duration": 3600, "send_dm": True, "reason_template": "1-hour timeout"},
+            ]
+        elif style == "strict":
+            config.warning_decay_days = 60
+            ladder = [
+                {"threshold": 1, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "First warning"},
+                {"threshold": 2, "mode": "count", "action": "timeout", "duration": 3600, "send_dm": True, "reason_template": "1-hour timeout"},
+                {"threshold": 3, "mode": "count", "action": "timeout", "duration": 86400, "send_dm": True, "reason_template": "24-hour timeout"},
+                {"threshold": 4, "mode": "count", "action": "kick", "send_dm": True, "reason_template": "Kicked from server"},
+                {"threshold": 5, "mode": "count", "action": "ban", "send_dm": True, "delete_message_history_days": 1, "reason_template": "Permanently banned"},
+            ]
+        else:  # balanced
+            config.warning_decay_days = 30
+            ladder = [
+                {"threshold": 1, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "First warning"},
+                {"threshold": 2, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "Second warning"},
+                {"threshold": 3, "mode": "count", "action": "timeout", "duration": 600, "send_dm": True, "reason_template": "10-minute timeout"},
+                {"threshold": 4, "mode": "count", "action": "timeout", "duration": 3600, "send_dm": True, "reason_template": "1-hour timeout"},
+                {"threshold": 5, "mode": "count", "action": "kick", "send_dm": True, "reason_template": "Kicked from server"},
+                {"threshold": 6, "mode": "count", "action": "ban", "send_dm": True, "delete_message_history_days": 1, "reason_template": "Permanently banned"},
+            ]
+
+        for item in ladder:
+            await WarningEscalationRepo.create(session, **item)
+
+        await AuditLogRepo.log(session, username, "quick_setup_applied", style)
+        await session.commit()
+
+        # Invalidate moderation engine cache
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        if bot and bot.moderation_engine:
+            await bot.moderation_engine.refresh_cache()
+
+        return {"success": True, "message": f"Applied {style.title()} moderation style successfully"}
     finally:
         await session.close()
 

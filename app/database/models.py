@@ -212,6 +212,18 @@ class ChannelPolicy(Base):
     allow_role_mentions = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
     allow_user_mentions = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
 
+    # Voice policies
+    allow_connect = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_speak = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_video = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_stream = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_soundboard = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_voice_activity = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_priority_speaker = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_mute_members = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_deafen_members = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+    allow_move_members = Column(Enum(PolicyValue), default=PolicyValue.INHERIT)
+
     # Advanced
     allowed_domains = Column(Text, nullable=True)  # JSON list of allowed domains
     preset_name = Column(String(64), nullable=True)
@@ -234,6 +246,7 @@ class PolicyProfile(Base):
     name = Column(String(64), unique=True, nullable=False)
     description = Column(Text, nullable=True)
     category = Column(String(64), default="General", nullable=True)
+    policy_type = Column(String(32), default="text")  # 'text', 'voice', 'general'
 
     allow_text = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
     allow_links = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
@@ -245,6 +258,18 @@ class PolicyProfile(Base):
     allow_here = Column(Enum(PolicyValue), default=PolicyValue.DENY)
     allow_role_mentions = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
     allow_user_mentions = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
+
+    # Voice policies
+    allow_connect = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
+    allow_speak = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
+    allow_video = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
+    allow_stream = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
+    allow_soundboard = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
+    allow_voice_activity = Column(Enum(PolicyValue), default=PolicyValue.ALLOW)
+    allow_priority_speaker = Column(Enum(PolicyValue), default=PolicyValue.DENY)
+    allow_mute_members = Column(Enum(PolicyValue), default=PolicyValue.DENY)
+    allow_deafen_members = Column(Enum(PolicyValue), default=PolicyValue.DENY)
+    allow_move_members = Column(Enum(PolicyValue), default=PolicyValue.DENY)
 
     allowed_domains = Column(Text, nullable=True)
     delete_violations = Column(Boolean, default=True)
@@ -285,6 +310,7 @@ class ModerationCase(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     case_number = Column(Integer, unique=True, nullable=False, index=True)
+    case_id = Column(String(64), nullable=True, index=True)
     target_user_id = Column(BigInteger, nullable=False, index=True)
     target_username = Column(String(255), nullable=True)
     moderator_user_id = Column(BigInteger, nullable=False)
@@ -293,7 +319,15 @@ class ModerationCase(Base):
     reason = Column(Text, nullable=True)
     duration = Column(Integer, nullable=True)  # seconds
     channel_id = Column(BigInteger, nullable=True)
+    channel_name = Column(String(255), nullable=True)
     message_id = Column(BigInteger, nullable=True)
+    rule = Column(String(128), nullable=True)
+    policy_name = Column(String(128), nullable=True)
+    warning_id = Column(String(64), nullable=True)
+    severity = Column(String(32), nullable=True)
+    dm_status = Column(String(32), nullable=True)
+    discord_log_status = Column(String(32), nullable=True)
+    executor = Column(String(128), default="PB HERO AutoMod")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -330,7 +364,7 @@ class AuditLog(Base):
 
 
 class ExemptionRule(Base):
-    """Exemption rules for moderation policies."""
+    """Legacy exemption rules for moderation policies."""
     __tablename__ = "exemption_rules"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -345,6 +379,108 @@ class ExemptionRule(Base):
     )
 
 
+class ModerationExemption(Base):
+    """Granular moderation bypass rules for users, roles, bots, and webhooks."""
+    __tablename__ = "moderation_exemptions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    target_type = Column(String(32), nullable=False)  # 'user', 'role', 'bot', 'webhook'
+    target_id = Column(BigInteger, nullable=False, index=True)
+    target_name = Column(String(255), nullable=True)
+    scope = Column(String(32), default="global")  # 'global', 'category', 'channel', 'channel_type'
+    scope_id = Column(BigInteger, nullable=True)
+    scope_name = Column(String(255), nullable=True)
+    channel_type = Column(String(32), nullable=True)  # 'text', 'voice', 'thread'
+
+    # Granular permission bypasses
+    bypass_all = Column(Boolean, default=False)
+    bypass_text = Column(Boolean, default=True)
+    bypass_links = Column(Boolean, default=True)
+    bypass_images = Column(Boolean, default=True)
+    bypass_videos = Column(Boolean, default=True)
+    bypass_files = Column(Boolean, default=True)
+    bypass_stickers = Column(Boolean, default=True)
+    bypass_mentions = Column(Boolean, default=True)
+    bypass_spam = Column(Boolean, default=True)
+    bypass_keywords = Column(Boolean, default=True)
+    bypass_invites = Column(Boolean, default=True)
+    bypass_warnings = Column(Boolean, default=False)
+    bypass_timeout = Column(Boolean, default=False)
+    bypass_kick = Column(Boolean, default=False)
+    bypass_ban = Column(Boolean, default=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AutomodRule(Base):
+    """Configurable automated moderation detection and action rules."""
+    __tablename__ = "automod_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rule_type = Column(String(64), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    enabled = Column(Boolean, default=True)
+    scope = Column(String(32), default="global")  # 'global', 'channels', 'categories'
+    channels = Column(Text, nullable=True)  # JSON list
+    categories = Column(Text, nullable=True)  # JSON list
+    threshold = Column(Integer, default=5)
+    time_window = Column(Integer, default=5)  # seconds
+    action = Column(String(64), default="delete_warn")
+    timeout_duration = Column(Integer, default=600)  # seconds
+    cooldown = Column(Integer, default=10)  # seconds
+    exemptions = Column(Text, nullable=True)  # JSON list
+    custom_keywords = Column(Text, nullable=True)  # JSON list
+    log_event = Column(Boolean, default=True)
+    severity = Column(String(32), default="medium")  # 'low', 'medium', 'high', 'critical'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WarningRecord(Base):
+    """Audit records of user warnings."""
+    __tablename__ = "warning_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    warning_id = Column(String(64), unique=True, nullable=False, index=True)
+    case_id = Column(String(64), nullable=True, index=True)
+    case_number = Column(Integer, nullable=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    username = Column(String(255), nullable=True)
+    channel_id = Column(BigInteger, nullable=True)
+    channel_name = Column(String(255), nullable=True)
+    rule = Column(String(128), nullable=False)
+    reason = Column(Text, nullable=False)
+    moderator = Column(String(255), default="PB HERO AutoMod")
+    severity = Column(String(32), default="medium")  # 'low', 'medium', 'high', 'critical'
+    points = Column(Integer, default=1)
+    status = Column(String(32), default="active")  # 'active', 'expired', 'revoked'
+    action_taken = Column(String(64), default="warn")
+    dm_status = Column(String(32), default="disabled")  # 'delivered', 'failed', 'disabled'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(String(255), nullable=True)
+    revoke_reason = Column(Text, nullable=True)
+
+
+class WarningEscalationRule(Base):
+    """Configurable strike/point escalation ladder."""
+    __tablename__ = "warning_escalation_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    threshold = Column(Integer, nullable=False)  # 1, 2, 3, etc.
+    mode = Column(String(32), default="count")  # 'count' or 'point'
+    action = Column(String(64), nullable=False)  # 'warn', 'timeout', 'kick', 'ban'
+    duration = Column(Integer, nullable=True)  # seconds
+    send_dm = Column(Boolean, default=True)
+    delete_message_history_days = Column(Integer, default=0)
+    reason_template = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ServerConfig(Base):
     """Server-level configuration for the single guild."""
     __tablename__ = "server_config"
@@ -357,4 +493,10 @@ class ServerConfig(Base):
     warning_message_template = Column(Text, nullable=True)
     mod_log_events = Column(Text, nullable=True)  # JSON list of enabled log events
     default_timeout_duration = Column(Integer, default=300)  # seconds
+    warning_decay_days = Column(Integer, default=30)  # 0 = never expire
+    warning_mode = Column(String(32), default="count")  # 'count' or 'point'
+    quick_setup_style = Column(String(32), default="balanced")
+    rate_limit_actions_per_min = Column(Integer, default=20)
+    rate_limit_user_actions_per_min = Column(Integer, default=5)
+    rate_limit_auto_bans_per_hour = Column(Integer, default=10)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -17,6 +17,9 @@ import {
   Bookmark,
   ScrollText,
   ListTree,
+  ShieldAlert,
+  Zap,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -164,6 +167,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <NavLink to="/moderator/profiles" className={subNavLinkClass} onClick={onCloseMobile}>
                 <Bookmark className="w-3.5 h-3.5" />
                 <span>Policy Profiles</span>
+              </NavLink>
+              <NavLink to="/moderator/exemptions" className={subNavLinkClass} onClick={onCloseMobile}>
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Exemptions & Bypass</span>
+              </NavLink>
+              <NavLink to="/moderator/automod" className={subNavLinkClass} onClick={onCloseMobile}>
+                <Zap className="w-3.5 h-3.5" />
+                <span>Automod Rules</span>
+              </NavLink>
+              <NavLink to="/moderator/warnings" className={subNavLinkClass} onClick={onCloseMobile}>
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Warnings & Actions</span>
               </NavLink>
               <NavLink to="/moderator/logs" className={subNavLinkClass} onClick={onCloseMobile}>
                 <ScrollText className="w-3.5 h-3.5" />

@@ -36,6 +36,7 @@ interface CustomPolicyForm {
   name: string;
   description: string;
   category: string;
+  policy_type: 'text' | 'voice' | 'general';
   allow_text: PolicyValue;
   allow_links: PolicyValue;
   allow_images: PolicyValue;
@@ -46,6 +47,17 @@ interface CustomPolicyForm {
   allow_here: PolicyValue;
   allow_role_mentions: PolicyValue;
   allow_user_mentions: PolicyValue;
+  // Voice controls
+  allow_connect: PolicyValue;
+  allow_speak: PolicyValue;
+  allow_video: PolicyValue;
+  allow_stream: PolicyValue;
+  allow_soundboard: PolicyValue;
+  allow_voice_activity: PolicyValue;
+  allow_priority_speaker: PolicyValue;
+  allow_mute_members: PolicyValue;
+  allow_deafen_members: PolicyValue;
+  allow_move_members: PolicyValue;
   delete_violations: boolean;
   warn_on_violation: boolean;
   log_violations: boolean;
@@ -57,6 +69,7 @@ const defaultForm: CustomPolicyForm = {
   name: '',
   description: '',
   category: 'General',
+  policy_type: 'text',
   allow_text: 'allow',
   allow_links: 'allow',
   allow_images: 'allow',
@@ -67,6 +80,17 @@ const defaultForm: CustomPolicyForm = {
   allow_here: 'deny',
   allow_role_mentions: 'allow',
   allow_user_mentions: 'allow',
+  // Voice controls defaults
+  allow_connect: 'allow',
+  allow_speak: 'allow',
+  allow_video: 'allow',
+  allow_stream: 'allow',
+  allow_soundboard: 'allow',
+  allow_voice_activity: 'allow',
+  allow_priority_speaker: 'deny',
+  allow_mute_members: 'deny',
+  allow_deafen_members: 'deny',
+  allow_move_members: 'deny',
   delete_violations: true,
   warn_on_violation: true,
   log_violations: true,
@@ -82,6 +106,10 @@ export default function PolicyProfiles() {
   // Search & Filtering
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'text' | 'voice'>('all');
+
+  // View modal state for built-ins
+  const [viewTarget, setViewTarget] = useState<PolicyProfile | null>(null);
 
   // Apply preset dialog state
   const [applyTarget, setApplyTarget] = useState<PolicyProfile | null>(null);
@@ -119,6 +147,10 @@ export default function PolicyProfiles() {
   // Filtered lists
   const filteredProfiles = useMemo(() => {
     return profiles.filter((p) => {
+      const isVoice = p.policy_type === 'voice' || p.name.startsWith('VOICE');
+      if (typeFilter === 'text' && isVoice) return false;
+      if (typeFilter === 'voice' && !isVoice) return false;
+
       const matchesSearch =
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (p.description || '').toLowerCase().includes(searchQuery.toLowerCase());
@@ -127,7 +159,7 @@ export default function PolicyProfiles() {
         (p.category || 'General').toLowerCase() === selectedCategory.toLowerCase();
       return matchesSearch && matchesCategory;
     });
-  }, [profiles, searchQuery, selectedCategory]);
+  }, [profiles, searchQuery, selectedCategory, typeFilter]);
 
   const builtInPresets = filteredProfiles.filter((p) => p.is_builtin);
   const customPolicies = filteredProfiles.filter((p) => !p.is_builtin);
@@ -180,6 +212,7 @@ export default function PolicyProfiles() {
       name: profile.name,
       description: profile.description || '',
       category: profile.category || 'General',
+      policy_type: profile.policy_type || (profile.name.startsWith('VOICE') ? 'voice' : 'text'),
       allow_text: profile.allow_text,
       allow_links: profile.allow_links,
       allow_images: profile.allow_images,
@@ -190,6 +223,16 @@ export default function PolicyProfiles() {
       allow_here: profile.allow_here,
       allow_role_mentions: profile.allow_role_mentions,
       allow_user_mentions: profile.allow_user_mentions,
+      allow_connect: profile.allow_connect || 'inherit',
+      allow_speak: profile.allow_speak || 'inherit',
+      allow_video: profile.allow_video || 'inherit',
+      allow_stream: profile.allow_stream || 'inherit',
+      allow_soundboard: profile.allow_soundboard || 'inherit',
+      allow_voice_activity: profile.allow_voice_activity || 'inherit',
+      allow_priority_speaker: profile.allow_priority_speaker || 'inherit',
+      allow_mute_members: profile.allow_mute_members || 'inherit',
+      allow_deafen_members: profile.allow_deafen_members || 'inherit',
+      allow_move_members: profile.allow_move_members || 'inherit',
       delete_violations: profile.delete_violations ?? true,
       warn_on_violation: profile.warn_on_violation ?? true,
       log_violations: profile.log_violations ?? true,
@@ -323,6 +366,28 @@ export default function PolicyProfiles() {
         </button>
       </div>
 
+      {/* Type Tabs */}
+      <div className="flex items-center gap-2 border-b border-gray-800 pb-3">
+        {[
+          { key: 'all', label: 'All Profiles' },
+          { key: 'text', label: 'Text Profiles' },
+          { key: 'voice', label: 'Voice Profiles' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setTypeFilter(tab.key as any)}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              typeFilter === tab.key
+                ? 'bg-[#5865F2] text-white shadow-md shadow-[#5865F2]/20'
+                : 'bg-[#151921] text-gray-400 hover:text-white border border-gray-800'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {/* Filter and Search Bar */}
       <div className="bg-[#151921] border border-gray-800 rounded-2xl p-4 flex flex-col md:flex-row gap-4 justify-between items-center shadow-lg">
         {/* Search */}
@@ -410,6 +475,7 @@ export default function PolicyProfiles() {
                 profile={prof}
                 onApply={handleApplyClick}
                 onClone={handleClone}
+                onView={setViewTarget}
               />
             ))}
           </div>
@@ -555,8 +621,8 @@ export default function PolicyProfiles() {
 
             <div className="p-5 overflow-y-auto space-y-6 flex-1 custom-scrollbar">
               {/* Meta fields */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-1.5 md:col-span-2">
                   <label className="text-xs font-semibold text-gray-300">Policy Name *</label>
                   <input
                     type="text"
@@ -581,6 +647,27 @@ export default function PolicyProfiles() {
                     ))}
                   </select>
                 </div>
+
+                {/* Policy Type Selector */}
+                <div className="space-y-1.5 md:col-span-3">
+                  <label className="text-xs font-semibold text-gray-300">Policy Type</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['text', 'voice', 'general'] as const).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setForm({ ...form, policy_type: t })}
+                        className={`py-2 rounded-xl text-xs font-bold uppercase transition-all border ${
+                          form.policy_type === t
+                            ? 'bg-purple-900/40 border-purple-500 text-purple-300 shadow'
+                            : 'bg-[#0B0E14] border-gray-800 text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        {t} Policy
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -594,32 +681,57 @@ export default function PolicyProfiles() {
                 />
               </div>
 
-              {/* Rules Grid */}
-              <div className="space-y-3">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-                  Message Content Rules (ALLOW / DENY / INHERIT)
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {renderValueToggle('Allow Text Messages', 'allow_text', form.allow_text)}
-                  {renderValueToggle('Allow Embedded Links', 'allow_links', form.allow_links)}
-                  {renderValueToggle('Allow Images', 'allow_images', form.allow_images)}
-                  {renderValueToggle('Allow Videos', 'allow_videos', form.allow_videos)}
-                  {renderValueToggle('Allow Files & Docs', 'allow_files', form.allow_files)}
-                  {renderValueToggle('Allow Stickers & Emojis', 'allow_stickers', form.allow_stickers)}
+              {/* VOICE RULES */}
+              {(form.policy_type === 'voice' || form.policy_type === 'general') && (
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold text-[#5865F2] uppercase tracking-wider">
+                    Voice Permissions & Audio Rules (ALLOW / DENY / INHERIT)
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {renderValueToggle('Allow Connect', 'allow_connect', form.allow_connect)}
+                    {renderValueToggle('Allow Speak', 'allow_speak', form.allow_speak)}
+                    {renderValueToggle('Allow Video (Webcam)', 'allow_video', form.allow_video)}
+                    {renderValueToggle('Allow Screen Share / Stream', 'allow_stream', form.allow_stream)}
+                    {renderValueToggle('Allow Soundboard', 'allow_soundboard', form.allow_soundboard)}
+                    {renderValueToggle('Allow Voice Activity (VAD)', 'allow_voice_activity', form.allow_voice_activity)}
+                    {renderValueToggle('Allow Priority Speaker', 'allow_priority_speaker', form.allow_priority_speaker)}
+                    {renderValueToggle('Allow Mute Members', 'allow_mute_members', form.allow_mute_members)}
+                    {renderValueToggle('Allow Deafen Members', 'allow_deafen_members', form.allow_deafen_members)}
+                    {renderValueToggle('Allow Move Members', 'allow_move_members', form.allow_move_members)}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              <div className="space-y-3">
-                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-                  Mentions & Pings
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {renderValueToggle('Allow @everyone', 'allow_everyone', form.allow_everyone)}
-                  {renderValueToggle('Allow @here', 'allow_here', form.allow_here)}
-                  {renderValueToggle('Allow Role Mentions', 'allow_role_mentions', form.allow_role_mentions)}
-                  {renderValueToggle('Allow User Mentions', 'allow_user_mentions', form.allow_user_mentions)}
-                </div>
-              </div>
+              {/* TEXT & MESSAGE RULES */}
+              {(form.policy_type === 'text' || form.policy_type === 'general') && (
+                <>
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                      Message Content Rules (ALLOW / DENY / INHERIT)
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {renderValueToggle('Allow Text Messages', 'allow_text', form.allow_text)}
+                      {renderValueToggle('Allow Embedded Links', 'allow_links', form.allow_links)}
+                      {renderValueToggle('Allow Images', 'allow_images', form.allow_images)}
+                      {renderValueToggle('Allow Videos', 'allow_videos', form.allow_videos)}
+                      {renderValueToggle('Allow Files & Docs', 'allow_files', form.allow_files)}
+                      {renderValueToggle('Allow Stickers & Emojis', 'allow_stickers', form.allow_stickers)}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                      Mentions & Pings
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {renderValueToggle('Allow @everyone', 'allow_everyone', form.allow_everyone)}
+                      {renderValueToggle('Allow @here', 'allow_here', form.allow_here)}
+                      {renderValueToggle('Allow Role Mentions', 'allow_role_mentions', form.allow_role_mentions)}
+                      {renderValueToggle('Allow User Mentions', 'allow_user_mentions', form.allow_user_mentions)}
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Enforcement Toggles */}
               <div className="space-y-3">
@@ -733,6 +845,61 @@ export default function PolicyProfiles() {
                 className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-xl transition-colors shadow"
               >
                 Delete Policy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Built-in View Modal */}
+      {viewTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
+          <div className="bg-[#151921] border border-gray-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 animate-scale-in">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-[#5865F2]/20 text-[#5865F2]">
+                  <Shield className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">{viewTarget.name.replace(/_/g, ' ')}</h3>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#5865F2]/20 text-[#5865F2] font-semibold uppercase">
+                    Built-in Preset (Read-Only)
+                  </span>
+                </div>
+              </div>
+              <button onClick={() => setViewTarget(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {viewTarget.description && (
+              <p className="text-xs text-gray-300 leading-relaxed bg-[#0B0E14] p-3 rounded-xl border border-gray-800">
+                {viewTarget.description}
+              </p>
+            )}
+
+            <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300 leading-relaxed">
+              <strong>Notice:</strong> Built-in presets are protected and cannot be edited directly. To customize these rules, click <strong>Duplicate</strong> to generate an editable custom policy.
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-800">
+              <button
+                type="button"
+                onClick={() => setViewTarget(null)}
+                className="px-4 py-2 text-xs font-medium text-gray-400 hover:text-white"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = viewTarget;
+                  setViewTarget(null);
+                  handleClone(target);
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-[#5865F2] hover:bg-[#4752c4] rounded-xl shadow"
+              >
+                Duplicate & Edit Copy
               </button>
             </div>
           </div>
