@@ -24,6 +24,7 @@ from app.database.repositories import (
     WarningEscalationRepo,
     YouTubeTemplateRepo,
 )
+from app.dashboard.auth import hash_password
 from app.logging_config import setup_logging
 from app.runtime_state import (
     BotState,
