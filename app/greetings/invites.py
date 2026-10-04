@@ -1,4 +1,4 @@
-"""
+﻿"""
 Permanent reusable server invitation manager for PB HERO Personal Discord Bot.
 """
 
@@ -155,9 +155,25 @@ async def verify_invite(bot: Optional[commands.Bot], guild_id: int) -> Dict[str,
         if not fetched.guild or fetched.guild.id != guild_id:
             raise ValueError("Invite belongs to a different Discord guild.")
 
-        is_perm = (fetched.max_age == 0) and (fetched.max_uses == 0)
+        guild_invite = None
+        if bot and bot.guild:
+            try:
+                invites = await bot.guild.invites()
+                guild_invite = next((inv for inv in invites if inv.code == invite_row.invite_code), None)
+            except Exception:
+                guild_invite = None
+
+        if guild_invite is not None:
+            is_perm = (guild_invite.max_age == 0) and (guild_invite.max_uses == 0)
+            max_age = guild_invite.max_age
+            max_uses = guild_invite.max_uses
+        else:
+            is_perm = (fetched.expires_at is None) and (fetched.max_age in (0, None)) and (fetched.max_uses in (0, None))
+            max_age = 0 if is_perm else fetched.max_age
+            max_uses = 0 if is_perm else fetched.max_uses
+
         status = "permanent_active" if is_perm else "active_expiring"
-        err = None if is_perm else f"Invite has max_age={fetched.max_age}, max_uses={fetched.max_uses}"
+        err = None if is_perm else f"Invite has expiration (expires_at={getattr(fetched, 'expires_at', None)})"
 
         session = await get_session_direct()
         try:
@@ -178,8 +194,8 @@ async def verify_invite(bot: Optional[commands.Bot], guild_id: int) -> Dict[str,
             "is_valid": True,
             "is_permanent": is_perm,
             "invite_url": fetched.url,
-            "max_age": fetched.max_age,
-            "max_uses": fetched.max_uses,
+            "max_age": max_age,
+            "max_uses": max_uses,
             "channel_name": getattr(fetched.channel, "name", None),
             "message": "Invite is verified and active." if is_perm else "Invite is active but has expiration.",
         }
@@ -208,3 +224,4 @@ async def verify_invite(bot: Optional[commands.Bot], guild_id: int) -> Dict[str,
             "is_permanent": False,
             "message": f"Invite is invalid or expired: {err_msg}",
         }
+
