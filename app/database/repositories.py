@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
@@ -19,6 +19,7 @@ from app.database.models import (
     AutomodRule,
     BlockedMessage,
     ChannelPolicy,
+    CustomModerationStyle,
     EventStatus,
     EventType,
     ExemptionRule,
@@ -1290,11 +1291,29 @@ class AutomodRuleRepo:
     async def create(session: AsyncSession, rule_type: str, name: str, **kwargs) -> AutomodRule:
         from app.database.serializers import serialize_json_field
 
+        # Normalize UI / API field aliases
+        if "threshold_count" in kwargs and "threshold" not in kwargs:
+            kwargs["threshold"] = kwargs.pop("threshold_count")
+        if "time_window_seconds" in kwargs and "time_window" not in kwargs:
+            kwargs["time_window"] = kwargs.pop("time_window_seconds")
+        elif "window_seconds" in kwargs and "time_window" not in kwargs:
+            kwargs["time_window"] = kwargs.pop("window_seconds")
+        if "action_duration" in kwargs and "timeout_duration" not in kwargs:
+            kwargs["timeout_duration"] = kwargs.pop("action_duration")
+        elif "duration_seconds" in kwargs and "timeout_duration" not in kwargs:
+            kwargs["timeout_duration"] = kwargs.pop("duration_seconds")
+        if "cooldown_seconds" in kwargs and "cooldown" not in kwargs:
+            kwargs["cooldown"] = kwargs.pop("cooldown_seconds")
+
         for jf in ("channels", "categories", "exemptions", "custom_keywords"):
             if jf in kwargs and not isinstance(kwargs[jf], str):
                 kwargs[jf] = serialize_json_field(kwargs[jf])
 
-        rule = AutomodRule(rule_type=rule_type, name=name, **kwargs)
+        # Filter kwargs to valid model attributes
+        valid_attrs = {c.name for c in AutomodRule.__table__.columns}
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_attrs}
+
+        rule = AutomodRule(rule_type=rule_type, name=name, **filtered_kwargs)
         session.add(rule)
         await session.flush()
         return rule
@@ -1307,6 +1326,20 @@ class AutomodRuleRepo:
         if not rule:
             return None
 
+        # Normalize UI / API field aliases
+        if "threshold_count" in kwargs and "threshold" not in kwargs:
+            kwargs["threshold"] = kwargs.pop("threshold_count")
+        if "time_window_seconds" in kwargs and "time_window" not in kwargs:
+            kwargs["time_window"] = kwargs.pop("time_window_seconds")
+        elif "window_seconds" in kwargs and "time_window" not in kwargs:
+            kwargs["time_window"] = kwargs.pop("window_seconds")
+        if "action_duration" in kwargs and "timeout_duration" not in kwargs:
+            kwargs["timeout_duration"] = kwargs.pop("action_duration")
+        elif "duration_seconds" in kwargs and "timeout_duration" not in kwargs:
+            kwargs["timeout_duration"] = kwargs.pop("duration_seconds")
+        if "cooldown_seconds" in kwargs and "cooldown" not in kwargs:
+            kwargs["cooldown"] = kwargs.pop("cooldown_seconds")
+
         for jf in ("channels", "categories", "exemptions", "custom_keywords"):
             if jf in kwargs and not isinstance(kwargs[jf], str):
                 kwargs[jf] = serialize_json_field(kwargs[jf])
@@ -1317,6 +1350,7 @@ class AutomodRuleRepo:
         rule.updated_at = datetime.utcnow()
         await session.flush()
         return rule
+
 
     @staticmethod
     async def delete(session: AsyncSession, rule_id: int) -> bool:
@@ -1448,6 +1482,7 @@ class WarningRecordRepo:
         case_number: Optional[int] = None,
         case_id: Optional[str] = None,
         expires_days: int = 30,
+        expires_at: Optional[datetime] = None,
     ) -> WarningRecord:
         from datetime import timedelta
 
@@ -1457,7 +1492,8 @@ class WarningRecordRepo:
             case_id = f"CASE-{warn_num:04d}"
 
         now = datetime.utcnow()
-        expires_at = now + timedelta(days=expires_days) if expires_days > 0 else None
+        if expires_at is None:
+            expires_at = now + timedelta(days=expires_days) if expires_days > 0 else None
 
         record = WarningRecord(
             warning_id=warning_id,
@@ -1506,6 +1542,7 @@ class WarningRecordRepo:
         query = select(WarningRecord).where(
             WarningRecord.user_id == int(user_id),
             WarningRecord.status == "active",
+            or_(WarningRecord.expires_at.is_(None), WarningRecord.expires_at > now),
         )
         if decay_days > 0:
             cutoff = now - timedelta(days=decay_days)
@@ -1525,9 +1562,13 @@ class WarningRecordRepo:
     async def count_active_total(session: AsyncSession, decay_days: int = 30) -> int:
         from datetime import timedelta
 
-        query = select(func.count(WarningRecord.id)).where(WarningRecord.status == "active")
+        now = datetime.utcnow()
+        query = select(func.count(WarningRecord.id)).where(
+            WarningRecord.status == "active",
+            or_(WarningRecord.expires_at.is_(None), WarningRecord.expires_at > now),
+        )
         if decay_days > 0:
-            cutoff = datetime.utcnow() - timedelta(days=decay_days)
+            cutoff = now - timedelta(days=decay_days)
             query = query.where(WarningRecord.created_at >= cutoff)
         result = await session.execute(query)
         return result.scalar() or 0
@@ -1541,8 +1582,16 @@ class WarningRecordRepo:
         return result.scalar() or 0
 
     @staticmethod
-    async def revoke(session: AsyncSession, warning_id: str, revoked_by: str, reason: Optional[str] = None) -> bool:
-        record = await WarningRecordRepo.get_by_warning_id(session, warning_id)
+    async def revoke(session: AsyncSession, warning_id: str | int, revoked_by: str, reason: Optional[str] = None) -> bool:
+        query = select(WarningRecord)
+        if isinstance(warning_id, int):
+            query = query.where(WarningRecord.id == warning_id)
+        elif str(warning_id).isdigit():
+            query = query.where(or_(WarningRecord.id == int(warning_id), WarningRecord.warning_id == str(warning_id)))
+        else:
+            query = query.where(WarningRecord.warning_id == str(warning_id))
+        result = await session.execute(query)
+        record = result.scalar_one_or_none()
         if not record:
             return False
         record.status = "revoked"
@@ -1610,6 +1659,12 @@ class WarningEscalationRepo:
             delete(WarningEscalationRule).where(WarningEscalationRule.id == rule_id)
         )
         return result.rowcount > 0
+
+    @staticmethod
+    async def delete_all(session: AsyncSession) -> int:
+        """Atomically delete all warning escalation rules."""
+        result = await session.execute(delete(WarningEscalationRule))
+        return result.rowcount
 
     @staticmethod
     async def find_escalation(session: AsyncSession, current_val: int, mode: str = "count") -> Optional[WarningEscalationRule]:
@@ -1855,3 +1910,76 @@ class ServerInviteSettingsRepo:
         invite_row.updated_at = datetime.utcnow()
         await session.flush()
         return invite_row
+
+
+# ─── Custom Moderation Styles ────────────────────────────────────────────────
+
+class CustomModerationStyleRepo:
+    """Repository for user-defined custom moderation style presets."""
+
+    @staticmethod
+    async def get_all(session: AsyncSession) -> list[CustomModerationStyle]:
+        result = await session.execute(
+            select(CustomModerationStyle).order_by(CustomModerationStyle.name.asc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, style_id: int) -> Optional[CustomModerationStyle]:
+        result = await session.execute(
+            select(CustomModerationStyle).where(CustomModerationStyle.id == style_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_name(session: AsyncSession, name: str) -> Optional[CustomModerationStyle]:
+        result = await session.execute(
+            select(CustomModerationStyle).where(func.lower(CustomModerationStyle.name) == name.strip().lower())
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def create(
+        session: AsyncSession,
+        name: str,
+        ladder: list[dict] | str,
+        description: Optional[str] = None,
+        warning_decay_days: int = 30,
+        allow_warning_expiration: bool = True,
+        warning_mode: str = "count",
+        is_builtin: bool = False,
+    ) -> CustomModerationStyle:
+        ladder_json = json.dumps(ladder) if isinstance(ladder, list) else str(ladder)
+        style = CustomModerationStyle(
+            name=name.strip(),
+            description=description.strip() if description else None,
+            warning_decay_days=warning_decay_days,
+            allow_warning_expiration=allow_warning_expiration,
+            warning_mode=warning_mode,
+            ladder=ladder_json,
+            is_builtin=is_builtin,
+        )
+        session.add(style)
+        await session.flush()
+        return style
+
+    @staticmethod
+    async def update(session: AsyncSession, style_id: int, **kwargs) -> Optional[CustomModerationStyle]:
+        style = await CustomModerationStyleRepo.get_by_id(session, style_id)
+        if not style:
+            return None
+        for key, value in kwargs.items():
+            if key == "ladder" and isinstance(value, list):
+                value = json.dumps(value)
+            if hasattr(style, key) and key not in ("id", "created_at"):
+                setattr(style, key, value)
+        style.updated_at = datetime.utcnow()
+        await session.flush()
+        return style
+
+    @staticmethod
+    async def delete(session: AsyncSession, style_id: int) -> bool:
+        result = await session.execute(
+            delete(CustomModerationStyle).where(CustomModerationStyle.id == style_id)
+        )
+        return result.rowcount > 0

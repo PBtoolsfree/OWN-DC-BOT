@@ -8,6 +8,7 @@ Pure, deterministic evaluation function shared across:
 """
 
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from app.database.serializers import deserialize_json_field, normalize_domain
@@ -271,69 +272,281 @@ def evaluate_voice_policy(
     }
 
 
+class SpamTracker:
+    """
+    Deterministic message rate and spam tracker.
+    Maintains per-guild, per-channel, per-user message timestamps.
+    """
+
+    def __init__(self):
+        # (guild_id, channel_id, user_id) -> list of timestamp floats
+        self._history: Dict[tuple[int, int, int], List[float]] = {}
+        # (guild_id, user_id) -> list of timestamp floats for guild-wide rate/flood
+        self._guild_history: Dict[tuple[int, int], List[float]] = {}
+        # (guild_id, channel_id, user_id) -> list of (timestamp, content)
+        self._content_history: Dict[tuple[int, int, int], List[tuple[float, str]]] = {}
+
+    def record_and_count(
+        self,
+        guild_id: int,
+        channel_id: int,
+        user_id: int,
+        timestamp: float,
+        window_seconds: float,
+        content: str = "",
+    ) -> int:
+        """
+        Record a qualifying message and return the count of messages
+        from this user in this channel within [timestamp - window_seconds, timestamp].
+        """
+        gid, cid, uid = int(guild_id), int(channel_id), int(user_id)
+        key = (gid, cid, uid)
+        cutoff = float(timestamp) - float(window_seconds)
+
+        # Per channel history
+        current = [ts for ts in self._history.get(key, []) if ts >= cutoff]
+        current.append(float(timestamp))
+        self._history[key] = current
+
+        # Server-wide history
+        g_key = (gid, uid)
+        g_current = [ts for ts in self._guild_history.get(g_key, []) if ts >= cutoff]
+        g_current.append(float(timestamp))
+        self._guild_history[g_key] = g_current
+
+        # Content history
+        if content:
+            c_current = [(ts, txt) for ts, txt in self._content_history.get(key, []) if ts >= cutoff]
+            c_current.append((float(timestamp), content))
+            self._content_history[key] = c_current
+
+        return len(current)
+
+    def check_count(
+        self,
+        guild_id: int,
+        channel_id: int,
+        user_id: int,
+        timestamp: float,
+        window_seconds: float,
+    ) -> int:
+        """Get count within window without recording a new message."""
+        gid, cid, uid = int(guild_id), int(channel_id), int(user_id)
+        key = (gid, cid, uid)
+        cutoff = float(timestamp) - float(window_seconds)
+        return sum(1 for ts in self._history.get(key, []) if ts >= cutoff)
+
+    def reset_user(self, guild_id: int, channel_id: int, user_id: int) -> None:
+        """Reset history for a user after enforcement."""
+        gid, cid, uid = int(guild_id), int(channel_id), int(user_id)
+        self._history.pop((gid, cid, uid), None)
+        self._content_history.pop((gid, cid, uid), None)
+        self._guild_history.pop((gid, uid), None)
+
+    def clear(self) -> None:
+        """Clear all tracking state."""
+        self._history.clear()
+        self._guild_history.clear()
+        self._content_history.clear()
+
+    def count_repeated_messages(
+        self,
+        guild_id: int,
+        channel_id: int,
+        user_id: int,
+        content: str,
+        timestamp: float,
+        window_seconds: float,
+    ) -> int:
+        """Count identical messages sent by this user within window."""
+        if not content:
+            return 0
+        gid, cid, uid = int(guild_id), int(channel_id), int(user_id)
+        key = (gid, cid, uid)
+        cutoff = float(timestamp) - float(window_seconds)
+        clean_content = content.strip().lower()
+        items = self._content_history.get(key, [])
+        return sum(1 for ts, txt in items if ts >= cutoff and txt.strip().lower() == clean_content)
+
+
+def parse_action_string(action_str: Optional[str]) -> Dict[str, bool]:
+    """
+    Parses any action string (e.g., 'delete_timeout', 'DELETE + WARN', 'delete', 'DELETE ONLY')
+    into individual booleans: delete, warn, timeout, kick, ban.
+    """
+    if not action_str:
+        return {"delete": False, "warn": False, "timeout": False, "kick": False, "ban": False}
+    normalized = action_str.lower().replace("+", " ").replace("_", " ").replace(",", " ")
+    tokens = set(normalized.split())
+    return {
+        "delete": "delete" in tokens,
+        "warn": "warn" in tokens,
+        "timeout": "timeout" in tokens,
+        "kick": "kick" in tokens,
+        "ban": "ban" in tokens,
+    }
+
+
 def evaluate_automod_rules(
     rules: List[Dict[str, Any]],
-    content: str,
+    content: str = "",
     attachments: Optional[List[Any]] = None,
     mentions_count: int = 0,
+    *,
+    guild_id: Optional[int] = None,
+    channel_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    timestamp: Optional[Any] = None,
+    spam_tracker: Optional[SpamTracker] = None,
+    is_bot: bool = False,
+    is_dm: bool = False,
+    category_id: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Evaluate message against enabled automod rules.
     Returns infraction dict or None if no infraction detected.
     """
+    # Convert timestamp
+    current_ts = time.time()
+    if timestamp is not None:
+        if hasattr(timestamp, "timestamp"):
+            current_ts = timestamp.timestamp()
+        else:
+            try:
+                current_ts = float(timestamp)
+            except (ValueError, TypeError):
+                current_ts = time.time()
+
     for rule in rules:
         if not rule.get("enabled", True):
             continue
 
         rtype = rule.get("rule_type", "")
 
-        # 1. Invite Filter
-        if rtype == "invite_filter":
-            if re.search(r"(discord\.gg/|discord\.com/invite/)[a-zA-Z0-9]+", content, re.IGNORECASE):
+        # Extract parameters with robust alias handling (threshold vs threshold_count, time_window vs window_seconds)
+        raw_thresh = rule.get("threshold_count")
+        if raw_thresh is None:
+            raw_thresh = rule.get("threshold", 5)
+        try:
+            threshold = int(raw_thresh)
+        except (ValueError, TypeError):
+            threshold = 5
+
+        raw_win = rule.get("window_seconds")
+        if raw_win is None:
+            raw_win = rule.get("time_window_seconds")
+        if raw_win is None:
+            raw_win = rule.get("time_window", 5)
+        try:
+            time_window = int(raw_win)
+        except (ValueError, TypeError):
+            time_window = 5
+
+        action = rule.get("action", "delete_warn")
+
+        raw_dur = rule.get("action_duration")
+        if raw_dur is None:
+            raw_dur = rule.get("timeout_duration")
+        if raw_dur is None:
+            raw_dur = rule.get("duration_seconds", 600)
+        try:
+            timeout_duration = int(raw_dur)
+        except (ValueError, TypeError):
+            timeout_duration = 600
+
+        severity = rule.get("severity", "medium")
+        rule_name = rule.get("name") or rtype.replace("_", " ").title()
+
+        # Check Scope (global vs specific channels/categories)
+        scope = rule.get("scope", "global")
+        if scope == "channels" and channel_id is not None:
+            raw_chans = rule.get("channels") or []
+            if isinstance(raw_chans, str):
+                raw_chans = deserialize_json_field(raw_chans, default=[])
+            allowed_channels = {int(c) for c in raw_chans if str(c).isdigit()}
+            if allowed_channels and int(channel_id) not in allowed_channels:
+                continue
+        elif scope == "categories" and category_id is not None:
+            raw_cats = rule.get("categories") or []
+            if isinstance(raw_cats, str):
+                raw_cats = deserialize_json_field(raw_cats, default=[])
+            allowed_cats = {str(c).lower() for c in raw_cats}
+            if allowed_cats and str(category_id).lower() not in allowed_cats:
+                continue
+
+        # 1. Message Spam
+        if rtype == "message_spam":
+            if is_bot or is_dm or guild_id is None or channel_id is None or user_id is None or spam_tracker is None:
+                continue
+            count = spam_tracker.record_and_count(
+                guild_id=guild_id,
+                channel_id=channel_id,
+                user_id=user_id,
+                timestamp=current_ts,
+                window_seconds=time_window,
+                content=content or "",
+            )
+            if count >= threshold:
+                return {
+                    "matched": True,
+                    "rule": "message_spam",
+                    "rule_name": rule_name,
+                    "reason": f"Message spam detected ({count} messages in {time_window}s, threshold is {threshold})",
+                    "action": action,
+                    "timeout_duration": timeout_duration,
+                    "severity": severity or "medium",
+                    "threshold": threshold,
+                    "threshold_count": threshold,
+                    "time_window": time_window,
+                    "window_seconds": time_window,
+                    "count": count,
+                }
+
+        # 2. Invite Filter
+        elif rtype == "invite_filter":
+            if re.search(r"(discord\.gg/|discord\.com/invite/)[a-zA-Z0-9]+", content or "", re.IGNORECASE):
                 return {
                     "matched": True,
                     "rule": "invite_filter",
-                    "rule_name": rule.get("name", "Invite Link Filter"),
+                    "rule_name": rule_name,
                     "reason": "Discord invite links are not allowed",
-                    "action": rule.get("action", "delete_warn"),
-                    "timeout_duration": rule.get("timeout_duration", 600),
-                    "severity": rule.get("severity", "high"),
+                    "action": action,
+                    "timeout_duration": timeout_duration,
+                    "severity": severity or "high",
                 }
 
-        # 2. Keyword Filter
+        # 3. Keyword Filter
         elif rtype == "keyword_filter":
             raw_kw = rule.get("custom_keywords") or []
-            keywords = deserialize_json_field(raw_kw, default=[])
+            keywords = deserialize_json_field(raw_kw, default=[]) if isinstance(raw_kw, str) else raw_kw
             for kw in keywords:
-                if kw and kw.strip().lower() in content.lower():
+                if kw and str(kw).strip().lower() in (content or "").lower():
                     return {
                         "matched": True,
                         "rule": "keyword_filter",
-                        "rule_name": rule.get("name", "Keyword Filter"),
-                        "reason": f"Message contains blocked keyword: {kw.strip()}",
-                        "action": rule.get("action", "delete_warn"),
-                        "timeout_duration": rule.get("timeout_duration", 600),
-                        "severity": rule.get("severity", "medium"),
+                        "rule_name": rule_name,
+                        "reason": f"Message contains blocked keyword: {str(kw).strip()}",
+                        "action": action,
+                        "timeout_duration": timeout_duration,
+                        "severity": severity or "medium",
                     }
 
-        # 3. Mention Spam
+        # 4. Mention Spam
         elif rtype == "mention_spam":
-            threshold = rule.get("threshold", 5)
             if mentions_count >= threshold:
                 return {
                     "matched": True,
                     "rule": "mention_spam",
-                    "rule_name": rule.get("name", "Mention Spam"),
+                    "rule_name": rule_name,
                     "reason": f"Mention spam detected ({mentions_count} mentions, limit is {threshold})",
-                    "action": rule.get("action", "delete_timeout"),
-                    "timeout_duration": rule.get("timeout_duration", 600),
-                    "severity": rule.get("severity", "high"),
+                    "action": action,
+                    "timeout_duration": timeout_duration,
+                    "severity": severity or "high",
                 }
 
-        # 4. Caps Spam
+        # 5. Caps / Character Spam
         elif rtype == "caps_spam":
-            threshold = rule.get("threshold", 70)
-            if len(content) >= 10:
+            if len(content or "") >= 10:
                 letters = [c for c in content if c.isalpha()]
                 if letters:
                     caps_pct = (sum(1 for c in letters if c.isupper()) / len(letters)) * 100
@@ -341,14 +554,81 @@ def evaluate_automod_rules(
                         return {
                             "matched": True,
                             "rule": "caps_spam",
-                            "rule_name": rule.get("name", "Caps / Character Spam"),
+                            "rule_name": rule_name,
                             "reason": f"Excessive caps detected ({caps_pct:.0f}%, limit is {threshold}%)",
-                            "action": rule.get("action", "delete_warn"),
-                            "timeout_duration": rule.get("timeout_duration", 300),
-                            "severity": rule.get("severity", "low"),
+                            "action": action,
+                            "timeout_duration": timeout_duration,
+                            "severity": severity or "low",
                         }
 
+        # 6. Attachment Restriction
+        elif rtype == "attachment_restriction":
+            att_count = len(attachments) if attachments else 0
+            if att_count >= threshold:
+                return {
+                    "matched": True,
+                    "rule": "attachment_restriction",
+                    "rule_name": rule_name,
+                    "reason": f"Attachment limit exceeded ({att_count} attachments, limit is {threshold})",
+                    "action": action,
+                    "timeout_duration": timeout_duration,
+                    "severity": severity or "low",
+                }
+
+        # 7. Repeated Message Detection
+        elif rtype == "repeated_message":
+            if spam_tracker and guild_id and channel_id and user_id and content:
+                rep_count = spam_tracker.count_repeated_messages(
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    content=content,
+                    timestamp=current_ts,
+                    window_seconds=time_window,
+                )
+                if rep_count >= threshold:
+                    return {
+                        "matched": True,
+                        "rule": "repeated_message",
+                        "rule_name": rule_name,
+                        "reason": f"Repeated message detected ({rep_count} duplicates in {time_window}s)",
+                        "action": action,
+                        "timeout_duration": timeout_duration,
+                        "severity": severity or "medium",
+                    }
+
+        # 8. Flood Protection
+        elif rtype == "flood_protection":
+            if not is_bot and not is_dm and guild_id is not None and user_id is not None and spam_tracker is not None:
+                g_key = (int(guild_id), int(user_id))
+                cutoff = current_ts - float(time_window)
+                g_timestamps = [ts for ts in spam_tracker._guild_history.get(g_key, []) if ts >= cutoff]
+                if len(g_timestamps) >= threshold:
+                    return {
+                        "matched": True,
+                        "rule": "flood_protection",
+                        "rule_name": rule_name,
+                        "reason": f"Flood protection triggered ({len(g_timestamps)} messages across server in {time_window}s)",
+                        "action": action,
+                        "timeout_duration": timeout_duration,
+                        "severity": severity or "critical",
+                    }
+
+        # 9. Link Filter
+        elif rtype == "link_filter":
+            if contains_url(content or ""):
+                return {
+                    "matched": True,
+                    "rule": "link_filter",
+                    "rule_name": rule_name,
+                    "reason": "External links are not permitted by automod link filter",
+                    "action": action,
+                    "timeout_duration": timeout_duration,
+                    "severity": severity or "medium",
+                }
+
     return None
+
 
 
 def generate_case_id() -> str:

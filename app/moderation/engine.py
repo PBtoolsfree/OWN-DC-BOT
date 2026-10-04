@@ -5,6 +5,7 @@ Application-side message filtering engine that enforces channel policies,
 granular bypass rules, automod rules, warning records, and escalation ladders.
 """
 
+import asyncio
 from datetime import datetime, timedelta
 import logging
 import time
@@ -28,9 +29,11 @@ from app.database.repositories import (
 )
 from app.database.serializers import deserialize_json_field
 from app.moderation.evaluator import (
+    SpamTracker,
     evaluate_automod_rules,
     evaluate_message_policy,
     evaluate_voice_policy,
+    parse_action_string,
 )
 
 logger = logging.getLogger("pbhero.moderation")
@@ -278,6 +281,7 @@ class ModerationEngine:
         self._automod_rules_cache: list[dict] = []
         self._server_config_cache: dict = {}
         self._cache_valid = False
+        self.spam_tracker = SpamTracker()
         # Rate-limiting safety: list of (timestamp, user_id)
         self._recent_actions: list[tuple[float, int]] = []
 
@@ -563,53 +567,99 @@ class ModerationEngine:
         if not message.guild or message.guild.id != self.guild_id:
             return None
 
+        if message.author.bot:
+            return None
+
         # Refresh cache if needed
         if not self._cache_valid:
             await self.refresh_cache()
 
         channel_id = message.channel.id
+        user_id = message.author.id
         category_name = message.channel.category.name if getattr(message.channel, "category", None) else None
+        category_id = getattr(getattr(message.channel, "category", None), "id", None)
+        member = message.author if isinstance(message.author, discord.Member) else None
 
-        # 1. Check Automod Rules First
+        # Check if author has exemption for spam
+        is_spam_exempt = member is not None and self._is_exempt(
+            member=member,
+            channel_id=channel_id,
+            category_name=category_name,
+            rule_name="message_spam",
+        )
+
         mentions_count = len(message.mentions) + len(message.role_mentions)
         if message.mention_everyone:
             mentions_count += 2
 
+        # 1. Check Automod Rules First
         automod_violation = evaluate_automod_rules(
             rules=self._automod_rules_cache,
-            content=message.content,
+            content=message.content or "",
             attachments=list(message.attachments) if message.attachments else None,
             mentions_count=mentions_count,
+            guild_id=self.guild_id,
+            channel_id=channel_id,
+            user_id=user_id,
+            timestamp=message.created_at.timestamp() if getattr(message, "created_at", None) else time.time(),
+            spam_tracker=self.spam_tracker if not is_spam_exempt else None,
+            is_bot=message.author.bot,
+            is_dm=False,
+            category_id=category_id or category_name,
         )
 
         if automod_violation:
+            matched_rule = automod_violation["rule"]
             # Check if author is exempt from this rule
-            if isinstance(message.author, discord.Member) and self._is_exempt(
-                member=message.author,
+            if member is not None and self._is_exempt(
+                member=member,
                 channel_id=channel_id,
                 category_name=category_name,
-                rule_name=automod_violation["rule"],
+                rule_name=matched_rule,
             ):
                 logger.info(
-                    "Automod violation '%s' bypassed by exemption for %s in #%s",
-                    automod_violation["rule"],
+                    "Automod violation '%s' bypassed by exemption for %s (id=%d) in #%s [guild_id=%d channel_id=%d decision=bypass]",
+                    matched_rule,
                     message.author,
+                    user_id,
                     message.channel.name,
+                    self.guild_id,
+                    channel_id,
                 )
-            else:
-                return {
-                    "reason": automod_violation["reason"],
-                    "rule": automod_violation["rule"],
-                    "rule_name": automod_violation.get("rule_name", "Automod Rule"),
-                    "action": automod_violation.get("action", "delete_warn"),
-                    "severity": automod_violation.get("severity", "medium"),
-                    "timeout_duration": automod_violation.get("timeout_duration", 600),
-                    "matched_policy": automod_violation.get("rule_name", "Automod Rule"),
-                }
+                return None
+
+            # Reset user in spam tracker upon triggered violation to avoid cascading duplicate infractions
+            if matched_rule == "message_spam":
+                self.spam_tracker.reset_user(self.guild_id, channel_id, user_id)
+
+            logger.info(
+                "Automod violation: guild_id=%d channel_id=%d user_id=%d matched_rule=%s decision=deny action=%s reason='%s'",
+                self.guild_id,
+                channel_id,
+                user_id,
+                matched_rule,
+                automod_violation.get("action"),
+                automod_violation.get("reason"),
+            )
+            return {
+                "reason": automod_violation["reason"],
+                "rule": matched_rule,
+                "rule_name": automod_violation.get("rule_name", "Automod Rule"),
+                "action": automod_violation.get("action", "delete_warn"),
+                "severity": automod_violation.get("severity", "medium"),
+                "timeout_duration": automod_violation.get("timeout_duration", 600),
+                "matched_policy": automod_violation.get("rule_name", "Automod Rule"),
+            }
 
         # 2. Check Channel Policy
         policy = self._policy_cache.get(channel_id)
         if not policy:
+            logger.debug(
+                "Message allowed (no channel policy): guild_id=%d channel_id=%d user_id=%d decision=allow",
+                self.guild_id,
+                channel_id,
+                user_id,
+            )
             return None
 
         # Evaluate via unified policy evaluator
@@ -620,7 +670,7 @@ class ModerationEngine:
 
         eval_result = evaluate_message_policy(
             policy=policy,
-            content=message.content,
+            content=message.content or "",
             attachments=attachments_data,
             stickers=list(message.stickers) if message.stickers else None,
             role_mentions=list(message.role_mentions) if message.role_mentions else None,
@@ -632,20 +682,31 @@ class ModerationEngine:
         if not eval_result["allowed"]:
             matched_rule = eval_result.get("matched_rule") or "policy_violation"
             # Check exemption for this matched policy rule
-            if isinstance(message.author, discord.Member) and self._is_exempt(
-                member=message.author,
+            if member is not None and self._is_exempt(
+                member=member,
                 channel_id=channel_id,
                 category_name=category_name,
                 rule_name=matched_rule,
             ):
                 logger.info(
-                    "Channel policy violation '%s' bypassed by exemption for %s in #%s",
+                    "Channel policy violation '%s' bypassed by exemption for %s (id=%d) in #%s [guild_id=%d channel_id=%d decision=bypass]",
                     matched_rule,
                     message.author,
+                    user_id,
                     message.channel.name,
+                    self.guild_id,
+                    channel_id,
                 )
                 return None
 
+            logger.info(
+                "Channel policy violation: guild_id=%d channel_id=%d user_id=%d matched_rule=%s decision=deny reason='%s'",
+                self.guild_id,
+                channel_id,
+                user_id,
+                matched_rule,
+                eval_result.get("reason"),
+            )
             return {
                 "reason": eval_result["reason"],
                 "rule": matched_rule,
@@ -655,25 +716,35 @@ class ModerationEngine:
                 "severity": "medium",
             }
 
+        logger.debug(
+            "Message permitted: guild_id=%d channel_id=%d user_id=%d decision=allow",
+            self.guild_id,
+            channel_id,
+            user_id,
+        )
         return None
 
     async def handle_violation(self, message: discord.Message, violation: dict) -> None:
         """
         Handle a policy or automod violation:
         1. Apply rate limit check
-        2. Delete message if configured
-        3. Issue warning and record in warning_records
-        4. Evaluate escalation ladder (timeout, kick, ban) with permission & hierarchy checks
-        5. Send in-channel and DM warnings
-        6. Record in moderation_cases and blocked_messages
-        7. Send embed to Discord mod log channel
+        2. Delete message independently
+        3. Issue warning and evaluate escalation ladder if applicable
+        4. Check Discord role hierarchy and permissions before punishment
+        5. Execute punishment (timeout, kick, ban)
+        6. Persist records in moderation_cases and blocked_messages
+        7. Send in-channel alert if configured
+        8. Send embed to Discord mod log channel
         """
         channel_id = message.channel.id
-        policy = self._policy_cache.get(channel_id, {})
         author = message.author
+        policy = self._policy_cache.get(channel_id, {})
         now_ts = time.time()
 
-        # 1. Rate-limiting check
+        raw_action = violation.get("action", "delete_warn")
+        parsed_actions = parse_action_string(raw_action)
+
+        # 1. Rate-limiting check for automated actions
         self._recent_actions = [a for a in self._recent_actions if now_ts - a[0] < 60]
         max_per_min = self._server_config_cache.get("rate_limit_actions_per_min", 20)
         max_user_per_min = self._server_config_cache.get("rate_limit_user_actions_per_min", 5)
@@ -684,13 +755,14 @@ class ModerationEngine:
         if not rate_limited:
             self._recent_actions.append((now_ts, author.id))
 
-        action_intent = violation.get("action", "delete_warn")
-        should_delete = "delete" in action_intent or policy.get("delete_violations", True)
-
-        # 2. Delete the violating message
+        # 2. Independent Message Deletion
+        should_delete = parsed_actions["delete"] or policy.get("delete_violations", True)
+        deleted = False
+        delete_error = None
         if should_delete:
             try:
                 await message.delete()
+                deleted = True
                 logger.info(
                     "Deleted message %d from %s in #%s: %s",
                     message.id,
@@ -699,18 +771,35 @@ class ModerationEngine:
                     violation["reason"],
                 )
             except discord.Forbidden:
-                logger.warning("Cannot delete message in #%s: missing permissions", message.channel.name)
+                delete_error = "Bot lacks 'Manage Messages' permission"
+                logger.warning("Cannot delete message %d in #%s: %s", message.id, message.channel.name, delete_error)
             except discord.NotFound:
-                pass
+                deleted = True
+            except Exception as e:
+                delete_error = str(e)
+                logger.warning("Error deleting message %d in #%s: %s", message.id, message.channel.name, e)
 
-        # 3. Create Warning & Evaluate Escalation Ladder
+        # 3. Direct punishment check
+        direct_punishment = None
+        if parsed_actions["ban"]:
+            direct_punishment = "ban"
+        elif parsed_actions["kick"]:
+            direct_punishment = "kick"
+        elif parsed_actions["timeout"]:
+            direct_punishment = "timeout"
+
+        # 4. Warnings & Escalation Ladder
         session = await get_session_direct()
         case_id = None
         warning_id = None
-        executed_action = "warn"
-        action_detail = "Warning issued"
+        punishment_action = direct_punishment
+        punishment_duration = violation.get("timeout_duration") or 600
         perm_error = None
+        punishment_executed = False
         dm_status = "disabled"
+        is_delete_only = parsed_actions["delete"] and not (
+            parsed_actions["warn"] or parsed_actions["timeout"] or parsed_actions["kick"] or parsed_actions["ban"]
+        )
 
         try:
             decay_days = self._server_config_cache.get("warning_decay_days", 30)
@@ -719,112 +808,129 @@ class ModerationEngine:
             points_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
             points = points_map.get(severity, 1)
 
-            # Record warning in warning_records
-            warn_record = await WarningRecordRepo.create(
-                session=session,
-                user_id=author.id,
-                username=str(author),
-                channel_id=channel_id,
-                channel_name=message.channel.name,
-                rule=violation.get("rule", "policy_violation"),
-                reason=violation["reason"],
-                severity=severity,
-                points=points,
-                moderator="PB HERO AutoMod",
-                expires_days=decay_days,
-            )
-            warning_id = warn_record.warning_id
-            case_id = warn_record.case_id
+            # Record warning in warning_records if action includes warn or defaults to warning
+            if not is_delete_only and (parsed_actions["warn"] or not direct_punishment):
+                warn_record = await WarningRecordRepo.create(
+                    session=session,
+                    user_id=author.id,
+                    username=str(author),
+                    channel_id=channel_id,
+                    channel_name=message.channel.name,
+                    rule=violation.get("rule", "policy_violation"),
+                    reason=violation["reason"],
+                    severity=severity,
+                    points=points,
+                    moderator="PB HERO AutoMod",
+                    expires_days=decay_days,
+                )
+                warning_id = warn_record.warning_id
+                case_id = warn_record.case_id
 
-            # Calculate active warnings for this user
-            strikes, total_points = await WarningRecordRepo.get_user_strikes_and_points(
-                session=session,
-                user_id=author.id,
-                decay_days=decay_days,
-            )
-            active_score = total_points if mode == "point" else strikes
+                # Calculate active warnings for this user
+                strikes, total_points = await WarningRecordRepo.get_user_strikes_and_points(
+                    session=session,
+                    user_id=author.id,
+                    decay_days=decay_days,
+                )
+                active_score = total_points if mode == "point" else strikes
 
-            # Check Escalation Ladder
-            escalation_rule = await WarningEscalationRepo.find_escalation(
-                session=session,
-                current_val=active_score,
-                mode=mode,
-            )
+                # Check Escalation Ladder
+                escalation_rule = await WarningEscalationRepo.find_escalation(
+                    session=session,
+                    current_val=active_score,
+                    mode=mode,
+                )
+                if escalation_rule:
+                    esc_act = escalation_rule.action.lower()
+                    rank = {"ban": 4, "kick": 3, "timeout": 2, "warn": 1}
+                    if not punishment_action or rank.get(esc_act, 0) >= rank.get(punishment_action, 0):
+                        punishment_action = esc_act
+                        punishment_duration = escalation_rule.duration or punishment_duration
 
-            # Check Bot Permissions & Role Hierarchy
+            # 5. Check Bot Permissions & Role Hierarchy before executing punishment
             bot_member = message.guild.me if message.guild else None
             target_member = author if isinstance(author, discord.Member) else None
 
-            if not rate_limited and escalation_rule and target_member and bot_member:
-                esc_action = escalation_rule.action.lower()
-                can_exec, reason_why = can_moderate_member(bot_member, target_member, esc_action)
-
+            if punishment_action in ("timeout", "kick", "ban") and not rate_limited:
+                can_exec, reason_why = can_moderate_member(bot_member, target_member, punishment_action)
                 if can_exec:
-                    if esc_action == "timeout":
-                        duration = escalation_rule.duration or violation.get("timeout_duration") or 600
-                        until = datetime.utcnow() + timedelta(seconds=duration)
-                        try:
+                    try:
+                        if punishment_action == "timeout":
+                            until = datetime.utcnow() + timedelta(seconds=punishment_duration)
                             await target_member.timeout(
                                 until=until,
-                                reason=f"PB HERO AutoMod Escalation: {violation['reason']}",
+                                reason=f"PB HERO AutoMod: {violation['reason']}",
                             )
-                            executed_action = "timeout"
-                            action_detail = f"Timeout ({duration // 60}m)"
-                        except discord.HTTPException as e:
-                            perm_error = f"Timeout failed: {e}"
-                    elif esc_action == "kick":
-                        try:
+                            punishment_executed = True
+                            logger.info("Timed out %s for %ds: %s", author, punishment_duration, violation["reason"])
+                        elif punishment_action == "kick":
                             await target_member.kick(
-                                reason=f"PB HERO AutoMod Escalation: {violation['reason']}",
+                                reason=f"PB HERO AutoMod: {violation['reason']}",
                             )
-                            executed_action = "kick"
-                            action_detail = "Kicked from server"
-                        except discord.HTTPException as e:
-                            perm_error = f"Kick failed: {e}"
-                    elif esc_action == "ban":
-                        try:
-                            del_days = getattr(escalation_rule, "delete_message_history_days", 1) or 1
+                            punishment_executed = True
+                            logger.info("Kicked %s: %s", author, violation["reason"])
+                        elif punishment_action == "ban":
                             await target_member.ban(
-                                reason=f"PB HERO AutoMod Escalation: {violation['reason']}",
-                                delete_message_days=del_days,
+                                reason=f"PB HERO AutoMod: {violation['reason']}",
+                                delete_message_days=1,
                             )
-                            executed_action = "ban"
-                            action_detail = "Banned from server"
-                        except discord.HTTPException as e:
-                            perm_error = f"Ban failed: {e}"
+                            punishment_executed = True
+                            logger.info("Banned %s: %s", author, violation["reason"])
+                    except discord.Forbidden as e:
+                        perm_error = f"Forbidden: Bot lacks required permission for {punishment_action} ({e})"
+                        logger.error("AutoMod punishment %s failed: %s", punishment_action, perm_error)
+                    except discord.HTTPException as e:
+                        perm_error = f"HTTP error during {punishment_action}: {e}"
+                        logger.error("AutoMod punishment %s failed: %s", punishment_action, perm_error)
+                    except Exception as e:
+                        perm_error = f"Unexpected error during {punishment_action}: {e}"
+                        logger.error("AutoMod punishment %s failed: %s", punishment_action, perm_error)
                 else:
                     perm_error = reason_why
-                    logger.warning("AutoMod could not execute %s against %s: %s", esc_action, author, reason_why)
+                    logger.warning("AutoMod cannot execute %s against %s: %s", punishment_action, author, reason_why)
 
-            # Send DM Warning if enabled
-            send_dm = policy.get("send_dm_warning", False) or (escalation_rule and escalation_rule.send_dm)
-            if send_dm:
-                try:
-                    dm_channel = await author.create_dm()
-                    dm_msg = (
-                        f"🛡️ **PB HERO AutoMod Notification**\n"
-                        f"You received an automated moderation action in **#{message.channel.name}**.\n\n"
-                        f"> **Action Taken**: `{action_detail}`\n"
-                        f"> **Reason**: {violation['reason']}\n"
-                        f"> **Rule**: `{violation.get('rule', 'Policy Rule')}`\n"
-                        f"> **Active Strikes**: {strikes} (Points: {total_points})\n"
-                        f"> **Case ID**: `{case_id}`"
-                    )
-                    await dm_channel.send(dm_msg)
-                    dm_status = "delivered"
-                except (discord.Forbidden, discord.HTTPException):
-                    dm_status = "failed"
-                    logger.info("DM delivery failed for user %s (DMs closed)", author)
+            # Determine action label
+            if is_delete_only:
+                executed_action = "clear"
+                action_detail = "DELETE"
+            elif punishment_executed:
+                executed_action = punishment_action
+                if punishment_action == "timeout":
+                    action_detail = f"DELETE + TIMEOUT ({punishment_duration // 60}m)" if deleted else f"TIMEOUT ({punishment_duration // 60}m)"
+                else:
+                    action_detail = f"DELETE + {punishment_action.upper()}" if deleted else punishment_action.upper()
+            elif perm_error:
+                executed_action = "warn"
+                action_detail = f"DELETE (PUNISHMENT {punishment_action.upper()} FAILED)" if deleted else f"PUNISHMENT {punishment_action.upper()} FAILED"
+            else:
+                executed_action = "warn"
+                action_detail = "DELETE + WARN" if deleted else "WARN"
 
-            # Record in moderation_cases table
+            # Log enforcement result structured
+            logger.info(
+                "Enforcement result: guild_id=%d channel_id=%d user_id=%d action='%s' deleted=%s punishment_executed=%s perm_error=%s",
+                message.guild.id,
+                channel_id,
+                author.id,
+                action_detail,
+                deleted,
+                punishment_executed,
+                perm_error,
+            )
+
+            # Generate case ID if not already generated
+            if not case_id:
+                case_id = f"CASE-{message.id % 1000000:06d}"
+
+            # 6. Record case in moderation_cases table
             action_enum_map = {
                 "warn": ModerationAction.WARN,
                 "timeout": ModerationAction.TIMEOUT,
                 "kick": ModerationAction.KICK,
                 "ban": ModerationAction.BAN,
+                "clear": ModerationAction.CLEAR,
             }
             mod_action_enum = action_enum_map.get(executed_action, ModerationAction.WARN)
-
             case_reason = violation["reason"]
             if perm_error:
                 case_reason = f"{case_reason} (PERMISSION ERROR: {perm_error})"
@@ -866,42 +972,48 @@ class ModerationEngine:
             await session.commit()
         except Exception as e:
             await session.rollback()
-            logger.error("Failed to persist moderation records: %s", str(e))
+            logger.error("Failed to persist moderation records: %s", str(e), exc_info=True)
         finally:
             await session.close()
 
         # Send transient in-channel notification
-        if policy.get("warn_on_violation", True) and not rate_limited:
+        if policy.get("warn_on_violation", True) and not rate_limited and not is_delete_only:
             warn_tpl = policy.get("warning_message") or self._server_config_cache.get("warning_message_template") or f"⚠️ {violation['reason']}"
             try:
-                await message.channel.send(
-                    f"{author.mention} {warn_tpl}",
-                    delete_after=10,
-                    allowed_mentions=discord.AllowedMentions(users=[author]),
-                )
-            except discord.Forbidden:
+                send_fn = getattr(message.channel, "send", None)
+                if send_fn:
+                    res = send_fn(
+                        f"{author.mention} {warn_tpl}",
+                        delete_after=10,
+                        allowed_mentions=discord.AllowedMentions(users=[author]),
+                    )
+                    if asyncio.iscoroutine(res):
+                        await res
+            except (discord.Forbidden, TypeError):
                 pass
 
         # Send Embed to Discord Mod Log Channel
         await self._send_mod_log(
             message=message,
             violation=violation,
-            case_id=case_id or f"CASE-{message.id % 10000:04d}",
-            warning_id=warning_id or "WARN-0000",
+            case_id=case_id,
+            warning_id=warning_id,
             action_taken=action_detail,
             perm_error=perm_error,
             dm_status=dm_status,
+            success=punishment_executed or deleted or (executed_action == "warn"),
         )
 
     async def _send_mod_log(
         self,
         message: discord.Message,
         violation: dict,
-        case_id: str,
-        warning_id: str,
+        case_id: Optional[str],
+        warning_id: Optional[str],
         action_taken: str,
         perm_error: Optional[str] = None,
         dm_status: str = "disabled",
+        success: bool = True,
     ) -> None:
         """Send formatted embed to the configured moderation log channel."""
         mod_log_id = self._server_config_cache.get("mod_log_channel_id")
@@ -910,15 +1022,25 @@ class ModerationEngine:
 
         enabled_events = set(self._server_config_cache.get("mod_log_events", []))
         rule_key = violation.get("rule", "policy_violation")
-        event_tag = "policy_violation"
+        event_tags = {"policy_violation"}
+        if "delete" in action_taken.lower():
+            event_tags.add("message_delete")
+        if "warn" in action_taken.lower():
+            event_tags.add("warning")
+        if "timeout" in action_taken.lower():
+            event_tags.add("timeout")
+        if "kick" in action_taken.lower():
+            event_tags.add("kick")
+        if "ban" in action_taken.lower():
+            event_tags.add("ban")
         if "link" in rule_key:
-            event_tag = "blocked_link"
-        elif "image" in rule_key or "video" in rule_key or "file" in rule_key or "attachment" in rule_key:
-            event_tag = "blocked_attachment"
+            event_tags.add("blocked_link")
+        elif "attachment" in rule_key or "image" in rule_key or "video" in rule_key or "file" in rule_key:
+            event_tags.add("blocked_attachment")
         elif "mention" in rule_key or "everyone" in rule_key or "here" in rule_key:
-            event_tag = "blocked_mention"
+            event_tags.add("blocked_mention")
 
-        if enabled_events and event_tag not in enabled_events and "policy_violation" not in enabled_events:
+        if enabled_events and not (enabled_events & event_tags):
             return
 
         try:
@@ -944,44 +1066,43 @@ class ModerationEngine:
         policy_name = violation.get("matched_policy") or policy.get("preset_name") or "Channel Policy"
 
         # Action Colors
-        # Warning: 0xFEE75C (yellow)
-        # Blocked: 0xE67E22 (orange)
-        # Timeout: 0xED4245 (red-orange)
-        # Kick: 0xE74C3C (red)
-        # Ban: 0x992D22 (dark red)
-        color = 0xE67E22
+        color = 0xE67E22  # Orange (delete/block)
         if "timeout" in action_taken.lower():
-            color = 0xED4245
+            color = 0xED4245  # Red-orange
         elif "kick" in action_taken.lower():
-            color = 0xE74C3C
+            color = 0xE74C3C  # Red
         elif "ban" in action_taken.lower():
-            color = 0x992D22
-        elif "warn" in action_taken.lower():
-            color = 0xFEE75C
+            color = 0x992D22  # Dark Red
+        elif "warn" in action_taken.lower() and "delete" not in action_taken.lower():
+            color = 0xFEE75C  # Yellow
+        if perm_error and not success:
+            color = 0x95A5A6  # Gray
+
+        status_text = "✅ Success" if success and not perm_error else (
+            f"⚠️ Partial: {perm_error}" if success and perm_error else f"❌ Failed: {perm_error}"
+        )
 
         try:
             embed = discord.Embed(
                 title="🛡️ PB HERO AUTO-MOD",
                 color=color,
-                timestamp=message.created_at,
+                timestamp=message.created_at if getattr(message, "created_at", None) else datetime.utcnow(),
             )
-            embed.add_field(name="Case ID", value=f"`{case_id}`", inline=True)
-            embed.add_field(name="Warning ID", value=f"`{warning_id}`", inline=True)
-            embed.add_field(name="Action Taken", value=f"**{action_taken.upper()}**", inline=True)
+            embed.add_field(name="Rule", value=f"`{violation.get('rule_name') or violation.get('rule')}`", inline=True)
+            embed.add_field(name="Action", value=f"**{action_taken.upper()}**", inline=True)
+            embed.add_field(name="Status", value=status_text, inline=True)
 
-            embed.add_field(
-                name="User",
-                value=f"{message.author.mention}\n`{message.author} ({message.author.id})`",
-                inline=True,
-            )
+            embed.add_field(name="User", value=f"{message.author.mention} (`{message.author}`)", inline=True)
+            embed.add_field(name="User ID", value=f"`{message.author.id}`", inline=True)
             embed.add_field(name="Channel", value=f"<#{message.channel.id}>", inline=True)
-            embed.add_field(name="DM Status", value=f"`{dm_status.upper()}`", inline=True)
-
-            embed.add_field(name="Policy / Profile", value=str(policy_name), inline=True)
-            embed.add_field(name="Rule Triggered", value=f"`{violation['rule']}`", inline=True)
-            embed.add_field(name="Moderator", value="PB HERO AutoMod", inline=True)
 
             embed.add_field(name="Reason", value=violation["reason"], inline=False)
+
+            if case_id:
+                embed.add_field(name="Case ID", value=f"`{case_id}`", inline=True)
+            if warning_id:
+                embed.add_field(name="Warning ID", value=f"`{warning_id}`", inline=True)
+            embed.add_field(name="Policy / Profile", value=str(policy_name), inline=True)
 
             if perm_error:
                 embed.add_field(
@@ -996,8 +1117,10 @@ class ModerationEngine:
 
             embed.set_footer(text=f"Incident ID: {message.id} • PB HERO Security System")
             await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            logger.info("Sent AutoMod log embed to channel %s for message %d", mod_log_id, message.id)
         except Exception as e:
-            logger.error("Failed to send mod log: %s", str(e))
+            logger.error("Failed to send mod log to channel %s: %s", mod_log_id, str(e))
+
 
     async def simulate_policy(
         self,

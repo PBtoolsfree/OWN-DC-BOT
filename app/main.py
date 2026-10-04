@@ -123,11 +123,28 @@ async def run_server() -> None:
         set_bot_state(BotState.STARTING)
 
     async def _run_bot_safe():
-        try:
-            await bot.start(settings.DISCORD_BOT_TOKEN)
-        except Exception as e:
-            set_bot_state(BotState.ERROR)
-            logger.error("Discord bot connection notice: %s. Dashboard remains active.", e)
+        backoff = 3
+        max_backoff = 60
+        while bot and not bot.is_closed():
+            try:
+                logger.info("Connecting Discord bot to gateway (reconnect=True)...")
+                set_bot_state(BotState.STARTING)
+                await bot.start(settings.DISCORD_BOT_TOKEN, reconnect=True)
+                break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                set_bot_state(BotState.ERROR)
+                logger.error(
+                    "Discord bot connection terminated: %s. Reconnecting in %ds...",
+                    e,
+                    backoff,
+                )
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    break
+                backoff = min(backoff * 2, max_backoff)
 
     tasks = [asyncio.create_task(server.serve())]
     if bot:

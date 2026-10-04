@@ -46,6 +46,7 @@ from app.database.repositories import (
     AutomodRuleRepo,
     BlockedMessageRepo,
     ChannelPolicyRepo,
+    CustomModerationStyleRepo,
     ExemptionRuleRepo,
     ModerationCaseRepo,
     ModerationExemptionRepo,
@@ -59,6 +60,13 @@ from app.database.repositories import (
     YouTubeDestinationRepo,
     YouTubeEventRepo,
     YouTubeTemplateRepo,
+)
+from app.moderation.styles import (
+    BUILTIN_MODERATION_STYLES,
+    apply_moderation_style,
+    format_ladder_step_summary,
+    generate_style_preview,
+    validate_custom_style,
 )
 
 from app.greetings.service import get_greeting_service
@@ -2012,16 +2020,22 @@ async def list_automod_rules(username: str = Depends(require_auth)):
             "channels": deserialize_json_field(r.channels, default=[]),
             "categories": deserialize_json_field(r.categories, default=[]),
             "threshold": r.threshold,
+            "threshold_count": r.threshold,
             "time_window": r.time_window,
+            "time_window_seconds": r.time_window,
+            "window_seconds": r.time_window,
             "action": r.action,
             "timeout_duration": r.timeout_duration,
+            "action_duration": r.timeout_duration,
             "cooldown": r.cooldown,
+            "cooldown_seconds": r.cooldown,
             "custom_keywords": deserialize_json_field(r.custom_keywords, default=[]),
             "log_event": bool(r.log_event),
             "severity": r.severity or "medium",
         } for r in rules]
     finally:
         await session.close()
+
 
 
 @router.post("/moderation/automod-rules")
@@ -2298,93 +2312,483 @@ async def delete_escalation_rule(rule_id: int, username: str = Depends(require_a
         await session.close()
 
 
-# ─── Quick Setup / Easy Mode ──────────────────────────────────────────────────
+# ─── Moderation Styles & Quick Setup (Easy Mode) ──────────────────────────────
 
 @router.get("/moderation/quick-setup")
 async def get_quick_setup_preview(username: str = Depends(require_auth)):
-    """Get preview descriptions of quick moderation styles."""
-    return {
-        "styles": {
-            "light": {
-                "name": "Light",
-                "description": "Warnings + limited deletes. Friendly community atmosphere.",
-                "actions": ["Warnings on first 3 strikes", "10-minute timeout on 4th strike", "1-hour timeout on 5th strike", "No automatic bans"],
-                "decay_days": 14,
-            },
-            "balanced": {
-                "name": "Balanced (Recommended)",
-                "description": "Standard community moderation: warnings, progressive timeouts, kick on repeated offenses.",
-                "actions": ["Warnings on strikes 1-2", "10m timeout on strike 3", "1h timeout on strike 4", "Kick on strike 5", "Ban on strike 6"],
-                "decay_days": 30,
-            },
-            "strict": {
-                "name": "Strict",
-                "description": "Fast escalation for zero-tolerance or high-security community.",
-                "actions": ["Warning on strike 1", "1h timeout on strike 2", "1-day timeout on strike 3", "Kick on strike 4", "Permanent ban on strike 5"],
-                "decay_days": 60,
-            },
+    """
+    Get moderation styles for Quick Setup (Easy Mode).
+    Includes built-in styles (Light, Balanced, Strict) and custom saved styles.
+    """
+    session = await get_session_direct()
+    try:
+        config = await ServerConfigRepo.get_or_create(session)
+        custom_styles = await CustomModerationStyleRepo.get_all(session)
+
+        styles_dict: Dict[str, Any] = {}
+        builtin_list: List[Dict[str, Any]] = []
+        custom_list: List[Dict[str, Any]] = []
+
+        # 1. Built-in styles
+        for key, info in BUILTIN_MODERATION_STYLES.items():
+            style_payload = {
+                "id": key,
+                "name": info["name"],
+                "description": info["description"],
+                "explanation": info.get("explanation", ""),
+                "actions": info["actions_summary"],
+                "decay_days": info["warning_decay_days"],
+                "allow_warning_expiration": info.get("allow_warning_expiration", True),
+                "warning_mode": info.get("warning_mode", "count"),
+                "is_builtin": True,
+                "ladder": info["ladder"],
+            }
+            styles_dict[key] = style_payload
+            builtin_list.append(style_payload)
+
+        # 2. Custom styles
+        for c in custom_styles:
+            ladder_data = json.loads(c.ladder) if isinstance(c.ladder, str) else (c.ladder or [])
+            actions_summary = [format_ladder_step_summary(s) for s in ladder_data]
+            custom_payload = {
+                "id": str(c.id),
+                "name": c.name,
+                "description": c.description or "",
+                "explanation": c.description or "Build your own warning decay and punishment ladder.",
+                "actions": actions_summary,
+                "decay_days": c.warning_decay_days if c.allow_warning_expiration else 0,
+                "allow_warning_expiration": c.allow_warning_expiration,
+                "warning_mode": c.warning_mode,
+                "is_builtin": False,
+                "ladder": ladder_data,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+            }
+            styles_dict[str(c.id)] = custom_payload
+            custom_list.append(custom_payload)
+
+        return {
+            "styles": styles_dict,
+            "builtin": builtin_list,
+            "custom": custom_list,
+            "active_style": getattr(config, "quick_setup_style", "balanced"),
+            "active_decay_days": getattr(config, "warning_decay_days", 30),
+            "active_warning_mode": getattr(config, "warning_mode", "count"),
         }
-    }
+    finally:
+        await session.close()
 
 
 @router.post("/moderation/quick-setup")
 async def apply_quick_setup(request: Request, username: str = Depends(require_auth)):
-    """Apply a chosen quick setup moderation style."""
+    """Apply a chosen moderation style atomically."""
     data = await request.json()
-    style = data.get("style", "balanced").lower()
+    style = data.get("style") or data.get("style_id") or "balanced"
 
     session = await get_session_direct()
     try:
-        config = await ServerConfigRepo.get_or_create(session)
-        config.quick_setup_style = style
-
-        # Clear old escalation rules and apply style ladder
-        await session.execute(delete(WarningEscalationRule))
-
-        if style == "light":
-            config.warning_decay_days = 14
-            ladder = [
-                {"threshold": 1, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "First warning"},
-                {"threshold": 2, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "Second warning"},
-                {"threshold": 3, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "Third warning"},
-                {"threshold": 4, "mode": "count", "action": "timeout", "duration": 600, "send_dm": True, "reason_template": "10-minute timeout"},
-                {"threshold": 5, "mode": "count", "action": "timeout", "duration": 3600, "send_dm": True, "reason_template": "1-hour timeout"},
-            ]
-        elif style == "strict":
-            config.warning_decay_days = 60
-            ladder = [
-                {"threshold": 1, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "First warning"},
-                {"threshold": 2, "mode": "count", "action": "timeout", "duration": 3600, "send_dm": True, "reason_template": "1-hour timeout"},
-                {"threshold": 3, "mode": "count", "action": "timeout", "duration": 86400, "send_dm": True, "reason_template": "24-hour timeout"},
-                {"threshold": 4, "mode": "count", "action": "kick", "send_dm": True, "reason_template": "Kicked from server"},
-                {"threshold": 5, "mode": "count", "action": "ban", "send_dm": True, "delete_message_history_days": 1, "reason_template": "Permanently banned"},
-            ]
-        else:  # balanced
-            config.warning_decay_days = 30
-            ladder = [
-                {"threshold": 1, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "First warning"},
-                {"threshold": 2, "mode": "count", "action": "warn", "send_dm": True, "reason_template": "Second warning"},
-                {"threshold": 3, "mode": "count", "action": "timeout", "duration": 600, "send_dm": True, "reason_template": "10-minute timeout"},
-                {"threshold": 4, "mode": "count", "action": "timeout", "duration": 3600, "send_dm": True, "reason_template": "1-hour timeout"},
-                {"threshold": 5, "mode": "count", "action": "kick", "send_dm": True, "reason_template": "Kicked from server"},
-                {"threshold": 6, "mode": "count", "action": "ban", "send_dm": True, "delete_message_history_days": 1, "reason_template": "Permanently banned"},
-            ]
-
-        for item in ladder:
-            await WarningEscalationRepo.create(session, **item)
-
-        await AuditLogRepo.log(session, username, "quick_setup_applied", style)
-        await session.commit()
-
-        # Invalidate moderation engine cache
-        from app.runtime_state import get_bot_instance
-        bot = get_bot_instance()
-        if bot and bot.moderation_engine:
-            await bot.moderation_engine.refresh_cache()
-
-        return {"success": True, "message": f"Applied {style.title()} moderation style successfully"}
+        result = await apply_moderation_style(session, style, username)
+        return result
+    except ValueError as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to apply quick setup style")
+        raise HTTPException(status_code=500, detail="Unable to apply moderation style. An internal error occurred.")
     finally:
         await session.close()
+
+
+@router.get("/moderation/styles")
+async def list_moderation_styles(username: str = Depends(require_auth)):
+    """List all available built-in and custom moderation styles."""
+    session = await get_session_direct()
+    try:
+        config = await ServerConfigRepo.get_or_create(session)
+        custom_styles = await CustomModerationStyleRepo.get_all(session)
+
+        builtin_list = []
+        for key, info in BUILTIN_MODERATION_STYLES.items():
+            builtin_list.append({
+                "id": key,
+                "name": info["name"],
+                "description": info["description"],
+                "explanation": info.get("explanation", ""),
+                "actions": info["actions_summary"],
+                "decay_days": info["warning_decay_days"],
+                "allow_warning_expiration": info.get("allow_warning_expiration", True),
+                "warning_mode": info.get("warning_mode", "count"),
+                "is_builtin": True,
+                "ladder": info["ladder"],
+            })
+
+        custom_list = []
+        for c in custom_styles:
+            ladder_data = json.loads(c.ladder) if isinstance(c.ladder, str) else (c.ladder or [])
+            custom_list.append({
+                "id": str(c.id),
+                "name": c.name,
+                "description": c.description or "",
+                "explanation": c.description or "Custom moderation style",
+                "actions": [format_ladder_step_summary(s) for s in ladder_data],
+                "decay_days": c.warning_decay_days if c.allow_warning_expiration else 0,
+                "allow_warning_expiration": c.allow_warning_expiration,
+                "warning_mode": c.warning_mode,
+                "is_builtin": False,
+                "ladder": ladder_data,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+            })
+
+        return {
+            "builtin": builtin_list,
+            "custom": custom_list,
+            "active_style": getattr(config, "quick_setup_style", "balanced"),
+            "active_decay_days": getattr(config, "warning_decay_days", 30),
+            "active_warning_mode": getattr(config, "warning_mode", "count"),
+        }
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/styles/{style_id}")
+async def get_moderation_style(style_id: str, username: str = Depends(require_auth)):
+    """Get details of a specific moderation style by ID."""
+    sid_lower = style_id.strip().lower()
+    if sid_lower in BUILTIN_MODERATION_STYLES:
+        info = BUILTIN_MODERATION_STYLES[sid_lower]
+        return {
+            "id": sid_lower,
+            "name": info["name"],
+            "description": info["description"],
+            "explanation": info.get("explanation", ""),
+            "actions": info["actions_summary"],
+            "decay_days": info["warning_decay_days"],
+            "allow_warning_expiration": info.get("allow_warning_expiration", True),
+            "warning_mode": info.get("warning_mode", "count"),
+            "is_builtin": True,
+            "ladder": info["ladder"],
+        }
+
+    session = await get_session_direct()
+    try:
+        custom_style = None
+        if style_id.isdigit():
+            custom_style = await CustomModerationStyleRepo.get_by_id(session, int(style_id))
+        if not custom_style:
+            custom_style = await CustomModerationStyleRepo.get_by_name(session, style_id)
+
+        if not custom_style:
+            raise HTTPException(status_code=404, detail=f"Moderation style '{style_id}' not found")
+
+        ladder_data = json.loads(custom_style.ladder) if isinstance(custom_style.ladder, str) else (custom_style.ladder or [])
+        return {
+            "id": str(custom_style.id),
+            "name": custom_style.name,
+            "description": custom_style.description or "",
+            "explanation": custom_style.description or "Custom moderation style",
+            "actions": [format_ladder_step_summary(s) for s in ladder_data],
+            "decay_days": custom_style.warning_decay_days if custom_style.allow_warning_expiration else 0,
+            "allow_warning_expiration": custom_style.allow_warning_expiration,
+            "warning_mode": custom_style.warning_mode,
+            "is_builtin": False,
+            "ladder": ladder_data,
+            "created_at": custom_style.created_at.isoformat() if custom_style.created_at else None,
+            "updated_at": custom_style.updated_at.isoformat() if custom_style.updated_at else None,
+        }
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/styles")
+async def create_custom_style(request: Request, username: str = Depends(require_auth)):
+    """Create a new custom moderation style."""
+    data = await request.json()
+    valid, err_msg = validate_custom_style(data)
+    if not valid:
+        raise HTTPException(status_code=400, detail=err_msg)
+
+    name = data["name"].strip()
+    session = await get_session_direct()
+    try:
+        existing = await CustomModerationStyleRepo.get_by_name(session, name)
+        if existing:
+            raise HTTPException(status_code=400, detail=f"A moderation style named '{name}' already exists.")
+
+        created = await CustomModerationStyleRepo.create(
+            session=session,
+            name=name,
+            ladder=data["ladder"],
+            description=data.get("description"),
+            warning_decay_days=int(data.get("warning_decay_days", 30)),
+            allow_warning_expiration=bool(data.get("allow_warning_expiration", True)),
+            warning_mode=str(data.get("warning_mode", "count")),
+            is_builtin=False,
+        )
+
+        audit_payload = {
+            "style_id": created.id,
+            "name": created.name,
+            "decay_days": created.warning_decay_days,
+            "ladder_steps": len(data["ladder"]),
+        }
+        await AuditLogRepo.log(
+            session=session,
+            actor=username,
+            action="CUSTOM_MODERATION_STYLE_CREATED",
+            details=json.dumps(audit_payload),
+        )
+        await session.commit()
+
+        ladder_data = json.loads(created.ladder) if isinstance(created.ladder, str) else (created.ladder or [])
+        return {
+            "success": True,
+            "style": {
+                "id": str(created.id),
+                "name": created.name,
+                "description": created.description or "",
+                "actions": [format_ladder_step_summary(s) for s in ladder_data],
+                "decay_days": created.warning_decay_days if created.allow_warning_expiration else 0,
+                "allow_warning_expiration": created.allow_warning_expiration,
+                "warning_mode": created.warning_mode,
+                "is_builtin": False,
+                "ladder": ladder_data,
+            },
+            "message": f"Custom moderation style '{created.name}' created successfully",
+        }
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to create custom style")
+        raise HTTPException(status_code=500, detail="Failed to create custom style.")
+    finally:
+        await session.close()
+
+
+@router.put("/moderation/styles/{style_id}")
+async def update_custom_style(style_id: int, request: Request, username: str = Depends(require_auth)):
+    """Update an existing custom moderation style."""
+    data = await request.json()
+    valid, err_msg = validate_custom_style(data)
+    if not valid:
+        raise HTTPException(status_code=400, detail=err_msg)
+
+    session = await get_session_direct()
+    try:
+        existing = await CustomModerationStyleRepo.get_by_id(session, style_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Custom moderation style not found")
+
+        name = data["name"].strip()
+        same_name = await CustomModerationStyleRepo.get_by_name(session, name)
+        if same_name and same_name.id != style_id:
+            raise HTTPException(status_code=400, detail=f"Another style named '{name}' already exists.")
+
+        updated = await CustomModerationStyleRepo.update(
+            session=session,
+            style_id=style_id,
+            name=name,
+            description=data.get("description"),
+            warning_decay_days=int(data.get("warning_decay_days", 30)),
+            allow_warning_expiration=bool(data.get("allow_warning_expiration", True)),
+            warning_mode=str(data.get("warning_mode", "count")),
+            ladder=data["ladder"],
+        )
+
+        audit_payload = {
+            "style_id": style_id,
+            "name": name,
+            "decay_days": updated.warning_decay_days,
+            "ladder_steps": len(data["ladder"]),
+        }
+        await AuditLogRepo.log(
+            session=session,
+            actor=username,
+            action="CUSTOM_MODERATION_STYLE_UPDATED",
+            details=json.dumps(audit_payload),
+        )
+        await session.commit()
+
+        ladder_data = json.loads(updated.ladder) if isinstance(updated.ladder, str) else (updated.ladder or [])
+        return {
+            "success": True,
+            "style": {
+                "id": str(updated.id),
+                "name": updated.name,
+                "description": updated.description or "",
+                "actions": [format_ladder_step_summary(s) for s in ladder_data],
+                "decay_days": updated.warning_decay_days if updated.allow_warning_expiration else 0,
+                "allow_warning_expiration": updated.allow_warning_expiration,
+                "warning_mode": updated.warning_mode,
+                "is_builtin": False,
+                "ladder": ladder_data,
+            },
+            "message": f"Custom moderation style '{updated.name}' updated successfully",
+        }
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to update custom style")
+        raise HTTPException(status_code=500, detail="Failed to update custom style.")
+    finally:
+        await session.close()
+
+
+@router.delete("/moderation/styles/{style_id}")
+async def delete_custom_style(style_id: str, username: str = Depends(require_auth)):
+    """Delete a custom moderation style."""
+    if style_id.lower() in ("light", "balanced", "strict"):
+        raise HTTPException(status_code=400, detail="Built-in moderation styles cannot be deleted.")
+
+    try:
+        int_id = int(style_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid custom style ID.")
+
+    session = await get_session_direct()
+    try:
+        existing = await CustomModerationStyleRepo.get_by_id(session, int_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Custom moderation style not found")
+
+        style_name = existing.name
+        await CustomModerationStyleRepo.delete(session, int_id)
+
+        audit_payload = {"style_id": int_id, "name": style_name}
+        await AuditLogRepo.log(
+            session=session,
+            actor=username,
+            action="CUSTOM_MODERATION_STYLE_DELETED",
+            details=json.dumps(audit_payload),
+        )
+        await session.commit()
+
+        return {"success": True, "message": f"Custom style '{style_name}' deleted successfully."}
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to delete custom style")
+        raise HTTPException(status_code=500, detail="Failed to delete custom style.")
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/styles/{style_id}/duplicate")
+async def duplicate_moderation_style(style_id: str, username: str = Depends(require_auth)):
+    """Duplicate an existing built-in or custom moderation style into a new custom style."""
+    session = await get_session_direct()
+    try:
+        sid_lower = style_id.strip().lower()
+        if sid_lower in BUILTIN_MODERATION_STYLES:
+            source = BUILTIN_MODERATION_STYLES[sid_lower]
+            base_name = source["name"]
+            ladder = source["ladder"]
+            desc = source.get("description", "")
+            decay = source.get("warning_decay_days", 30)
+            allow_exp = source.get("allow_warning_expiration", True)
+            mode = source.get("warning_mode", "count")
+        else:
+            if not style_id.isdigit():
+                raise HTTPException(status_code=400, detail="Invalid style ID.")
+            custom_source = await CustomModerationStyleRepo.get_by_id(session, int(style_id))
+            if not custom_source:
+                raise HTTPException(status_code=404, detail="Style to duplicate not found.")
+            base_name = custom_source.name
+            ladder = json.loads(custom_source.ladder) if isinstance(custom_source.ladder, str) else custom_source.ladder
+            desc = custom_source.description
+            decay = custom_source.warning_decay_days
+            allow_exp = custom_source.allow_warning_expiration
+            mode = custom_source.warning_mode
+
+        # Generate unique duplicate name
+        candidate_name = f"{base_name} (Copy)"
+        idx = 2
+        while await CustomModerationStyleRepo.get_by_name(session, candidate_name):
+            candidate_name = f"{base_name} (Copy {idx})"
+            idx += 1
+
+        created = await CustomModerationStyleRepo.create(
+            session=session,
+            name=candidate_name,
+            ladder=ladder,
+            description=f"Duplicate of {base_name}. {desc or ''}".strip(),
+            warning_decay_days=decay,
+            allow_warning_expiration=allow_exp,
+            warning_mode=mode,
+            is_builtin=False,
+        )
+
+        audit_payload = {"source_id": style_id, "new_id": created.id, "new_name": candidate_name}
+        await AuditLogRepo.log(
+            session=session,
+            actor=username,
+            action="CUSTOM_MODERATION_STYLE_CREATED",
+            details=json.dumps(audit_payload),
+        )
+        await session.commit()
+
+        ladder_data = json.loads(created.ladder) if isinstance(created.ladder, str) else (created.ladder or [])
+        return {
+            "success": True,
+            "style": {
+                "id": str(created.id),
+                "name": created.name,
+                "description": created.description or "",
+                "actions": [format_ladder_step_summary(s) for s in ladder_data],
+                "decay_days": created.warning_decay_days if created.allow_warning_expiration else 0,
+                "allow_warning_expiration": created.allow_warning_expiration,
+                "warning_mode": created.warning_mode,
+                "is_builtin": False,
+                "ladder": ladder_data,
+            },
+            "message": f"Successfully duplicated into '{created.name}'",
+        }
+    except HTTPException:
+        await session.rollback()
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to duplicate style")
+        raise HTTPException(status_code=500, detail="Failed to duplicate style.")
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/styles/{style_id}/apply")
+async def apply_style_by_id(style_id: str, username: str = Depends(require_auth)):
+    """Apply a specific moderation style by ID."""
+    session = await get_session_direct()
+    try:
+        result = await apply_moderation_style(session, style_id, username)
+        return result
+    except ValueError as e:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        await session.rollback()
+        logger.exception("Failed to apply style by ID")
+        raise HTTPException(status_code=500, detail="Unable to apply moderation style. An internal error occurred.")
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/styles/preview")
+async def preview_custom_style(request: Request, username: str = Depends(require_auth)):
+    """Generate preview and validation results for draft custom style."""
+    data = await request.json()
+    valid, err_msg = validate_custom_style(data)
+    if not valid:
+        return {"valid": False, "error": err_msg, "preview": None}
+
+    preview = generate_style_preview(data)
+    return {"valid": True, "error": None, "preview": preview}
 
 
 @router.get("/moderation/blocked")

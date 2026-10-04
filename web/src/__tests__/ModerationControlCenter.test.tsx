@@ -190,7 +190,7 @@ describe('Moderation Control Center Frontend Tests', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/Choose Moderation Style/i)).toBeInTheDocument();
-        expect(screen.getByText(/Balanced/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/Balanced/i).length).toBeGreaterThan(0);
         expect(screen.getByText(/Strict/i)).toBeInTheDocument();
       });
     });

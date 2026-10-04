@@ -606,3 +606,19 @@ class ServerInviteSettings(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class CustomModerationStyle(Base):
+    """Custom reusable moderation style presets created by admins."""
+    __tablename__ = "custom_moderation_styles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(128), unique=True, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    warning_decay_days = Column(Integer, default=30, nullable=False)
+    allow_warning_expiration = Column(Boolean, default=True, nullable=False)
+    warning_mode = Column(String(32), default="count", nullable=False)
+    ladder = Column(Text, nullable=False)  # JSON-serialized list of escalation steps
+    is_builtin = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

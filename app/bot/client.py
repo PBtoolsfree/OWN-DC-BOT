@@ -31,26 +31,40 @@ class PBHeroBot(commands.Bot):
         self.settings = settings or get_settings()
         self.start_time: Optional[datetime] = None
         self.youtube_scheduler: Optional[YouTubeScheduler] = None
-        self.moderation_engine: Optional[ModerationEngine] = None
         self._guild: Optional[discord.Guild] = None
+        self._ready_initialized: bool = False
 
         # Configure intents (minimal required set)
         # Message Content is required for:
         # - URL detection in messages (link blocking)
         # - Mention filtering (@everyone, @here detection in content)
         # - Attachment validation rules
-        # - Custom message policy enforcement
+        # - Message spam detection and content analysis
         intents = discord.Intents.default()
         intents.guilds = True
         intents.messages = True
         intents.message_content = True  # Required for message filtering
         intents.members = True  # Required for member permission checks
 
+        # Startup diagnostic log for gateway intents
+        logger.info(
+            "Bot Gateway Intents Diagnostic: message_content=%s, messages=%s, guilds=%s, members=%s",
+            intents.message_content,
+            intents.messages,
+            intents.guilds,
+            intents.members,
+        )
+        if not intents.message_content:
+            logger.error("CRITICAL: message_content intent is DISABLED in bot code! Content-based moderation will fail.")
+
         super().__init__(
             command_prefix="!",  # Prefix commands disabled, using slash commands
             intents=intents,
             help_command=None,
         )
+
+        # Pre-initialize moderation engine so state & spam tracking persist across reconnects
+        self.moderation_engine = ModerationEngine(self, self.settings.DISCORD_GUILD_ID)
 
     @property
     def guild(self) -> Optional[discord.Guild]:
@@ -68,7 +82,7 @@ class PBHeroBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         """Called when the bot is starting up."""
-        logger.info("Setting up PB HERO Bot...")
+        logger.info("Setting up PB HERO Bot extensions and commands...")
 
         # Load cogs
         await self._load_cogs()
@@ -97,9 +111,13 @@ class PBHeroBot(commands.Bot):
             except Exception as e:
                 logger.error("Failed to load cog %s: %s", module, str(e))
 
+    async def on_connect(self) -> None:
+        """Gateway connected handler."""
+        latency_val = (self.latency * 1000) if (self.latency is not None and self.latency == self.latency) else 0.0
+        logger.info("Gateway connected to Discord (heartbeat latency: %.1f ms)", latency_val)
+
     async def on_ready(self) -> None:
         """Called when the bot is connected and ready."""
-        self.start_time = datetime.utcnow()
         self._guild = self.get_guild(self.settings.DISCORD_GUILD_ID)
 
         if self._guild:
@@ -117,36 +135,52 @@ class PBHeroBot(commands.Bot):
             status=discord.Status.online,
         )
 
-        # Initialize moderation engine
-        self.moderation_engine = ModerationEngine(self, self.settings.DISCORD_GUILD_ID)
+        from app.runtime_state import BotState, set_bot_state
+
+        # Guard against duplicate handler/task initialization on reconnect
+        if self._ready_initialized:
+            logger.info("Gateway reconnected: session re-established (skipping duplicate cogs/scheduler init)")
+            if self.moderation_engine:
+                await self.moderation_engine.refresh_cache()
+            set_bot_state(BotState.READY)
+            return
+
+        self.start_time = datetime.utcnow()
+        self._ready_initialized = True
+
+        # Initialize moderation engine cache
+        if self.moderation_engine is None:
+            self.moderation_engine = ModerationEngine(self, self.settings.DISCORD_GUILD_ID)
         await self.moderation_engine.refresh_cache()
         logger.info("Moderation engine initialized")
 
-        # Start YouTube scheduler
-        self.youtube_scheduler = YouTubeScheduler(self)
-        await self.youtube_scheduler.start()
-        logger.info("YouTube scheduler started")
+        # Start YouTube scheduler if not already running
+        if self.youtube_scheduler is None:
+            self.youtube_scheduler = YouTubeScheduler(self)
+        if not self.youtube_scheduler.is_running:
+            await self.youtube_scheduler.start()
+            logger.info("YouTube scheduler started")
 
         # Initialize greeting service
         from app.greetings.service import get_greeting_service
         self.greeting_service = get_greeting_service(self)
         logger.info("Greeting service initialized")
 
-        from app.runtime_state import BotState, set_bot_state
         set_bot_state(BotState.READY)
         logger.info("PB HERO Bot is ready!")
 
     async def on_disconnect(self) -> None:
         """Gateway disconnect handler."""
         from app.runtime_state import BotState, set_bot_state
-        logger.warning("Discord bot disconnected from gateway")
+        close_code = getattr(getattr(self, "ws", None), "close_code", None)
+        logger.warning("Discord bot disconnected from gateway | websocket close/error code: %s", close_code)
         if not self.is_closed():
             set_bot_state(BotState.STARTING)
 
     async def on_resumed(self) -> None:
         """Gateway session resume handler."""
         from app.runtime_state import BotState, set_bot_state
-        logger.info("Discord bot session resumed")
+        logger.info("Gateway reconnect success (Discord bot session resumed)")
         set_bot_state(BotState.READY)
 
     async def on_message(self, message: discord.Message) -> None:
@@ -158,6 +192,14 @@ class PBHeroBot(commands.Bot):
         # Skip bot messages
         if message.author.bot:
             return
+
+        logger.debug(
+            "MESSAGE_CREATE received: guild_id=%d channel_id=%d user_id=%d msg_id=%d",
+            message.guild.id,
+            message.channel.id,
+            message.author.id,
+            message.id,
+        )
 
         # Run moderation engine
         if self.moderation_engine:
@@ -179,6 +221,7 @@ class PBHeroBot(commands.Bot):
         """Graceful shutdown."""
         from app.runtime_state import BotState, set_bot_state
         set_bot_state(BotState.STOPPING)
+        self._ready_initialized = False
         logger.info("Shutting down PB HERO Bot...")
 
         if self.youtube_scheduler:
@@ -187,3 +230,4 @@ class PBHeroBot(commands.Bot):
         await super().close()
         set_bot_state(BotState.STOPPED)
         logger.info("PB HERO Bot shut down complete")
+

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { moderationApi } from '../api/moderation';
 import { WarningRecord, WarningEscalationRule } from '../types';
+import { QuickSetupModal } from '../components/QuickSetupModal';
 
 export const WarningsActions: React.FC = () => {
   const [warnings, setWarnings] = useState<WarningRecord[]>([]);
@@ -33,9 +34,6 @@ export const WarningsActions: React.FC = () => {
 
   // Quick Setup Modal
   const [quickSetupOpen, setQuickSetupOpen] = useState(false);
-  const [quickStyles, setQuickStyles] = useState<Record<string, any>>({});
-  const [selectedStyle, setSelectedStyle] = useState<string>('balanced');
-  const [applyingStyle, setApplyingStyle] = useState(false);
 
   // Manual Issue Warning Modal
   const [manualWarnOpen, setManualWarnOpen] = useState(false);
@@ -86,30 +84,8 @@ export const WarningsActions: React.FC = () => {
     fetchData();
   };
 
-  const handleOpenQuickSetup = async () => {
-    try {
-      const res = await moderationApi.getQuickSetupPreview();
-      setQuickStyles(res.styles);
-      setSelectedStyle('balanced');
-      setQuickSetupOpen(true);
-    } catch (err: any) {
-      setError('Failed to load Quick Setup preview');
-    }
-  };
-
-  const handleApplyQuickSetup = async () => {
-    setApplyingStyle(true);
-    try {
-      await moderationApi.applyQuickSetup(selectedStyle);
-      setSuccessMsg(`Successfully applied ${selectedStyle.toUpperCase()} moderation style!`);
-      setQuickSetupOpen(false);
-      fetchData();
-      setTimeout(() => setSuccessMsg(null), 3500);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Failed to apply style');
-    } finally {
-      setApplyingStyle(false);
-    }
+  const handleOpenQuickSetup = () => {
+    setQuickSetupOpen(true);
   };
 
   const handleRevokeWarning = async (warningId: string) => {
@@ -517,79 +493,17 @@ export const WarningsActions: React.FC = () => {
         )}
       </div>
 
-      {/* Quick Setup Modal */}
-      {quickSetupOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="bg-[#1c222d] border border-purple-500/30 rounded-2xl max-w-xl w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
-              <div className="flex items-center gap-2.5">
-                <Sparkles className="w-5 h-5 text-purple-400" />
-                <h3 className="font-extrabold text-white text-lg">Choose Moderation Style (Easy Mode)</h3>
-              </div>
-              <button onClick={() => setQuickSetupOpen(false)} className="text-gray-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="py-5 space-y-4">
-              <p className="text-xs text-gray-300">
-                Select a recommended moderation profile. Applying a style will configure the strike escalation ladder and warning decay duration:
-              </p>
-
-              <div className="grid grid-cols-3 gap-3">
-                {Object.entries(quickStyles).map(([key, info]: [string, any]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setSelectedStyle(key)}
-                    className={`p-3.5 rounded-xl border text-left transition-all ${
-                      selectedStyle === key
-                        ? 'bg-purple-900/30 border-purple-500 text-white shadow-lg'
-                        : 'bg-gray-900/50 border-gray-800 text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    <div className="font-bold text-sm text-white">{info.name}</div>
-                    <div className="text-[11px] text-gray-400 mt-1">{info.decay_days}d decay</div>
-                  </button>
-                ))}
-              </div>
-
-              {/* Preview of Selected Style */}
-              {quickStyles[selectedStyle] && (
-                <div className="p-4 rounded-xl bg-gray-900/80 border border-gray-800 space-y-2">
-                  <div className="text-xs font-bold text-purple-300 uppercase tracking-wide">
-                    What will change? (Preview)
-                  </div>
-                  <p className="text-xs text-gray-300">{quickStyles[selectedStyle].description}</p>
-                  <ul className="text-xs text-gray-400 space-y-1 mt-2 list-disc list-inside">
-                    {quickStyles[selectedStyle].actions.map((act: string, i: number) => (
-                      <li key={i}>{act}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-800">
-              <button
-                type="button"
-                onClick={() => setQuickSetupOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-gray-400 hover:text-white"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={applyingStyle}
-                onClick={handleApplyQuickSetup}
-                className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg"
-              >
-                {applyingStyle ? 'Applying...' : 'Apply Moderation Style'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Quick Setup (Easy Mode) Modal */}
+      <QuickSetupModal
+        isOpen={quickSetupOpen}
+        onClose={() => setQuickSetupOpen(false)}
+        onSuccess={(msg) => {
+          setSuccessMsg(msg);
+          fetchData();
+          setTimeout(() => setSuccessMsg(null), 3500);
+        }}
+        onRefreshData={fetchData}
+      />
 
       {/* Manual Issue Warning Modal */}
       {manualWarnOpen && (

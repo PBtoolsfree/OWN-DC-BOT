@@ -97,13 +97,71 @@ export const moderationApi = {
   deleteEscalationRule: (id: number) =>
     apiClient.delete<{ success: boolean }>(`/moderation/escalation-rules/${id}`),
 
-  // Quick Setup / Easy Mode
+  // Quick Setup / Easy Mode & Custom Styles
   getQuickSetupPreview: () =>
     apiClient.get<{
-      styles: Record<string, { name: string; description: string; actions: string[]; decay_days: number }>;
+      styles: Record<string, {
+        id?: string;
+        name: string;
+        description: string;
+        explanation?: string;
+        actions: string[];
+        decay_days: number;
+        allow_warning_expiration?: boolean;
+        warning_mode?: string;
+        is_builtin?: boolean;
+        ladder?: Array<{
+          threshold: number;
+          action: string;
+          duration?: number | null;
+          send_dm?: boolean;
+          reason_template?: string;
+        }>;
+      }>;
+      builtin?: any[];
+      custom?: any[];
+      active_style?: string;
+      active_decay_days?: number;
+      active_warning_mode?: string;
     }>('/moderation/quick-setup'),
   applyQuickSetup: (style: string) =>
-    apiClient.post<{ success: boolean; message: string }>('/moderation/quick-setup', { style }),
+    apiClient.post<{ success: boolean; style: string; warning_decay_days: number; ladder_steps_updated: number; message: string }>('/moderation/quick-setup', { style }),
+
+  getModerationStyles: () =>
+    apiClient.get<{
+      builtin: any[];
+      custom: any[];
+      active_style?: string;
+      active_decay_days?: number;
+      active_warning_mode?: string;
+    }>('/moderation/styles'),
+  getModerationStyle: (styleId: string | number) =>
+    apiClient.get<any>(`/moderation/styles/${styleId}`),
+  createCustomStyle: (data: {
+    name: string;
+    description?: string;
+    warning_decay_days: number;
+    allow_warning_expiration: boolean;
+    warning_mode: string;
+    ladder: Array<{
+      threshold: number;
+      action: string;
+      duration?: number | null;
+      send_dm?: boolean;
+      reason_template?: string;
+    }>;
+  }) =>
+    apiClient.post<{ success: boolean; style: any; message: string }>('/moderation/styles', data),
+  updateCustomStyle: (styleId: number | string, data: any) =>
+    apiClient.put<{ success: boolean; style: any; message: string }>(`/moderation/styles/${styleId}`, data),
+  deleteCustomStyle: (styleId: number | string) =>
+    apiClient.delete<{ success: boolean; message: string }>(`/moderation/styles/${styleId}`),
+  duplicateCustomStyle: (styleId: string | number) =>
+    apiClient.post<{ success: boolean; style: any; message: string }>(`/moderation/styles/${styleId}/duplicate`),
+  applyModerationStyle: (styleId: string | number) =>
+    apiClient.post<{ success: boolean; style: string; warning_decay_days: number; ladder_steps_updated: number; message: string }>(`/moderation/styles/${styleId}/apply`),
+  previewCustomStyle: (data: any) =>
+    apiClient.post<{ valid: boolean; error?: string | null; preview?: any }>('/moderation/styles/preview', data),
 
   // Legacy/Compatibility server settings & exemptions
   getServerSettings: () => apiClient.get<ServerSettings>('/settings/server'),
