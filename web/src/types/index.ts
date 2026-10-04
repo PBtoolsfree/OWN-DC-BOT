@@ -432,8 +432,69 @@ export interface ServerGreetingSettings {
   goodbye_show_timestamp: boolean;
   goodbye_use_embed: boolean;
   allow_mass_mentions: boolean;
+
+  // Rules Delivery
+  rules_delivery_enabled?: boolean;
+  rules_source?: 'rules_channel' | 'custom_message' | 'both';
+  rules_channel_id?: string | null;
+  rules_title?: string | null;
+  rules_description?: string | null;
+  rules_footer?: string | null;
+  rules_button_text?: string | null;
+
+  // Auto Role
+  auto_role_enabled?: boolean;
+  auto_role_id?: string | null;
+
+  // Welcome DM
+  welcome_dm_enabled?: boolean;
+  welcome_dm_title?: string | null;
+  welcome_dm_description?: string | null;
+  welcome_dm_footer?: string | null;
+  welcome_dm_use_embed?: boolean;
+  welcome_dm_show_avatar?: boolean;
+  welcome_dm_show_server_icon?: boolean;
+  welcome_dm_show_timestamp?: boolean;
+
+  // Goodbye DM
+  goodbye_dm_enabled?: boolean;
+  goodbye_dm_title?: string | null;
+  goodbye_dm_description?: string | null;
+  goodbye_dm_footer?: string | null;
+  goodbye_dm_use_embed?: boolean;
+  goodbye_dm_show_avatar?: boolean;
+  goodbye_dm_show_server_icon?: boolean;
+  goodbye_dm_show_timestamp?: boolean;
+
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface ServerInviteSettings {
+  id: number;
+  guild_id: string;
+  invite_channel_id: string | null;
+  invite_code: string | null;
+  invite_url: string | null;
+  is_active: boolean;
+  max_age: number;
+  max_uses: number;
+  temporary: boolean;
+  verification_status: string;
+  verification_error: string | null;
+  last_verified_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface GuildRoleOption {
+  id: string;
+  name: string;
+  color: string;
+  position: number;
+  member_count: number;
+  is_assignable: boolean;
+  is_managed: boolean;
 }
 
 export interface GreetingChannelTelemetry {
@@ -448,7 +509,7 @@ export interface GreetingChannelTelemetry {
 export interface GreetingRecentActivity {
   id: string;
   timestamp: string;
-  event_type: 'welcome' | 'goodbye';
+  event_type: string;
   username: string;
   user_id: string;
   channel_id: string | null;
@@ -473,6 +534,7 @@ export interface GreetingChannelOption {
 
 export interface GreetingsResponse {
   settings: ServerGreetingSettings;
+  invite?: ServerInviteSettings;
   server: {
     server_id: string;
     server_name: string;
@@ -482,9 +544,20 @@ export interface GreetingsResponse {
   };
   welcome_channel_status: GreetingChannelTelemetry;
   goodbye_channel_status: GreetingChannelTelemetry;
+  rules_channel_status?: {
+    status: string;
+    channel_name: string | null;
+    can_view: boolean;
+    warning?: string | null;
+  };
   recent_activity: GreetingRecentActivity[];
   stats: {
     welcome_sent_today: number;
     goodbye_sent_today: number;
+    welcome_dms_today?: number;
+    goodbye_dms_today?: number;
+    rules_delivered_today?: number;
+    roles_assigned_today?: number;
+    dm_failures_today?: number;
   };
 }

@@ -1,18 +1,22 @@
-﻿import { useEffect, useState, useRef } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { greetingsApi } from '../api/greetings';
 import {
   GreetingsResponse,
   GreetingChannelOption,
+  GuildRoleOption,
   ServerGreetingSettings,
 } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { DiscordPreview } from '../components/DiscordPreview';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
+import { InviteManagerCard } from '../components/greetings/InviteManagerCard';
+import { RulesAndRoleCard } from '../components/greetings/RulesAndRoleCard';
+import { DirectMessagesCard } from '../components/greetings/DirectMessagesCard';
+import { RecentActivityTable } from '../components/greetings/RecentActivityTable';
 import { toast } from '../hooks/useToast';
 import {
   UserPlus,
   UserMinus,
-  Hash,
   CheckCircle,
   XCircle,
   AlertTriangle,
@@ -21,8 +25,11 @@ import {
   Save,
   Server,
   Sparkles,
-  ShieldAlert,
-  Clock,
+  BookOpen,
+  Mail,
+  Link2,
+  History,
+  Tag,
 } from 'lucide-react';
 
 const WELCOME_VARIABLES = [
@@ -35,6 +42,8 @@ const WELCOME_VARIABLES = [
   { key: '{member_count}', desc: 'Total member count' },
   { key: '{account_created}', desc: 'Account creation date' },
   { key: '{joined_at}', desc: 'Join date & timestamp' },
+  { key: '{rules_url}', desc: 'Official rules link' },
+  { key: '{invite_url}', desc: 'Permanent server invite' },
 ];
 
 const GOODBYE_VARIABLES = [
@@ -43,87 +52,43 @@ const GOODBYE_VARIABLES = [
   { key: '{user_id}', desc: 'Unique Discord User ID' },
   { key: '{server_name}', desc: 'Discord Server Name' },
   { key: '{server_id}', desc: 'Discord Server ID' },
-  { key: '{member_count}', desc: 'Member count before leave' },
+  { key: '{member_count}', desc: 'Member count before departure' },
   { key: '{left_at}', desc: 'Departure timestamp' },
+  { key: '{invite_url}', desc: 'Permanent server invite' },
 ];
 
-export default function WelcomeGoodbye() {
+export const WelcomeGoodbye: React.FC = () => {
+  const [data, setData] = useState<GreetingsResponse | null>(null);
+  const [channels, setChannels] = useState<GreetingChannelOption[]>([]);
+  const [roles, setRoles] = useState<GuildRoleOption[]>([]);
   const [loading, setLoading] = useState(true);
-  const [savingWelcome, setSavingWelcome] = useState(false);
-  const [savingGoodbye, setSavingGoodbye] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [testingWelcome, setTestingWelcome] = useState(false);
   const [testingGoodbye, setTestingGoodbye] = useState(false);
 
-  const [data, setData] = useState<GreetingsResponse | null>(null);
-  const [channels, setChannels] = useState<GreetingChannelOption[]>([]);
+  const [activeTab, setActiveTab] = useState<'welcome' | 'goodbye' | 'rules' | 'dms' | 'invite' | 'activity'>('welcome');
 
-  // Working state
-  const [welcomeSettings, setWelcomeSettings] = useState<Partial<ServerGreetingSettings>>({});
-  const [goodbyeSettings, setGoodbyeSettings] = useState<Partial<ServerGreetingSettings>>({});
-  const [allowMassMentions, setAllowMassMentions] = useState(false);
+  const [formData, setFormData] = useState<ServerGreetingSettings | null>(null);
+  const [initialData, setInitialData] = useState<ServerGreetingSettings | null>(null);
+  const [activeInput, setActiveInput] = useState<string>('welcome_description');
 
-  // Original saved state for dirty tracking
-  const [origWelcome, setOrigWelcome] = useState<Partial<ServerGreetingSettings>>({});
-  const [origGoodbye, setOrigGoodbye] = useState<Partial<ServerGreetingSettings>>({});
-
-  // Reset confirmation modals
-  const [resetModal, setResetModal] = useState<'welcome' | 'goodbye' | null>(null);
-
-  // Focus tracking for variable insertion
-  const [focusedField, setFocusedField] = useState<'welcome_title' | 'welcome_desc' | 'welcome_footer' | 'goodbye_title' | 'goodbye_desc' | 'goodbye_footer'>('welcome_desc');
-
-  const welcomeTitleRef = useRef<HTMLInputElement>(null);
-  const welcomeDescRef = useRef<HTMLTextAreaElement>(null);
-  const welcomeFooterRef = useRef<HTMLInputElement>(null);
-  const goodbyeTitleRef = useRef<HTMLInputElement>(null);
-  const goodbyeDescRef = useRef<HTMLTextAreaElement>(null);
-  const goodbyeFooterRef = useRef<HTMLInputElement>(null);
+  const [showResetWelcomeModal, setShowResetWelcomeModal] = useState(false);
+  const [showResetGoodbyeModal, setShowResetGoodbyeModal] = useState(false);
 
   const loadData = async () => {
     try {
-      setLoading(true);
-      const [greetingsRes, channelsRes] = await Promise.all([
+      const [greetRes, chanRes, roleRes] = await Promise.all([
         greetingsApi.getGreetings(),
-        greetingsApi.getChannels().catch(() => [] as GreetingChannelOption[]),
+        greetingsApi.getChannels(),
+        greetingsApi.getRoles(),
       ]);
-      setData(greetingsRes);
-      setChannels(channelsRes);
-
-      const s = greetingsRes.settings;
-      const wState: Partial<ServerGreetingSettings> = {
-        welcome_enabled: s.welcome_enabled,
-        welcome_channel_id: s.welcome_channel_id,
-        welcome_title: s.welcome_title,
-        welcome_description: s.welcome_description,
-        welcome_footer: s.welcome_footer,
-        welcome_mention_user: s.welcome_mention_user,
-        welcome_show_avatar: s.welcome_show_avatar,
-        welcome_show_server_icon: s.welcome_show_server_icon,
-        welcome_show_member_count: s.welcome_show_member_count,
-        welcome_show_timestamp: s.welcome_show_timestamp,
-        welcome_use_embed: s.welcome_use_embed,
-      };
-      const gState: Partial<ServerGreetingSettings> = {
-        goodbye_enabled: s.goodbye_enabled,
-        goodbye_channel_id: s.goodbye_channel_id,
-        goodbye_title: s.goodbye_title,
-        goodbye_description: s.goodbye_description,
-        goodbye_footer: s.goodbye_footer,
-        goodbye_mention_user: s.goodbye_mention_user,
-        goodbye_show_avatar: s.goodbye_show_avatar,
-        goodbye_show_server_icon: s.goodbye_show_server_icon,
-        goodbye_show_member_count: s.goodbye_show_member_count,
-        goodbye_show_timestamp: s.goodbye_show_timestamp,
-        goodbye_use_embed: s.goodbye_use_embed,
-      };
-
-      setWelcomeSettings(wState);
-      setOrigWelcome(wState);
-      setGoodbyeSettings(gState);
-      setOrigGoodbye(gState);
-      setAllowMassMentions(Boolean(s.allow_mass_mentions));
+      setData(greetRes);
+      setFormData(greetRes.settings);
+      setInitialData(greetRes.settings);
+      setChannels(chanRes);
+      setRoles(roleRes);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to load greetings configuration');
+      toast.error(err.response?.data?.detail || 'Failed to load greeting configuration');
     } finally {
       setLoading(false);
     }
@@ -133,1017 +98,781 @@ export default function WelcomeGoodbye() {
     loadData();
   }, []);
 
-  const isWelcomeDirty = JSON.stringify(welcomeSettings) !== JSON.stringify(origWelcome);
-  const isGoodbyeDirty = JSON.stringify(goodbyeSettings) !== JSON.stringify(origGoodbye);
+  const hasChanges = JSON.stringify(formData) !== JSON.stringify(initialData);
 
-  const handleInsertVariable = (variableKey: string) => {
-    if (focusedField === 'welcome_title') {
-      const cur = welcomeSettings.welcome_title || '';
-      setWelcomeSettings({ ...welcomeSettings, welcome_title: cur + variableKey });
-      welcomeTitleRef.current?.focus();
-    } else if (focusedField === 'welcome_desc') {
-      const cur = welcomeSettings.welcome_description || '';
-      setWelcomeSettings({ ...welcomeSettings, welcome_description: cur + variableKey });
-      welcomeDescRef.current?.focus();
-    } else if (focusedField === 'welcome_footer') {
-      const cur = welcomeSettings.welcome_footer || '';
-      setWelcomeSettings({ ...welcomeSettings, welcome_footer: cur + variableKey });
-      welcomeFooterRef.current?.focus();
-    } else if (focusedField === 'goodbye_title') {
-      const cur = goodbyeSettings.goodbye_title || '';
-      setGoodbyeSettings({ ...goodbyeSettings, goodbye_title: cur + variableKey });
-      goodbyeTitleRef.current?.focus();
-    } else if (focusedField === 'goodbye_desc') {
-      const cur = goodbyeSettings.goodbye_description || '';
-      setGoodbyeSettings({ ...goodbyeSettings, goodbye_description: cur + variableKey });
-      goodbyeDescRef.current?.focus();
-    } else if (focusedField === 'goodbye_footer') {
-      const cur = goodbyeSettings.goodbye_footer || '';
-      setGoodbyeSettings({ ...goodbyeSettings, goodbye_footer: cur + variableKey });
-      goodbyeFooterRef.current?.focus();
-    }
+  const handleFieldChange = (updates: Partial<ServerGreetingSettings>) => {
+    if (!formData) return;
+    setFormData({ ...formData, ...updates });
   };
 
-  const handleSaveWelcome = async () => {
-    try {
-      setSavingWelcome(true);
-      const res = await greetingsApi.updateGreetings({
-        ...welcomeSettings,
-        allow_mass_mentions: allowMassMentions,
-      });
-      toast.success('Welcome settings saved successfully');
-      setOrigWelcome(welcomeSettings);
-      if (res.settings) {
-        setData((prev) => (prev ? { ...prev, settings: res.settings } : prev));
-      }
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to save welcome settings');
-    } finally {
-      setSavingWelcome(false);
-    }
+  const insertVariable = (variableKey: string) => {
+    if (!formData || !activeInput) return;
+    const current = (formData as any)[activeInput] || '';
+    const updated = current ? `${current}${variableKey}` : variableKey;
+    handleFieldChange({ [activeInput]: updated });
   };
 
-  const handleSaveGoodbye = async () => {
+  const handleSave = async () => {
+    if (!formData) return;
+    setSaving(true);
     try {
-      setSavingGoodbye(true);
-      const res = await greetingsApi.updateGreetings({
-        ...goodbyeSettings,
-        allow_mass_mentions: allowMassMentions,
-      });
-      toast.success('Goodbye settings saved successfully');
-      setOrigGoodbye(goodbyeSettings);
-      if (res.settings) {
-        setData((prev) => (prev ? { ...prev, settings: res.settings } : prev));
-      }
+      const res = await greetingsApi.updateGreetings(formData);
+      setFormData(res.settings);
+      setInitialData(res.settings);
+      toast.success('Greetings settings saved successfully!');
+      loadData();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to save goodbye settings');
+      toast.error(err.response?.data?.detail || 'Failed to save settings');
     } finally {
-      setSavingGoodbye(false);
+      setSaving(false);
     }
   };
 
   const handleTestWelcome = async () => {
+    setTestingWelcome(true);
     try {
-      setTestingWelcome(true);
       const res = await greetingsApi.testWelcome();
-      toast.success(res.message || 'Test welcome message sent to Discord!');
-      const refreshed = await greetingsApi.getGreetings();
-      setData(refreshed);
+      toast.success(res.message);
+      loadData();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to send test welcome message');
+      toast.error(err.response?.data?.detail || 'Test welcome message failed');
     } finally {
       setTestingWelcome(false);
     }
   };
 
   const handleTestGoodbye = async () => {
+    setTestingGoodbye(true);
     try {
-      setTestingGoodbye(true);
       const res = await greetingsApi.testGoodbye();
-      toast.success(res.message || 'Test goodbye message sent to Discord!');
-      const refreshed = await greetingsApi.getGreetings();
-      setData(refreshed);
+      toast.success(res.message);
+      loadData();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to send test goodbye message');
+      toast.error(err.response?.data?.detail || 'Test goodbye message failed');
     } finally {
       setTestingGoodbye(false);
     }
   };
 
-  const handleConfirmReset = async () => {
-    if (!resetModal) return;
-    const system = resetModal;
-    setResetModal(null);
+  const handleTestDM = async (type: 'welcome-dm' | 'goodbye-dm') => {
     try {
-      const res = await greetingsApi.resetSystem(system);
+      const res = await greetingsApi.testGreeting(type);
       toast.success(res.message);
-      await loadData();
+      loadData();
     } catch (err: any) {
-      toast.error(err.message || `Failed to reset ${system} settings`);
+      toast.error(err.response?.data?.detail || 'Test DM failed');
     }
   };
 
-  const handleToggleMassMentions = async (checked: boolean) => {
-    setAllowMassMentions(checked);
+  const handleReset = async (systemType: 'welcome' | 'goodbye' | 'welcome_dm' | 'goodbye_dm' | 'rules') => {
     try {
-      await greetingsApi.updateGreetings({ allow_mass_mentions: checked });
-      toast.success(checked ? 'Mass mentions enabled' : 'Mass mentions disabled');
+      const res = await greetingsApi.resetSystem(systemType);
+      setFormData(res.settings);
+      setInitialData(res.settings);
+      toast.success(res.message);
+      loadData();
     } catch (err: any) {
-      setAllowMassMentions(!checked);
-      toast.error(err.message || 'Failed to update mass mentions setting');
+      toast.error(err.response?.data?.detail || `Failed to reset ${systemType}`);
     }
   };
-
-  if (loading) {
+  if (loading || !formData || !data) {
     return (
-      <div className="space-y-6 max-w-7xl mx-auto pb-12">
-        <div className="h-8 w-64 bg-gray-800 animate-pulse rounded" />
-        <LoadingSkeleton rows={8} />
+      <div className="p-8 max-w-7xl mx-auto space-y-6">
+        <LoadingSkeleton className="h-28 w-full rounded-2xl" />
+        <LoadingSkeleton className="h-96 w-full rounded-2xl" />
       </div>
     );
   }
 
-  const serverName = data?.server?.server_name || 'PB HERO SERVER';
-  const serverId = data?.server?.server_id || 'Configured Guild';
-  const memberCount = data?.server?.member_count || 142;
-  const isBotOnline = data?.server?.bot_online ?? false;
-
-  const selectedWelcomeChannel = channels.find(
-    (c) => String(c.id) === String(welcomeSettings.welcome_channel_id)
-  );
-  const selectedGoodbyeChannel = channels.find(
-    (c) => String(c.id) === String(goodbyeSettings.goodbye_channel_id)
-  );
-
-  const categories = Array.from(new Set(channels.map((c) => c.category || 'Uncategorized')));
-
-  const renderPreviewText = (template?: string | null, isGoodbye: boolean = false) => {
-    if (!template) return '';
-    return template
-      .replace(/\{username\}/g, isGoodbye ? 'LeavingUser' : 'NewMember')
-      .replace(/\{display_name\}/g, isGoodbye ? 'Leaving User' : 'New Member')
-      .replace(/\{user_mention\}/g, isGoodbye ? '@LeavingUser' : '@NewMember')
-      .replace(/\{user_id\}/g, '987654321012345678')
-      .replace(/\{server_name\}/g, serverName)
-      .replace(/\{server_id\}/g, serverId)
-      .replace(/\{member_count\}/g, String(memberCount))
-      .replace(/\{account_created\}/g, '2023-08-15')
-      .replace(/\{joined_at\}/g, 'Just now')
-      .replace(/\{left_at\}/g, 'Just now');
-  };
+  const serverName = data.server.server_name || 'PB HERO SERVER';
+  const serverId = data.server.server_id || '0';
 
   return (
-    <div className="space-y-8 animate-fade-in max-w-7xl mx-auto pb-16">
-      {/* Top Banner: Connected Server Info */}
-      <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-[#5865F2]/5 rounded-full blur-3xl pointer-events-none" />
+    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-8 animate-fade-in pb-24">
+      {/* 1. Header Banner */}
+      <div className="bg-gradient-to-r from-gray-900 via-gray-850 to-gray-900 border border-gray-800 rounded-3xl p-6 md:p-8 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#5865F2] to-[#3b47c3] flex items-center justify-center font-black text-white text-xl shadow-lg shadow-[#5865F2]/20">
-              <Server className="w-7 h-7" />
+        <div className="flex flex-wrap items-center justify-between gap-6 relative z-10">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-indigo-400">
+              <Server className="w-4 h-4" />
+              <span>Personal Guild Automation</span>
             </div>
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-2xl font-black text-white tracking-tight">
-                  SERVER GREETINGS AUTOMATION
-                </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-[#5865F2]/20 text-[#858eff] border border-[#5865F2]/30">
-                  SINGLE SERVER BOT
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-4 mt-1.5 text-xs text-gray-400">
-                <span className="flex items-center gap-1.5 text-gray-200 font-semibold">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  {serverName}
-                </span>
-                <span className="text-gray-600">•</span>
-                <span>Server ID: <code className="font-mono text-gray-300">{serverId}</code></span>
-                <span className="text-gray-600">•</span>
-                <span>Total Members: <strong className="text-white">{memberCount}</strong></span>
-                <span className="text-gray-600">•</span>
-                <span className="flex items-center gap-1">
-                  Bot Status:
-                  {isBotOnline ? (
-                    <span className="text-emerald-400 font-medium">Online & Ready</span>
-                  ) : (
-                    <span className="text-amber-400 font-medium">Connecting...</span>
-                  )}
-                </span>
-              </div>
-            </div>
+            <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight flex items-center gap-3">
+              Server Greetings & Member Onboarding
+            </h1>
+            <p className="text-gray-400 text-sm max-w-2xl">
+              Professional automated welcome announcements, rules delivery, direct messages, auto-role assignment, and permanent server invite management for <strong className="text-white">{serverName}</strong>.
+            </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="bg-[#0f1218] px-4 py-2.5 rounded-xl border border-gray-800 text-center">
-              <div className="text-[10px] font-semibold text-gray-400 uppercase">Welcome Sent Today</div>
-              <div className="text-lg font-black text-emerald-400">
-                {data?.stats?.welcome_sent_today ?? 0}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-gray-950/60 p-4 rounded-2xl border border-gray-800 shrink-0">
+            {data.server.server_icon ? (
+              <img src={data.server.server_icon} alt="Server" className="w-12 h-12 rounded-xl object-cover shadow" />
+            ) : (
+              <div className="w-12 h-12 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center font-black">
+                PB
               </div>
-            </div>
-            <div className="bg-[#0f1218] px-4 py-2.5 rounded-xl border border-gray-800 text-center">
-              <div className="text-[10px] font-semibold text-gray-400 uppercase">Goodbye Sent Today</div>
-              <div className="text-lg font-black text-rose-400">
-                {data?.stats?.goodbye_sent_today ?? 0}
+            )}
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-white text-sm">{serverName}</span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+                  ONLINE
+                </span>
+              </div>
+              <div className="text-xs text-gray-500 font-mono mt-0.5">
+                ID: {serverId} • {data.server.member_count} members
               </div>
             </div>
           </div>
         </div>
+
+        {/* System Stats Bar */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mt-6 pt-6 border-t border-gray-800/80">
+          <div className="bg-gray-950/40 p-3 rounded-xl border border-gray-800/60">
+            <span className="text-[11px] text-gray-500 block truncate">Welcome Sent</span>
+            <span className="text-base font-extrabold text-white">{data.stats.welcome_sent_today}</span>
+          </div>
+          <div className="bg-gray-950/40 p-3 rounded-xl border border-gray-800/60">
+            <span className="text-[11px] text-gray-500 block truncate">Welcome DMs</span>
+            <span className="text-base font-extrabold text-emerald-400">{data.stats.welcome_dms_today ?? 0}</span>
+          </div>
+          <div className="bg-gray-950/40 p-3 rounded-xl border border-gray-800/60">
+            <span className="text-[11px] text-gray-500 block truncate">Rules Delivered</span>
+            <span className="text-base font-extrabold text-fuchsia-400">{data.stats.rules_delivered_today ?? 0}</span>
+          </div>
+          <div className="bg-gray-950/40 p-3 rounded-xl border border-gray-800/60">
+            <span className="text-[11px] text-gray-500 block truncate">Roles Assigned</span>
+            <span className="text-base font-extrabold text-cyan-400">{data.stats.roles_assigned_today ?? 0}</span>
+          </div>
+          <div className="bg-gray-950/40 p-3 rounded-xl border border-gray-800/60">
+            <span className="text-[11px] text-gray-500 block truncate">Goodbye Sent</span>
+            <span className="text-base font-extrabold text-rose-400">{data.stats.goodbye_sent_today}</span>
+          </div>
+          <div className="bg-gray-950/40 p-3 rounded-xl border border-gray-800/60">
+            <span className="text-[11px] text-gray-500 block truncate">Goodbye DMs</span>
+            <span className="text-base font-extrabold text-amber-400">{data.stats.goodbye_dms_today ?? 0}</span>
+          </div>
+          <div className="bg-gray-950/40 p-3 rounded-xl border border-gray-800/60">
+            <span className="text-[11px] text-gray-500 block truncate">DM Failures</span>
+            <span className="text-base font-extrabold text-gray-400">{data.stats.dm_failures_today ?? 0}</span>
+          </div>
+        </div>
+      </div>
+      {/* 2. Unsaved Changes Alert Bar */}
+      {hasChanges && (
+        <div className="sticky top-4 z-40 bg-indigo-950/90 backdrop-blur-md border border-indigo-700/80 p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-4 animate-bounce-subtle">
+          <div className="flex items-center gap-2.5 text-indigo-200 text-sm">
+            <Sparkles className="w-5 h-5 text-indigo-400 shrink-0" />
+            <span>You have unsaved changes in greeting or onboarding configuration.</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setFormData(initialData)}
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-bold transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 transition-all"
+            >
+              <Save className="w-4 h-4" />
+              {saving ? 'Saving...' : 'Save All Settings'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Navigation Tabs */}
+      <div className="flex flex-wrap gap-2 border-b border-gray-800 pb-3">
+        {[
+          { id: 'welcome', label: 'Public Welcome', icon: UserPlus, count: formData.welcome_enabled ? 'ON' : 'OFF' },
+          { id: 'goodbye', label: 'Public Goodbye', icon: UserMinus, count: formData.goodbye_enabled ? 'ON' : 'OFF' },
+          { id: 'rules', label: 'Rules & Auto Role', icon: BookOpen, count: formData.rules_delivery_enabled || formData.auto_role_enabled ? 'ON' : 'OFF' },
+          { id: 'dms', label: 'Welcome & Goodbye DMs', icon: Mail, count: formData.welcome_dm_enabled || formData.goodbye_dm_enabled ? 'ON' : 'OFF' },
+          { id: 'invite', label: 'Permanent Invite', icon: Link2, count: data.invite?.is_active ? 'ACTIVE' : 'IDLE' },
+          { id: 'activity', label: 'Activity & Audit', icon: History, count: data.recent_activity.length },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id} data-testid={`tab-${tab.id}`} type="button"
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                isActive
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
+                  : 'bg-gray-850 hover:bg-gray-800 text-gray-400 hover:text-white border border-gray-800'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              <span>{tab.label}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${
+                isActive ? 'bg-indigo-700/80 text-white' : 'bg-gray-800 text-gray-400'
+              }`}>
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Main Two-Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* ================= WELCOME SYSTEM CARD ================= */}
-        <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col justify-between space-y-6">
-          <div className="space-y-6">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
+      {/* TAB CONTENT 1: Public Welcome */}
+      {activeTab === 'welcome' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <div className="lg:col-span-7 bg-gray-850 rounded-2xl border border-gray-800 shadow-xl overflow-hidden">
+            <div className="p-6 border-b border-gray-800 flex items-center justify-between gap-4 bg-gray-900/60">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                <div className="p-2.5 bg-indigo-500/10 rounded-xl border border-indigo-500/20 text-indigo-400">
                   <UserPlus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-white tracking-wide">WELCOME SYSTEM</h2>
-                  <p className="text-xs text-gray-400">Sent automatically when a new member joins</p>
+                  <div className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-400">WELCOME SYSTEM</div><h2 className="text-lg font-bold text-white">Public Welcome Channel Message</h2>
+                  <p className="text-xs text-gray-400">Sent automatically when a member joins the server.</p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
-                <span
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider ${
-                    welcomeSettings.welcome_enabled
-                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-gray-800 text-gray-400 border border-gray-700'
-                  }`}
-                >
-                  {welcomeSettings.welcome_enabled ? 'ACTIVE' : 'DISABLED'}
-                </span>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(welcomeSettings.welcome_enabled)}
-                    onChange={(e) =>
-                      setWelcomeSettings({
-                        ...welcomeSettings,
-                        welcome_enabled: e.target.checked,
-                      })
-                    }
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500" />
-                </label>
-              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={Boolean(formData.welcome_enabled)}
+                  onChange={(e) => handleFieldChange({ welcome_enabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+              </label>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-2">
-                <Hash className="w-3.5 h-3.5 text-[#5865F2]" />
-                Destination Channel
-              </label>
-              <select
-                value={welcomeSettings.welcome_channel_id || ''}
-                onChange={(e) =>
-                  setWelcomeSettings({
-                    ...welcomeSettings,
-                    welcome_channel_id: e.target.value || null,
-                  })
-                }
-                className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-[#5865F2] transition-colors"
-              >
-                <option value="">-- Select Discord Text Channel --</option>
-                {categories.map((cat) => (
-                  <optgroup key={cat} label={`📂 ${cat}`}>
-                    {channels
-                      .filter((c) => (c.category || 'Uncategorized') === cat)
-                      .map((c) => (
-                        <option
-                          key={c.id}
-                          value={c.id}
-                          disabled={!c.is_selectable}
-                        >
-                          #{c.name} {c.type === 'announcement' ? '📢' : ''} (ID: {c.id}) {!c.is_selectable ? '— [No Send Permission]' : ''}
-                        </option>
-                      ))}
-                  </optgroup>
-                ))}
-              </select>
+            <div className="p-6 space-y-6">
+              {/* Channel Selector */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                  Destination Channel
+                </label>
+                <select
+                  value={formData.welcome_channel_id || ''}
+                  onChange={(e) => handleFieldChange({ welcome_channel_id: e.target.value || null })}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">-- Select Discord Channel --</option>
+                  {channels.map((ch) => (
+                    <option key={ch.id} value={ch.id}>
+                      #{ch.name} ({ch.category}) {ch.can_send ? '✅' : '⚠️ Lacks Send'}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              <div className="bg-[#0b0e14] border border-gray-800 rounded-xl p-3.5 space-y-2 text-xs">
-                <div className="flex items-center justify-between text-[11px] font-bold text-gray-400 uppercase tracking-wider">
-                  <span>Bot Channel Access</span>
-                  {selectedWelcomeChannel && (
-                    <span className="font-mono text-gray-300">#{selectedWelcomeChannel.name}</span>
+              {/* Permission Telemetry */}
+              {formData.welcome_channel_id && (
+                <div className="p-4 bg-gray-900/60 rounded-xl border border-gray-800 space-y-2 text-xs">
+                  <span className="font-bold text-gray-300 uppercase tracking-wider text-[11px] block">
+                    Bot Channel Access Telemetry
+                  </span>
+                  <div className="flex flex-wrap gap-4 text-gray-400">
+                    <span className="flex items-center gap-1.5">
+                      {data.welcome_channel_status.can_view ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-rose-400" />}
+                      View Channel
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      {data.welcome_channel_status.can_send ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-rose-400" />}
+                      Send Messages
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      {data.welcome_channel_status.can_embed ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-rose-400" />}
+                      Embed Links
+                    </span>
+                  </div>
+                  {data.welcome_channel_status.warning && (
+                    <p className="text-amber-400 text-xs flex items-center gap-1 mt-1">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      {data.welcome_channel_status.warning}
+                    </p>
                   )}
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center pt-1">
-                  <div className="bg-[#151921] p-2 rounded-lg border border-gray-800">
-                    <div className="text-[10px] text-gray-400 mb-1">View Channel</div>
-                    {selectedWelcomeChannel?.can_view ? (
-                      <span className="text-emerald-400 font-bold flex items-center justify-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> YES
-                      </span>
-                    ) : (
-                      <span className="text-rose-400 font-bold flex items-center justify-center gap-1">
-                        <XCircle className="w-3.5 h-3.5" /> NO
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-[#151921] p-2 rounded-lg border border-gray-800">
-                    <div className="text-[10px] text-gray-400 mb-1">Send Messages</div>
-                    {selectedWelcomeChannel?.can_send ? (
-                      <span className="text-emerald-400 font-bold flex items-center justify-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> YES
-                      </span>
-                    ) : (
-                      <span className="text-rose-400 font-bold flex items-center justify-center gap-1">
-                        <XCircle className="w-3.5 h-3.5" /> NO
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-[#151921] p-2 rounded-lg border border-gray-800">
-                    <div className="text-[10px] text-gray-400 mb-1">Embed Links</div>
-                    {selectedWelcomeChannel?.can_embed ? (
-                      <span className="text-emerald-400 font-bold flex items-center justify-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> YES
-                      </span>
-                    ) : (
-                      <span className="text-rose-400 font-bold flex items-center justify-center gap-1">
-                        <XCircle className="w-3.5 h-3.5" /> NO
-                      </span>
-                    )}
-                  </div>
+              )}
+
+              {/* Visual Toggles */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3 bg-gray-900/40 rounded-xl border border-gray-800 text-xs text-gray-300">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_use_embed}
+                    onChange={(e) => handleFieldChange({ welcome_use_embed: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Use Rich Embed
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_mention_user}
+                    onChange={(e) => handleFieldChange({ welcome_mention_user: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Mention Member
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_show_avatar}
+                    onChange={(e) => handleFieldChange({ welcome_show_avatar: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Show Avatar
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_show_server_icon}
+                    onChange={(e) => handleFieldChange({ welcome_show_server_icon: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Server Icon
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_show_timestamp}
+                    onChange={(e) => handleFieldChange({ welcome_show_timestamp: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Timestamp
+                </label>
+              </div>
+
+              {/* Template Editor */}
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Message / Embed Title
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.welcome_title ?? ''}
+                    onFocus={() => setActiveInput('welcome_title')}
+                    onChange={(e) => handleFieldChange({ welcome_title: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
                 </div>
 
-                {welcomeSettings.welcome_channel_id && selectedWelcomeChannel && (!selectedWelcomeChannel.can_send || !selectedWelcomeChannel.can_view) && (
-                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-2.5 text-rose-300 text-xs flex items-center gap-2 mt-2">
-                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                    <span>Selected channel is unavailable or bot lacks SEND_MESSAGES permission.</span>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Message Description
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={formData.welcome_description ?? ''}
+                    onFocus={() => setActiveInput('welcome_description')}
+                    onChange={(e) => handleFieldChange({ welcome_description: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Footer
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.welcome_footer ?? ''}
+                    onFocus={() => setActiveInput('welcome_footer')}
+                    onChange={(e) => handleFieldChange({ welcome_footer: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* Variable Insertion Chips */}
+                <div className="p-3 bg-gray-900/40 rounded-xl border border-gray-800 space-y-2">
+                  <span className="text-[11px] font-bold text-gray-400 flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-indigo-400" />
+                    Available Variables (Click to insert into focused field):
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {WELCOME_VARIABLES.map((v) => (
+                      <button
+                        key={v.key}
+                        type="button"
+                        onClick={() => insertVariable(v.key)}
+                        title={v.desc}
+                        className="px-2.5 py-1 bg-gray-800 hover:bg-indigo-950 hover:text-indigo-300 text-gray-300 rounded-lg text-xs font-mono border border-gray-700 transition-colors"
+                      >
+                        {v.key}
+                      </button>
+                    ))}
                   </div>
-                )}
-                {welcomeSettings.welcome_channel_id && !selectedWelcomeChannel && (
-                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 text-amber-300 text-xs flex items-center gap-2 mt-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Selected channel is unavailable. It may have been deleted in Discord.</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-[#0f1218] border border-gray-800 rounded-xl p-4 space-y-3">
-              <h3 className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                Visual Display Options
-              </h3>
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(welcomeSettings.welcome_use_embed)}
-                    onChange={(e) =>
-                      setWelcomeSettings({ ...welcomeSettings, welcome_use_embed: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-[#5865F2] focus:ring-0"
-                  />
-                  <span className="text-gray-300">Rich Embed</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(welcomeSettings.welcome_mention_user)}
-                    onChange={(e) =>
-                      setWelcomeSettings({ ...welcomeSettings, welcome_mention_user: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-[#5865F2] focus:ring-0"
-                  />
-                  <span className="text-gray-300">Mention New Member</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(welcomeSettings.welcome_show_avatar)}
-                    onChange={(e) =>
-                      setWelcomeSettings({ ...welcomeSettings, welcome_show_avatar: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-[#5865F2] focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show User Avatar</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(welcomeSettings.welcome_show_server_icon)}
-                    onChange={(e) =>
-                      setWelcomeSettings({ ...welcomeSettings, welcome_show_server_icon: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-[#5865F2] focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show Server Icon</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(welcomeSettings.welcome_show_member_count)}
-                    onChange={(e) =>
-                      setWelcomeSettings({ ...welcomeSettings, welcome_show_member_count: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-[#5865F2] focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show Member Count</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(welcomeSettings.welcome_show_timestamp)}
-                    onChange={(e) =>
-                      setWelcomeSettings({ ...welcomeSettings, welcome_show_timestamp: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-[#5865F2] focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show Timestamp</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-gray-300 block mb-1">
-                  Message / Embed Title
-                </label>
-                <input
-                  ref={welcomeTitleRef}
-                  type="text"
-                  value={welcomeSettings.welcome_title || ''}
-                  onFocus={() => setFocusedField('welcome_title')}
-                  onChange={(e) =>
-                    setWelcomeSettings({ ...welcomeSettings, welcome_title: e.target.value })
-                  }
-                  placeholder="👋 Welcome to {server_name}!"
-                  className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
-                />
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-gray-300 block mb-1">
-                  Message / Embed Description
-                </label>
-                <textarea
-                  ref={welcomeDescRef}
-                  rows={4}
-                  value={welcomeSettings.welcome_description || ''}
-                  onFocus={() => setFocusedField('welcome_desc')}
-                  onChange={(e) =>
-                    setWelcomeSettings({ ...welcomeSettings, welcome_description: e.target.value })
-                  }
-                  placeholder="Welcome {user_mention} to {server_name}! ❤️"
-                  className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2] font-mono"
-                />
-              </div>
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setShowResetWelcomeModal(true)}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors border border-gray-700"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset Welcome Template
+                </button>
 
-              <div>
-                <label className="text-xs font-semibold text-gray-300 block mb-1">Footer Text</label>
-                <input
-                  ref={welcomeFooterRef}
-                  type="text"
-                  value={welcomeSettings.welcome_footer || ''}
-                  onFocus={() => setFocusedField('welcome_footer')}
-                  onChange={(e) =>
-                    setWelcomeSettings({ ...welcomeSettings, welcome_footer: e.target.value })
-                  }
-                  placeholder="PB HERO SERVER"
-                  className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2]"
-                />
-              </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleTestWelcome}
+                    disabled={testingWelcome || !formData.welcome_channel_id}
+                    className="px-4 py-2 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-50"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    {testingWelcome ? 'Sending...' : 'Test Welcome'}
+                  </button>
 
-              <div className="bg-[#0b0e14] border border-gray-800 rounded-xl p-3 space-y-1.5">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
-                  Available Variables (Click to insert into focused field)
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {WELCOME_VARIABLES.map((v) => (
-                    <button
-                      key={v.key}
-                      type="button"
-                      title={v.desc}
-                      onClick={() => handleInsertVariable(v.key)}
-                      className="px-2 py-1 bg-[#151921] hover:bg-[#5865F2]/20 hover:text-[#858eff] border border-gray-800 hover:border-[#5865F2]/40 rounded text-[11px] font-mono text-gray-300 transition-colors"
-                    >
-                      {v.key}
-                    </button>
-                  ))}
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={saving || !hasChanges}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    Save Welcome
+                  </button>
                 </div>
               </div>
             </div>
+          </div>
 
+          <div className="lg:col-span-5 sticky top-24">
             <DiscordPreview
-              title={renderPreviewText(welcomeSettings.welcome_title, false)}
-              description={renderPreviewText(welcomeSettings.welcome_description, false)}
-              footer={renderPreviewText(welcomeSettings.welcome_footer, false)}
-              useEmbed={welcomeSettings.welcome_use_embed}
-              mentionUser={welcomeSettings.welcome_mention_user}
-              mentionTag="@NewMember"
-              showAvatar={welcomeSettings.welcome_show_avatar}
-              showServerIcon={welcomeSettings.welcome_show_server_icon}
-              showTimestamp={welcomeSettings.welcome_show_timestamp}
-              embedColor="#5865F2"
+              title={formData.welcome_title}
+              description={formData.welcome_description}
+              footer={formData.welcome_footer}
+              useEmbed={formData.welcome_use_embed}
+              mentionUser={formData.welcome_mention_user}
+              showAvatar={formData.welcome_show_avatar}
+              showServerIcon={formData.welcome_show_server_icon}
+              showTimestamp={formData.welcome_show_timestamp}
               serverName={serverName}
+              embedColor="#5865F2"
             />
           </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-gray-800">
-            <button
-              type="button"
-              onClick={() => setResetModal('welcome')}
-              className="px-3 py-2 text-xs font-semibold text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-xl transition-colors flex items-center gap-1.5"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reset Welcome
-            </button>
-
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                disabled={testingWelcome || !welcomeSettings.welcome_channel_id}
-                onClick={handleTestWelcome}
-                className="px-3.5 py-2 text-xs font-bold text-white bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-xl transition-all shadow flex items-center gap-1.5"
-              >
-                <Play className="w-3.5 h-3.5 text-emerald-400" />
-                {testingWelcome ? 'Testing...' : 'Test Welcome'}
-              </button>
-
-              <button
-                type="button"
-                disabled={savingWelcome || !isWelcomeDirty}
-                onClick={handleSaveWelcome}
-                className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-800 disabled:text-gray-600 rounded-xl transition-all shadow flex items-center gap-1.5"
-              >
-                <Save className="w-3.5 h-3.5" />
-                {savingWelcome ? 'Saving...' : 'Save Welcome'}
-              </button>
-            </div>
-          </div>
         </div>
-        {/* ================= GOODBYE SYSTEM CARD ================= */}
-        <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col justify-between space-y-6">
-          <div className="space-y-6">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-800">
+      )}
+
+      {/* TAB CONTENT 2: Public Goodbye */}
+      {activeTab === 'goodbye' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <div className="lg:col-span-7 bg-gray-850 rounded-2xl border border-gray-800 shadow-xl overflow-hidden">
+            <div className="p-6 border-b border-gray-800 flex items-center justify-between gap-4 bg-gray-900/60">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
+                <div className="p-2.5 bg-rose-500/10 rounded-xl border border-rose-500/20 text-rose-400">
                   <UserMinus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-white tracking-wide">GOODBYE SYSTEM</h2>
-                  <p className="text-xs text-gray-400">Sent automatically when a member leaves the server</p>
+                  <div className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400">GOODBYE SYSTEM</div><h2 className="text-lg font-bold text-white">Public Goodbye / Departure Message</h2>
+                  <p className="text-xs text-gray-400">Sent automatically when a member departs the server.</p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
-                <span
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider ${
-                    goodbyeSettings.goodbye_enabled
-                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-gray-800 text-gray-400 border border-gray-700'
-                  }`}
-                >
-                  {goodbyeSettings.goodbye_enabled ? 'ACTIVE' : 'DISABLED'}
-                </span>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(goodbyeSettings.goodbye_enabled)}
-                    onChange={(e) =>
-                      setGoodbyeSettings({
-                        ...goodbyeSettings,
-                        goodbye_enabled: e.target.checked,
-                      })
-                    }
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500" />
-                </label>
-              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={Boolean(formData.goodbye_enabled)}
+                  onChange={(e) => handleFieldChange({ goodbye_enabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-600"></div>
+              </label>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-2">
-                <Hash className="w-3.5 h-3.5 text-rose-400" />
-                Destination Channel
-              </label>
-              <select
-                value={goodbyeSettings.goodbye_channel_id || ''}
-                onChange={(e) =>
-                  setGoodbyeSettings({
-                    ...goodbyeSettings,
-                    goodbye_channel_id: e.target.value || null,
-                  })
-                }
-                className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-rose-500 transition-colors"
-              >
-                <option value="">-- Select Discord Text Channel --</option>
-                {categories.map((cat) => (
-                  <optgroup key={cat} label={`📂 ${cat}`}>
-                    {channels
-                      .filter((c) => (c.category || 'Uncategorized') === cat)
-                      .map((c) => (
-                        <option
-                          key={c.id}
-                          value={c.id}
-                          disabled={!c.is_selectable}
-                        >
-                          #{c.name} {c.type === 'announcement' ? '📢' : ''} (ID: {c.id}) {!c.is_selectable ? '— [No Send Permission]' : ''}
-                        </option>
-                      ))}
-                  </optgroup>
-                ))}
-              </select>
+            <div className="p-6 space-y-6">
+              {/* Channel Selector */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                  Destination Channel
+                </label>
+                <select
+                  value={formData.goodbye_channel_id || ''}
+                  onChange={(e) => handleFieldChange({ goodbye_channel_id: e.target.value || null })}
+                  className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-rose-500"
+                >
+                  <option value="">-- Select Discord Channel --</option>
+                  {channels.map((ch) => (
+                    <option key={ch.id} value={ch.id}>
+                      #{ch.name} ({ch.category}) {ch.can_send ? '✅' : '⚠️ Lacks Send'}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              <div className="bg-[#0b0e14] border border-gray-800 rounded-xl p-3.5 space-y-2 text-xs">
-                <div className="flex items-center justify-between text-[11px] font-bold text-gray-400 uppercase tracking-wider">
-                  <span>Bot Channel Access</span>
-                  {selectedGoodbyeChannel && (
-                    <span className="font-mono text-gray-300">#{selectedGoodbyeChannel.name}</span>
+              {/* Permission Telemetry */}
+              {formData.goodbye_channel_id && (
+                <div className="p-4 bg-gray-900/60 rounded-xl border border-gray-800 space-y-2 text-xs">
+                  <span className="font-bold text-gray-300 uppercase tracking-wider text-[11px] block">
+                    Bot Channel Access Telemetry
+                  </span>
+                  <div className="flex flex-wrap gap-4 text-gray-400">
+                    <span className="flex items-center gap-1.5">
+                      {data.goodbye_channel_status.can_view ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-rose-400" />}
+                      View Channel
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      {data.goodbye_channel_status.can_send ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-rose-400" />}
+                      Send Messages
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      {data.goodbye_channel_status.can_embed ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-rose-400" />}
+                      Embed Links
+                    </span>
+                  </div>
+                  {data.goodbye_channel_status.warning && (
+                    <p className="text-amber-400 text-xs flex items-center gap-1 mt-1">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      {data.goodbye_channel_status.warning}
+                    </p>
                   )}
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center pt-1">
-                  <div className="bg-[#151921] p-2 rounded-lg border border-gray-800">
-                    <div className="text-[10px] text-gray-400 mb-1">View Channel</div>
-                    {selectedGoodbyeChannel?.can_view ? (
-                      <span className="text-emerald-400 font-bold flex items-center justify-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> YES
-                      </span>
-                    ) : (
-                      <span className="text-rose-400 font-bold flex items-center justify-center gap-1">
-                        <XCircle className="w-3.5 h-3.5" /> NO
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-[#151921] p-2 rounded-lg border border-gray-800">
-                    <div className="text-[10px] text-gray-400 mb-1">Send Messages</div>
-                    {selectedGoodbyeChannel?.can_send ? (
-                      <span className="text-emerald-400 font-bold flex items-center justify-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> YES
-                      </span>
-                    ) : (
-                      <span className="text-rose-400 font-bold flex items-center justify-center gap-1">
-                        <XCircle className="w-3.5 h-3.5" /> NO
-                      </span>
-                    )}
-                  </div>
-                  <div className="bg-[#151921] p-2 rounded-lg border border-gray-800">
-                    <div className="text-[10px] text-gray-400 mb-1">Embed Links</div>
-                    {selectedGoodbyeChannel?.can_embed ? (
-                      <span className="text-emerald-400 font-bold flex items-center justify-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> YES
-                      </span>
-                    ) : (
-                      <span className="text-rose-400 font-bold flex items-center justify-center gap-1">
-                        <XCircle className="w-3.5 h-3.5" /> NO
-                      </span>
-                    )}
-                  </div>
+              )}
+
+              {/* Visual Toggles */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3 bg-gray-900/40 rounded-xl border border-gray-800 text-xs text-gray-300">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.goodbye_use_embed}
+                    onChange={(e) => handleFieldChange({ goodbye_use_embed: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-rose-600 focus:ring-rose-500"
+                  />
+                  Use Rich Embed
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.goodbye_mention_user}
+                    onChange={(e) => handleFieldChange({ goodbye_mention_user: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-rose-600 focus:ring-rose-500"
+                  />
+                  Mention Member
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.goodbye_show_avatar}
+                    onChange={(e) => handleFieldChange({ goodbye_show_avatar: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-rose-600 focus:ring-rose-500"
+                  />
+                  Show Avatar
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.goodbye_show_server_icon}
+                    onChange={(e) => handleFieldChange({ goodbye_show_server_icon: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-rose-600 focus:ring-rose-500"
+                  />
+                  Server Icon
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.goodbye_show_timestamp}
+                    onChange={(e) => handleFieldChange({ goodbye_show_timestamp: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-rose-600 focus:ring-rose-500"
+                  />
+                  Timestamp
+                </label>
+              </div>
+
+              {/* Template Editor */}
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Message / Embed Title
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.goodbye_title ?? ''}
+                    onFocus={() => setActiveInput('goodbye_title')}
+                    onChange={(e) => handleFieldChange({ goodbye_title: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-rose-500"
+                  />
                 </div>
 
-                {goodbyeSettings.goodbye_channel_id && selectedGoodbyeChannel && (!selectedGoodbyeChannel.can_send || !selectedGoodbyeChannel.can_view) && (
-                  <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg p-2.5 text-rose-300 text-xs flex items-center gap-2 mt-2">
-                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                    <span>Selected channel is unavailable or bot lacks SEND_MESSAGES permission.</span>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Message Description
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={formData.goodbye_description ?? ''}
+                    onFocus={() => setActiveInput('goodbye_description')}
+                    onChange={(e) => handleFieldChange({ goodbye_description: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-sm text-white font-mono focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Footer
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.goodbye_footer ?? ''}
+                    onFocus={() => setActiveInput('goodbye_footer')}
+                    onChange={(e) => handleFieldChange({ goodbye_footer: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                {/* Variable Insertion Chips */}
+                <div className="p-3 bg-gray-900/40 rounded-xl border border-gray-800 space-y-2">
+                  <span className="text-[11px] font-bold text-gray-400 flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-rose-400" />
+                    Available Variables (Click to insert into focused field):
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {GOODBYE_VARIABLES.map((v) => (
+                      <button
+                        key={v.key}
+                        type="button"
+                        onClick={() => insertVariable(v.key)}
+                        title={v.desc}
+                        className="px-2.5 py-1 bg-gray-800 hover:bg-rose-950 hover:text-rose-300 text-gray-300 rounded-lg text-xs font-mono border border-gray-700 transition-colors"
+                      >
+                        {v.key}
+                      </button>
+                    ))}
                   </div>
-                )}
-                {goodbyeSettings.goodbye_channel_id && !selectedGoodbyeChannel && (
-                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 text-amber-300 text-xs flex items-center gap-2 mt-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Selected channel is unavailable. It may have been deleted in Discord.</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-[#0f1218] border border-gray-800 rounded-xl p-4 space-y-3">
-              <h3 className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-rose-400" />
-                Visual Display Options
-              </h3>
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(goodbyeSettings.goodbye_use_embed)}
-                    onChange={(e) =>
-                      setGoodbyeSettings({ ...goodbyeSettings, goodbye_use_embed: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-rose-500 focus:ring-0"
-                  />
-                  <span className="text-gray-300">Rich Embed</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(goodbyeSettings.goodbye_mention_user)}
-                    onChange={(e) =>
-                      setGoodbyeSettings({ ...goodbyeSettings, goodbye_mention_user: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-rose-500 focus:ring-0"
-                  />
-                  <span className="text-gray-300">Mention User Tag</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(goodbyeSettings.goodbye_show_avatar)}
-                    onChange={(e) =>
-                      setGoodbyeSettings({ ...goodbyeSettings, goodbye_show_avatar: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-rose-500 focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show User Avatar</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(goodbyeSettings.goodbye_show_server_icon)}
-                    onChange={(e) =>
-                      setGoodbyeSettings({ ...goodbyeSettings, goodbye_show_server_icon: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-rose-500 focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show Server Icon</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(goodbyeSettings.goodbye_show_member_count)}
-                    onChange={(e) =>
-                      setGoodbyeSettings({ ...goodbyeSettings, goodbye_show_member_count: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-rose-500 focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show Member Count</span>
-                </label>
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(goodbyeSettings.goodbye_show_timestamp)}
-                    onChange={(e) =>
-                      setGoodbyeSettings({ ...goodbyeSettings, goodbye_show_timestamp: e.target.checked })
-                    }
-                    className="rounded bg-gray-900 border-gray-700 text-rose-500 focus:ring-0"
-                  />
-                  <span className="text-gray-300">Show Timestamp</span>
-                </label>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-gray-300 block mb-1">
-                  Message / Embed Title
-                </label>
-                <input
-                  ref={goodbyeTitleRef}
-                  type="text"
-                  value={goodbyeSettings.goodbye_title || ''}
-                  onFocus={() => setFocusedField('goodbye_title')}
-                  onChange={(e) =>
-                    setGoodbyeSettings({ ...goodbyeSettings, goodbye_title: e.target.value })
-                  }
-                  placeholder="👋 Goodbye {display_name}"
-                  className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
-                />
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-gray-300 block mb-1">
-                  Message / Embed Description
-                </label>
-                <textarea
-                  ref={goodbyeDescRef}
-                  rows={4}
-                  value={goodbyeSettings.goodbye_description || ''}
-                  onFocus={() => setFocusedField('goodbye_desc')}
-                  onChange={(e) =>
-                    setGoodbyeSettings({ ...goodbyeSettings, goodbye_description: e.target.value })
-                  }
-                  placeholder="**{display_name}** has left {server_name}."
-                  className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-rose-500 font-mono"
-                />
-              </div>
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setShowResetGoodbyeModal(true)}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors border border-gray-700"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset Goodbye Template
+                </button>
 
-              <div>
-                <label className="text-xs font-semibold text-gray-300 block mb-1">Footer Text</label>
-                <input
-                  ref={goodbyeFooterRef}
-                  type="text"
-                  value={goodbyeSettings.goodbye_footer || ''}
-                  onFocus={() => setFocusedField('goodbye_footer')}
-                  onChange={(e) =>
-                    setGoodbyeSettings({ ...goodbyeSettings, goodbye_footer: e.target.value })
-                  }
-                  placeholder="PB HERO SERVER"
-                  className="w-full bg-[#0f1218] border border-gray-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
-                />
-              </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleTestGoodbye}
+                    disabled={testingGoodbye || !formData.goodbye_channel_id}
+                    className="px-4 py-2 bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 border border-rose-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-50"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    {testingGoodbye ? 'Sending...' : 'Test Goodbye'}
+                  </button>
 
-              <div className="bg-[#0b0e14] border border-gray-800 rounded-xl p-3 space-y-1.5">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
-                  Available Variables (Click to insert into focused field)
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {GOODBYE_VARIABLES.map((v) => (
-                    <button
-                      key={v.key}
-                      type="button"
-                      title={v.desc}
-                      onClick={() => handleInsertVariable(v.key)}
-                      className="px-2 py-1 bg-[#151921] hover:bg-rose-500/20 hover:text-rose-300 border border-gray-800 hover:border-rose-500/40 rounded text-[11px] font-mono text-gray-300 transition-colors"
-                    >
-                      {v.key}
-                    </button>
-                  ))}
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={saving || !hasChanges}
+                    className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-rose-600/20 transition-all disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    Save Goodbye
+                  </button>
                 </div>
               </div>
             </div>
+          </div>
 
+          <div className="lg:col-span-5 sticky top-24">
             <DiscordPreview
-              title={renderPreviewText(goodbyeSettings.goodbye_title, true)}
-              description={renderPreviewText(goodbyeSettings.goodbye_description, true)}
-              footer={renderPreviewText(goodbyeSettings.goodbye_footer, true)}
-              useEmbed={goodbyeSettings.goodbye_use_embed}
-              mentionUser={goodbyeSettings.goodbye_mention_user}
-              mentionTag="@LeavingUser"
-              showAvatar={goodbyeSettings.goodbye_show_avatar}
-              showServerIcon={goodbyeSettings.goodbye_show_server_icon}
-              showTimestamp={goodbyeSettings.goodbye_show_timestamp}
-              embedColor="#ED4245"
+              title={formData.goodbye_title}
+              description={formData.goodbye_description}
+              footer={formData.goodbye_footer}
+              useEmbed={formData.goodbye_use_embed}
+              mentionUser={formData.goodbye_mention_user}
+              showAvatar={formData.goodbye_show_avatar}
+              showServerIcon={formData.goodbye_show_server_icon}
+              showTimestamp={formData.goodbye_show_timestamp}
               serverName={serverName}
+              embedColor="#ED4245"
             />
           </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-gray-800">
-            <button
-              type="button"
-              onClick={() => setResetModal('goodbye')}
-              className="px-3 py-2 text-xs font-semibold text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-xl transition-colors flex items-center gap-1.5"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reset Goodbye
-            </button>
-
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                disabled={testingGoodbye || !goodbyeSettings.goodbye_channel_id}
-                onClick={handleTestGoodbye}
-                className="px-3.5 py-2 text-xs font-bold text-white bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-xl transition-all shadow flex items-center gap-1.5"
-              >
-                <Play className="w-3.5 h-3.5 text-rose-400" />
-                {testingGoodbye ? 'Testing...' : 'Test Goodbye'}
-              </button>
-
-              <button
-                type="button"
-                disabled={savingGoodbye || !isGoodbyeDirty}
-                onClick={handleSaveGoodbye}
-                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 disabled:bg-gray-800 disabled:text-gray-600 rounded-xl transition-all shadow flex items-center gap-1.5"
-              >
-                <Save className="w-3.5 h-3.5" />
-                {savingGoodbye ? 'Saving...' : 'Save Goodbye'}
-              </button>
-            </div>
-          </div>
         </div>
-      </div>
+      )}
 
-      {/* Advanced Settings */}
-      <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
-            <ShieldAlert className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-white tracking-wide">ADVANCED SETTINGS & SAFETY CONTROLS</h3>
-            <p className="text-xs text-gray-400">Protections against accidental mass server notifications</p>
-          </div>
-        </div>
+      {/* TAB CONTENT 3: Rules & Auto-Role */}
+      {activeTab === 'rules' && (
+        <RulesAndRoleCard
+          settings={formData}
+          onChange={handleFieldChange}
+          channels={channels}
+          roles={roles}
+          onResetRules={() => handleReset('rules')}
+          serverName={serverName}
+          serverId={serverId}
+        />
+      )}
 
-        <div className="bg-[#0b0e14] border border-gray-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="text-xs font-bold text-white flex items-center gap-2">
-              <span>Allow Mass Mentions (@everyone, @here)</span>
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                DEFAULT: OFF
-              </span>
-            </div>
-            <p className="text-xs text-gray-400 max-w-2xl leading-relaxed">
-              When disabled, any accidental @everyone or @here in templates will be rejected at save time and sanitized in Discord delivery to prevent unexpected server-wide pings.
-            </p>
-          </div>
-          <label className="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              checked={allowMassMentions}
-              onChange={(e) => handleToggleMassMentions(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500" />
-          </label>
-        </div>
-      </div>
+      {/* TAB CONTENT 4: Direct Messages */}
+      {activeTab === 'dms' && (
+        <DirectMessagesCard
+          settings={formData}
+          onChange={handleFieldChange}
+          onTestWelcomeDM={() => handleTestDM('welcome-dm')}
+          onTestGoodbyeDM={() => handleTestDM('goodbye-dm')}
+          onResetWelcomeDM={() => handleReset('welcome_dm')}
+          onResetGoodbyeDM={() => handleReset('goodbye_dm')}
+          serverName={serverName}
+        />
+      )}
 
-      {/* Recent Activity */}
-      <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#5865F2]/10 text-[#858eff] flex items-center justify-center">
-              <Clock className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white tracking-wide">RECENT GREETING ACTIVITY</h3>
-              <p className="text-xs text-gray-400">Live delivery logs for joins, departures, and test dispatches</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={loadData}
-            className="text-xs text-gray-400 hover:text-white px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-1.5"
-          >
-            <RotateCcw className="w-3 h-3" /> Refresh
-          </button>
-        </div>
+      {/* TAB CONTENT 5: Permanent Invite Manager */}
+      {activeTab === 'invite' && (
+        <InviteManagerCard
+          invite={data.invite}
+          channels={channels}
+          onRefresh={loadData}
+          welcomeChannelId={formData.welcome_channel_id}
+        />
+      )}
 
-        {data?.recent_activity && data.recent_activity.length > 0 ? (
-          <div className="overflow-x-auto rounded-xl border border-gray-800">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#0b0e14] text-gray-400 uppercase text-[10px] tracking-wider border-b border-gray-800">
-                <tr>
-                  <th className="py-3 px-4">Timestamp</th>
-                  <th className="py-3 px-4">Event</th>
-                  <th className="py-3 px-4">Member / Username</th>
-                  <th className="py-3 px-4">Target Channel</th>
-                  <th className="py-3 px-4">Delivery Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-800/60 font-mono">
-                {data.recent_activity.map((act) => (
-                  <tr key={act.id} className="hover:bg-gray-800/30 transition-colors">
-                    <td className="py-3 px-4 text-gray-400 whitespace-nowrap">
-                      {new Date(act.timestamp).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                      })}
-                    </td>
-                    <td className="py-3 px-4">
-                      {act.event_type === 'welcome' ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 uppercase">
-                          WELCOME {act.is_test ? '🧪 TEST' : ''}
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 uppercase">
-                          GOODBYE {act.is_test ? '🧪 TEST' : ''}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 font-sans text-gray-200 font-medium">
-                      {act.username}
-                    </td>
-                    <td className="py-3 px-4 text-gray-300">
-                      #{act.channel_name}
-                    </td>
-                    <td className="py-3 px-4">
-                      {act.status === 'delivered' ? (
-                        <span className="inline-flex items-center gap-1.5 text-emerald-400 font-sans font-semibold">
-                          <CheckCircle className="w-3.5 h-3.5" /> Delivered
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 text-rose-400 font-sans font-semibold" title={act.error_message || ''}>
-                          <XCircle className="w-3.5 h-3.5" /> Failed
-                          {act.error_message && (
-                            <span className="text-[10px] text-gray-400 font-mono">({act.error_message})</span>
-                          )}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="p-8 text-center bg-[#0b0e14] border border-gray-800 rounded-xl text-gray-400 text-xs">
-            No recent welcome or goodbye activity recorded yet.
-          </div>
-        )}
-      </div>
+      {/* TAB CONTENT 6: Recent Activity & Audit */}
+      {activeTab === 'activity' && (
+        <RecentActivityTable activities={data.recent_activity || []} />
+      )}
+
+      {/* Modals */}
+      <ConfirmModal
+        isOpen={showResetWelcomeModal}
+        onCancel={() => setShowResetWelcomeModal(false)}
+        onConfirm={() => {
+          handleReset('welcome');
+          setShowResetWelcomeModal(false);
+        }}
+        title="Reset Welcome Settings?"
+        message="Are you sure you want to reset the public welcome template to defaults? Any custom message or title will be restored."
+        confirmText="Reset to Default"
+      />
 
       <ConfirmModal
-        isOpen={Boolean(resetModal)}
-        title={`Reset ${resetModal === 'welcome' ? 'Welcome' : 'Goodbye'} Settings?`}
-        message={`Are you sure you want to reset the ${
-          resetModal === 'welcome' ? 'Welcome' : 'Goodbye'
-        } message template and settings back to system defaults? The other greeting system will remain untouched.`}
+        isOpen={showResetGoodbyeModal}
+        onCancel={() => setShowResetGoodbyeModal(false)}
+        onConfirm={() => {
+          handleReset('goodbye');
+          setShowResetGoodbyeModal(false);
+        }}
+        title="Reset Goodbye Settings?"
+        message="Are you sure you want to reset the public goodbye template to defaults? Any custom title, message, or footer will be restored."
         confirmText="Reset to Default"
-        isDangerous={true}
-        onConfirm={handleConfirmReset}
-        onCancel={() => setResetModal(null)}
       />
     </div>
   );
-}
+};
+
+export default WelcomeGoodbye;
+
+
+

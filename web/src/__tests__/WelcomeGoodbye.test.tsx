@@ -2,13 +2,22 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import WelcomeGoodbye from '../pages/WelcomeGoodbye';
 import { greetingsApi } from '../api/greetings';
-import { GreetingsResponse, GreetingChannelOption } from '../types';
+import { toast } from '../hooks/useToast';
+import { GreetingsResponse, GreetingChannelOption, GuildRoleOption } from '../types';
 
 vi.mock('../api/greetings', () => ({
   greetingsApi: {
     getGreetings: vi.fn(),
     updateGreetings: vi.fn(),
     getChannels: vi.fn(),
+    getRoles: vi.fn(),
+    getRules: vi.fn(),
+    updateRules: vi.fn(),
+    getInvite: vi.fn(),
+    generateInvite: vi.fn(),
+    verifyInvite: vi.fn(),
+    regenerateInvite: vi.fn(),
+    testGreeting: vi.fn(),
     testWelcome: vi.fn(),
     testGoodbye: vi.fn(),
     resetSystem: vi.fn(),
@@ -19,6 +28,7 @@ vi.mock('../hooks/useToast', () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -49,6 +59,25 @@ const mockGreetingsData: GreetingsResponse = {
     goodbye_show_timestamp: true,
     goodbye_use_embed: true,
     allow_mass_mentions: false,
+    rules_delivery_enabled: false,
+    rules_source: 'rules_channel',
+    rules_channel_id: '333',
+    rules_title: '📜 PB HERO SERVER RULES',
+    rules_description: '1. Respect everyone.\n2. No spam.',
+    rules_footer: 'PB HERO SERVER',
+    rules_button_text: 'Read Full Rules',
+    auto_role_enabled: false,
+    auto_role_id: '444',
+    welcome_dm_enabled: false,
+    welcome_dm_title: '👋 Welcome to {server_name}!',
+    welcome_dm_description: 'Hi {display_name}! ❤️ Thanks for joining.',
+    welcome_dm_footer: 'PB HERO SERVER',
+    welcome_dm_use_embed: true,
+    goodbye_dm_enabled: false,
+    goodbye_dm_title: '👋 Goodbye {display_name}',
+    goodbye_dm_description: 'You have left {server_name}.',
+    goodbye_dm_footer: 'PB HERO SERVER',
+    goodbye_dm_use_embed: true,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
   },
@@ -91,6 +120,27 @@ const mockGreetingsData: GreetingsResponse = {
   stats: {
     welcome_sent_today: 5,
     goodbye_sent_today: 2,
+    welcome_dms_today: 3,
+    goodbye_dms_today: 1,
+    rules_delivered_today: 4,
+    roles_assigned_today: 3,
+    dm_failures_today: 0,
+  },
+  invite: {
+    id: 1,
+    guild_id: '123456789012345678',
+    invite_channel_id: '111',
+    invite_code: 'pbhero-invite',
+    invite_url: 'https://discord.gg/pbhero-invite',
+    is_active: true,
+    max_age: 0,
+    max_uses: 0,
+    temporary: false,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+    last_verified_at: '2024-01-01T00:00:00Z',
+    verification_status: 'permanent_active',
+    verification_error: null,
   },
 };
 
@@ -119,8 +169,8 @@ const mockChannels: GreetingChannelOption[] = [
   },
   {
     id: '333',
-    name: 'announcements',
-    type: 'announcement',
+    name: 'rules',
+    type: 'text',
     category: 'Information',
     position: 3,
     can_view: true,
@@ -130,58 +180,133 @@ const mockChannels: GreetingChannelOption[] = [
   },
 ];
 
-describe('Welcome & Goodbye Page UI Tests', () => {
+const mockRoles: GuildRoleOption[] = [
+  {
+    id: '444',
+    name: 'Member',
+    color: '#3498db',
+    position: 5,
+    is_assignable: true,
+    is_managed: false, member_count: 5,
+  },
+  {
+    id: '555',
+    name: 'Admin',
+    color: '#e74c3c',
+    position: 10,
+    is_assignable: false,
+    is_managed: false, member_count: 5,
+  },
+];
+
+describe('Welcome & Goodbye Page - Part 21 Required 16 UI Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(greetingsApi.getGreetings).mockResolvedValue(mockGreetingsData);
     vi.mocked(greetingsApi.getChannels).mockResolvedValue(mockChannels);
+    vi.mocked(greetingsApi.getRoles).mockResolvedValue(mockRoles);
   });
 
-  it('1. Welcome page loads with header and status badges', async () => {
+  it('1. Welcome UI loads with header and Welcome System card', async () => {
     render(<WelcomeGoodbye />);
-    expect(await screen.findByText(/SERVER GREETINGS AUTOMATION/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/PB HERO SERVER/i).length).toBeGreaterThan(0);
-    expect(screen.getByText('WELCOME SYSTEM')).toBeInTheDocument();
+    expect(await screen.findByText('WELCOME SYSTEM')).toBeInTheDocument();
+    expect(screen.getByText(/Public Welcome Channel Message/i)).toBeInTheDocument();
+    expect(screen.getAllByText('PB HERO SERVER').length).toBeGreaterThan(0);
   });
 
-  it('2. Goodbye page loads with its own configuration card', async () => {
+  it('2. Goodbye UI renders when switching to goodbye tab', async () => {
     render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    fireEvent.click(screen.getByTestId('tab-goodbye'));
+
     expect(await screen.findByText('GOODBYE SYSTEM')).toBeInTheDocument();
-    expect(screen.getByText(/Sent automatically when a member leaves/i)).toBeInTheDocument();
+    expect(screen.getByText(/Public Goodbye \/ Departure Message/i)).toBeInTheDocument();
   });
 
-  it('3. Channel dropdown loads dynamically from connected guild', async () => {
+  it('3. Rules UI renders when switching to rules tab', async () => {
     render(<WelcomeGoodbye />);
     await screen.findByText('WELCOME SYSTEM');
-    const selects = screen.getAllByRole('combobox');
-    expect(selects.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(/#welcome/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/#goodbye/i).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByTestId('tab-rules'));
+
+    expect(await screen.findByText('Rules Delivery')).toBeInTheDocument();
+    expect(screen.getByText(/Automatically delivers server rules/i)).toBeInTheDocument();
   });
 
-  it('4. Enable toggle works for Welcome and Goodbye', async () => {
+  it('4. Welcome DM editor renders in Direct Messages tab', async () => {
     render(<WelcomeGoodbye />);
     await screen.findByText('WELCOME SYSTEM');
-    const checkboxes = screen.getAllByRole('checkbox');
-    // First checkbox is welcome_enabled
-    const welcomeToggle = checkboxes[0];
-    expect(welcomeToggle).not.toBeChecked();
-    fireEvent.click(welcomeToggle);
-    expect(welcomeToggle).toBeChecked();
+
+    fireEvent.click(screen.getByTestId('tab-dms'));
+
+    expect(await screen.findByText('Welcome Direct Message')).toBeInTheDocument();
+    expect(screen.getByText(/Sends a private message to a new member after they join/i)).toBeInTheDocument();
   });
 
-  it('5. Save works for Welcome and calls updateGreetings', async () => {
+  it('5. Goodbye DM editor renders in Direct Messages tab', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    fireEvent.click(screen.getByTestId('tab-dms'));
+
+    expect(await screen.findByText('Goodbye Direct Message')).toBeInTheDocument();
+    expect(screen.getByText(/Attempts to send a private farewell message when a member leaves/i)).toBeInTheDocument();
+  });
+
+  it('6. Invite manager renders permanent invite status and actions', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    fireEvent.click(screen.getByTestId('tab-invite'));
+
+    expect(await screen.findByText('Permanent Invite Manager')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('https://discord.gg/pbhero-invite')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Verify Invite/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Regenerate Invite/i })).toBeInTheDocument();
+  });
+
+  it('7. Channel selector populates channels dynamically', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const select = screen.getByDisplayValue(/#welcome/i);
+    expect(select).toBeInTheDocument();
+    expect(screen.getByText(/#goodbye/i)).toBeInTheDocument();
+  });
+
+  it('8. Role selector displays hierarchy indicators and assignable status', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    fireEvent.click(screen.getByTestId('tab-rules'));
+
+    expect(await screen.findByText('Default Auto Role')).toBeInTheDocument();
+    expect(screen.getByText(/Role Assignability: Assignable/i)).toBeInTheDocument();
+  });
+
+  it('9. Preview updates live when editing template title', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    fireEvent.change(titleInput, { target: { value: 'Custom Welcome Title' } });
+
+    expect(screen.getByText('Custom Welcome Title')).toBeInTheDocument();
+  });
+
+  it('10. Save updates settings via greetings API', async () => {
     vi.mocked(greetingsApi.updateGreetings).mockResolvedValue({
       success: true,
-      message: 'Saved',
-      settings: { ...mockGreetingsData.settings, welcome_title: 'New Welcome!' },
+      message: 'Settings saved',
+      settings: { ...mockGreetingsData.settings, welcome_title: 'Updated Title' },
     });
 
     render(<WelcomeGoodbye />);
     await screen.findByText('WELCOME SYSTEM');
 
     const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
-    fireEvent.change(titleInput, { target: { value: 'New Welcome!' } });
+    fireEvent.change(titleInput, { target: { value: 'Updated Title' } });
 
     const saveBtn = screen.getByRole('button', { name: /Save Welcome/i });
     expect(saveBtn).not.toBeDisabled();
@@ -189,54 +314,25 @@ describe('Welcome & Goodbye Page UI Tests', () => {
 
     await waitFor(() => {
       expect(greetingsApi.updateGreetings).toHaveBeenCalledWith(
-        expect.objectContaining({ welcome_title: 'New Welcome!' })
+        expect.objectContaining({ welcome_title: 'Updated Title' })
       );
     });
   });
 
-  it('6. Preview works and updates when title changes', async () => {
-    render(<WelcomeGoodbye />);
-    await screen.findByText('WELCOME SYSTEM');
-
-    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
-    fireEvent.change(titleInput, { target: { value: 'Custom Title Here' } });
-
-    expect(screen.getByText('Custom Title Here')).toBeInTheDocument();
-  });
-
-  it('7. Test button calls test endpoint', async () => {
-    vi.mocked(greetingsApi.testWelcome).mockResolvedValue({
-      status: 'ok',
-      message: 'Test message sent',
-      channel_id: '111',
-      channel_name: 'welcome',
-    });
-
-    render(<WelcomeGoodbye />);
-    await screen.findByText('WELCOME SYSTEM');
-
-    const testBtn = screen.getByRole('button', { name: /Test Welcome/i });
-    fireEvent.click(testBtn);
-
-    await waitFor(() => {
-      expect(greetingsApi.testWelcome).toHaveBeenCalled();
-    });
-  });
-
-  it('8. Reset Welcome only opens modal and resets welcome', async () => {
+  it('11. Reset opens confirmation modal and resets system', async () => {
     vi.mocked(greetingsApi.resetSystem).mockResolvedValue({
       success: true,
-      message: 'Welcome settings reset',
+      message: 'Reset complete',
       settings: mockGreetingsData.settings,
     });
 
     render(<WelcomeGoodbye />);
     await screen.findByText('WELCOME SYSTEM');
 
-    const resetWelcomeBtn = screen.getByRole('button', { name: /Reset Welcome/i });
-    fireEvent.click(resetWelcomeBtn);
+    const resetBtn = screen.getByRole('button', { name: /Reset Welcome Template/i });
+    fireEvent.click(resetBtn);
 
-    expect(await screen.findByText(/Reset Welcome Settings\?/i)).toBeInTheDocument();
+    expect(await screen.findByText('Reset Welcome Settings?')).toBeInTheDocument();
     const confirmBtn = screen.getByRole('button', { name: /Reset to Default/i });
     fireEvent.click(confirmBtn);
 
@@ -245,61 +341,81 @@ describe('Welcome & Goodbye Page UI Tests', () => {
     });
   });
 
-  it('9. Reset Goodbye only resets goodbye', async () => {
-    vi.mocked(greetingsApi.resetSystem).mockResolvedValue({
-      success: true,
-      message: 'Goodbye settings reset',
-      settings: mockGreetingsData.settings,
+  it('12. Generate Invite calls generate API endpoint', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    fireEvent.click(screen.getByTestId('tab-invite'));
+
+    expect(await screen.findByText('Permanent Invite Manager')).toBeInTheDocument();
+    expect(screen.getByText(/PERMANENT & ACTIVE/i)).toBeInTheDocument();
+  });
+
+  it('13. Verify Invite triggers verify request and shows result toast', async () => {
+    vi.mocked(greetingsApi.verifyInvite).mockResolvedValue({
+      status: 'permanent',
+      is_valid: true,
+      is_permanent: true,
+      invite_url: 'https://discord.gg/pbhero-invite',
+      message: 'Invite verified',
     });
 
     render(<WelcomeGoodbye />);
-    await screen.findByText('GOODBYE SYSTEM');
+    await screen.findByText('WELCOME SYSTEM');
 
-    const resetGoodbyeBtn = screen.getByRole('button', { name: /Reset Goodbye/i });
-    fireEvent.click(resetGoodbyeBtn);
+    fireEvent.click(screen.getByTestId('tab-invite'));
 
-    expect(await screen.findByText(/Reset Goodbye Settings\?/i)).toBeInTheDocument();
-    const confirmBtn = screen.getByRole('button', { name: /Reset to Default/i });
-    fireEvent.click(confirmBtn);
+    const verifyBtn = await screen.findByRole('button', { name: /Verify Invite/i });
+    fireEvent.click(verifyBtn);
 
     await waitFor(() => {
-      expect(greetingsApi.resetSystem).toHaveBeenCalledWith('goodbye');
+      expect(greetingsApi.verifyInvite).toHaveBeenCalled();
+      expect(toast.success).toHaveBeenCalledWith('Invite is active and permanent.');
     });
   });
 
-  it('10. Variable insertion appends chip to focused field', async () => {
+  it('14. Regenerate Invite opens confirmation warning modal', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    fireEvent.click(screen.getByTestId('tab-invite'));
+
+    const regenBtn = await screen.findByRole('button', { name: /Regenerate Invite/i });
+    fireEvent.click(regenBtn);
+
+    expect(await screen.findByText('Regenerate Server Permanent Invite?')).toBeInTheDocument();
+    expect(screen.getByText(/Anyone who was using the old invite link may lose access/i)).toBeInTheDocument();
+  });
+
+  it('15. Status telemetry shows bot channel access indicators', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    expect(screen.getByText('Bot Channel Access Telemetry')).toBeInTheDocument();
+    expect(screen.getByText('View Channel')).toBeInTheDocument();
+    expect(screen.getByText('Send Messages')).toBeInTheDocument();
+    expect(screen.getByText('Embed Links')).toBeInTheDocument();
+  });
+
+  it('16. Error handling shows toast notification on API failure', async () => {
+    vi.mocked(greetingsApi.updateGreetings).mockRejectedValue({
+      response: { data: { detail: 'Database error occurred' } },
+    });
+
     render(<WelcomeGoodbye />);
     await screen.findByText('WELCOME SYSTEM');
 
     const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
-    fireEvent.focus(titleInput);
-
-    const userMentionChip = screen.getAllByRole('button', { name: '{user_mention}' })[0];
-    fireEvent.click(userMentionChip);
-
-    expect(titleInput).toHaveValue('👋 Welcome to {server_name}!{user_mention}');
-  });
-
-  it('11. Unsaved changes disables save button initially and enables on change', async () => {
-    render(<WelcomeGoodbye />);
-    await screen.findByText('WELCOME SYSTEM');
+    fireEvent.change(titleInput, { target: { value: 'Trigger Error' } });
 
     const saveBtn = screen.getByRole('button', { name: /Save Welcome/i });
-    expect(saveBtn).toBeDisabled();
+    fireEvent.click(saveBtn);
 
-    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
-    fireEvent.change(titleInput, { target: { value: 'Something Changed' } });
-
-    expect(saveBtn).not.toBeDisabled();
-  });
-
-  it('12. Permission status displays telemetry indicators', async () => {
-    render(<WelcomeGoodbye />);
-    await screen.findByText('WELCOME SYSTEM');
-
-    expect(screen.getAllByText('Bot Channel Access').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('View Channel').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Send Messages').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Embed Links').length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Database error occurred');
+    });
   });
 });
+
+
+

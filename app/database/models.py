@@ -550,5 +550,59 @@ class ServerGreetingSettings(Base):
     # Safety
     allow_mass_mentions = Column(Boolean, default=False, nullable=False)
 
+    # Rules Delivery
+    rules_delivery_enabled = Column(Boolean, default=False, nullable=False)
+    rules_source = Column(String(32), default="rules_channel", nullable=False)
+    rules_channel_id = Column(BigInteger, nullable=True)
+    rules_title = Column(String(256), nullable=True)
+    rules_description = Column(Text, nullable=True)
+    rules_footer = Column(String(256), nullable=True)
+    rules_button_text = Column(String(128), nullable=True)
+
+    # Auto Role
+    auto_role_enabled = Column(Boolean, default=False, nullable=False)
+    auto_role_id = Column(BigInteger, nullable=True)
+
+    # Welcome DM
+    welcome_dm_enabled = Column(Boolean, default=False, nullable=False)
+    welcome_dm_title = Column(String(256), nullable=True)
+    welcome_dm_description = Column(Text, nullable=True)
+    welcome_dm_footer = Column(String(256), nullable=True)
+    welcome_dm_use_embed = Column(Boolean, default=True, nullable=False)
+    welcome_dm_show_avatar = Column(Boolean, default=True, nullable=False)
+    welcome_dm_show_server_icon = Column(Boolean, default=True, nullable=False)
+    welcome_dm_show_timestamp = Column(Boolean, default=True, nullable=False)
+
+    # Goodbye DM
+    goodbye_dm_enabled = Column(Boolean, default=False, nullable=False)
+    goodbye_dm_title = Column(String(256), nullable=True)
+    goodbye_dm_description = Column(Text, nullable=True)
+    goodbye_dm_footer = Column(String(256), nullable=True)
+    goodbye_dm_use_embed = Column(Boolean, default=True, nullable=False)
+    goodbye_dm_show_avatar = Column(Boolean, default=True, nullable=False)
+    goodbye_dm_show_server_icon = Column(Boolean, default=True, nullable=False)
+    goodbye_dm_show_timestamp = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ServerInviteSettings(Base):
+    """Permanent reusable server invitation configuration."""
+    __tablename__ = "server_invite_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    invite_channel_id = Column(BigInteger, nullable=True)
+    invite_code = Column(String(64), nullable=True)
+    invite_url = Column(String(256), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    max_age = Column(Integer, default=0, nullable=False)
+    max_uses = Column(Integer, default=0, nullable=False)
+    temporary = Column(Boolean, default=False, nullable=False)
+    last_verified_at = Column(DateTime, nullable=True)
+    verification_status = Column(String(64), default="not_generated", nullable=False)
+    verification_error = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

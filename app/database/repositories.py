@@ -30,6 +30,7 @@ from app.database.models import (
     RoleOverride,
     ServerConfig,
     ServerGreetingSettings,
+    ServerInviteSettings,
     WarningEscalationRule,
     WarningRecord,
     YouTubeChannel,
@@ -1654,6 +1655,18 @@ class ServerGreetingSettingsRepo:
     DEFAULT_GOODBYE_DESCRIPTION = "**{display_name}** has left **{server_name}**.\n\nWe had **{member_count} members** before the departure."
     DEFAULT_GOODBYE_FOOTER = "PB HERO SERVER"
 
+    DEFAULT_WELCOME_DM_TITLE = "?? Welcome to {server_name}!"
+    DEFAULT_WELCOME_DM_DESCRIPTION = "Hi {display_name}! ??\n\nThanks for joining our Discord server.\n\n?? Please read the server rules:\n{rules_url}\n\n?? Server Invite:\n{invite_url}\n\nEnjoy the community!"
+    DEFAULT_WELCOME_DM_FOOTER = "PB HERO SERVER"
+
+    DEFAULT_GOODBYE_DM_TITLE = "?? Goodbye {display_name}"
+    DEFAULT_GOODBYE_DM_DESCRIPTION = "You have left {server_name}.\n\nWe\'re sorry to see you go. ??\n\nIf you ever want to come back:\n?? Rejoin Server:\n{invite_url}\n\nTake care!"
+    DEFAULT_GOODBYE_DM_FOOTER = "PB HERO SERVER"
+
+    DEFAULT_RULES_TITLE = "?? {server_name} RULES"
+    DEFAULT_RULES_DESCRIPTION = "1. Respect all members.\n2. No spam or unsolicited promotions.\n3. No offensive or harmful content.\n4. Follow channel guidelines and moderator instructions.\n\nPlease read the full rules before chatting!"
+    DEFAULT_RULES_FOOTER = "PB HERO SERVER"
+
     @staticmethod
     async def get(session: AsyncSession, guild_id: int) -> Optional[ServerGreetingSettings]:
         result = await session.execute(
@@ -1690,6 +1703,31 @@ class ServerGreetingSettingsRepo:
                 goodbye_show_timestamp=True,
                 goodbye_use_embed=True,
                 allow_mass_mentions=False,
+                rules_delivery_enabled=False,
+                rules_source="rules_channel",
+                rules_channel_id=None,
+                rules_title=ServerGreetingSettingsRepo.DEFAULT_RULES_TITLE,
+                rules_description=ServerGreetingSettingsRepo.DEFAULT_RULES_DESCRIPTION,
+                rules_footer=ServerGreetingSettingsRepo.DEFAULT_RULES_FOOTER,
+                rules_button_text="Read Full Rules",
+                auto_role_enabled=False,
+                auto_role_id=None,
+                welcome_dm_enabled=False,
+                welcome_dm_title=ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_TITLE,
+                welcome_dm_description=ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_DESCRIPTION,
+                welcome_dm_footer=ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_FOOTER,
+                welcome_dm_use_embed=True,
+                welcome_dm_show_avatar=True,
+                welcome_dm_show_server_icon=True,
+                welcome_dm_show_timestamp=True,
+                goodbye_dm_enabled=False,
+                goodbye_dm_title=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_TITLE,
+                goodbye_dm_description=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_DESCRIPTION,
+                goodbye_dm_footer=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_FOOTER,
+                goodbye_dm_use_embed=True,
+                goodbye_dm_show_avatar=True,
+                goodbye_dm_show_server_icon=True,
+                goodbye_dm_show_timestamp=True,
             )
             session.add(settings_row)
             await session.flush()
@@ -1736,3 +1774,84 @@ class ServerGreetingSettingsRepo:
         settings_row.updated_at = datetime.utcnow()
         await session.flush()
         return settings_row
+
+    @staticmethod
+    async def reset_welcome_dm(session: AsyncSession, guild_id: int) -> ServerGreetingSettings:
+        settings_row = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        settings_row.welcome_dm_title = ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_TITLE
+        settings_row.welcome_dm_description = ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_DESCRIPTION
+        settings_row.welcome_dm_footer = ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_FOOTER
+        settings_row.welcome_dm_use_embed = True
+        settings_row.welcome_dm_show_avatar = True
+        settings_row.welcome_dm_show_server_icon = True
+        settings_row.welcome_dm_show_timestamp = True
+        settings_row.updated_at = datetime.utcnow()
+        await session.flush()
+        return settings_row
+
+    @staticmethod
+    async def reset_goodbye_dm(session: AsyncSession, guild_id: int) -> ServerGreetingSettings:
+        settings_row = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        settings_row.goodbye_dm_title = ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_TITLE
+        settings_row.goodbye_dm_description = ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_DESCRIPTION
+        settings_row.goodbye_dm_footer = ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_FOOTER
+        settings_row.goodbye_dm_use_embed = True
+        settings_row.goodbye_dm_show_avatar = True
+        settings_row.goodbye_dm_show_server_icon = True
+        settings_row.goodbye_dm_show_timestamp = True
+        settings_row.updated_at = datetime.utcnow()
+        await session.flush()
+        return settings_row
+
+    @staticmethod
+    async def reset_rules(session: AsyncSession, guild_id: int) -> ServerGreetingSettings:
+        settings_row = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        settings_row.rules_title = ServerGreetingSettingsRepo.DEFAULT_RULES_TITLE
+        settings_row.rules_description = ServerGreetingSettingsRepo.DEFAULT_RULES_DESCRIPTION
+        settings_row.rules_footer = ServerGreetingSettingsRepo.DEFAULT_RULES_FOOTER
+        settings_row.rules_button_text = "Read Full Rules"
+        settings_row.updated_at = datetime.utcnow()
+        await session.flush()
+        return settings_row
+
+
+class ServerInviteSettingsRepo:
+    """Repository for permanent reusable server invitation settings."""
+
+    @staticmethod
+    async def get(session: AsyncSession, guild_id: int) -> Optional[ServerInviteSettings]:
+        result = await session.execute(
+            select(ServerInviteSettings).where(ServerInviteSettings.guild_id == guild_id).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_or_create(session: AsyncSession, guild_id: int) -> ServerInviteSettings:
+        invite_row = await ServerInviteSettingsRepo.get(session, guild_id)
+        if not invite_row:
+            invite_row = ServerInviteSettings(
+                guild_id=guild_id,
+                invite_channel_id=None,
+                invite_code=None,
+                invite_url=None,
+                is_active=True,
+                max_age=0,
+                max_uses=0,
+                temporary=False,
+                last_verified_at=None,
+                verification_status="not_generated",
+                verification_error=None,
+            )
+            session.add(invite_row)
+            await session.flush()
+        return invite_row
+
+    @staticmethod
+    async def update(session: AsyncSession, guild_id: int, **kwargs) -> ServerInviteSettings:
+        invite_row = await ServerInviteSettingsRepo.get_or_create(session, guild_id)
+        for key, value in kwargs.items():
+            if hasattr(invite_row, key) and key not in ("id", "guild_id", "created_at"):
+                setattr(invite_row, key, value)
+        invite_row.updated_at = datetime.utcnow()
+        await session.flush()
+        return invite_row

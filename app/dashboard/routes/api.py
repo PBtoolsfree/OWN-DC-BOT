@@ -28,7 +28,7 @@ from app.dashboard.auth import (
 )
 from app.dashboard.dependencies import check_ip_allowlist, require_auth, session_manager
 from app.database.engine import get_session_direct, test_connection
-from app.database.models import EventType, ModerationAction, PolicyValue, ServerGreetingSettings
+from app.database.models import EventType, ModerationAction, PolicyValue, ServerGreetingSettings, ServerInviteSettings
 from app.database.serializers import (
     deserialize_json_field,
     normalize_domain,
@@ -52,6 +52,7 @@ from app.database.repositories import (
     PolicyProfileRepo,
     ServerConfigRepo,
     ServerGreetingSettingsRepo,
+    ServerInviteSettingsRepo,
     WarningEscalationRepo,
     WarningRecordRepo,
     YouTubeChannelRepo,
@@ -64,7 +65,11 @@ from app.greetings.service import get_greeting_service
 from app.greetings.templates import (
     GOODBYE_VARIABLES,
     WELCOME_VARIABLES,
+    GOODBYE_DM_VARIABLES,
+    WELCOME_DM_VARIABLES,
+    RULES_VARIABLES,
     validate_variables,
+    build_rules_url,
 )
 
 logger = logging.getLogger("pbhero.dashboard")
@@ -2666,6 +2671,8 @@ async def get_audit_logs(username: str = Depends(require_auth), limit: int = 100
 
 # ??? Server Welcome & Goodbye Automation ????????????????????????????????????????
 
+# ─── Server Welcome & Goodbye Automation ────────────────────────────────────────
+
 def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
     return {
         "id": row.id,
@@ -2693,6 +2700,50 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
         "goodbye_show_timestamp": row.goodbye_show_timestamp,
         "goodbye_use_embed": row.goodbye_use_embed,
         "allow_mass_mentions": row.allow_mass_mentions,
+        "rules_delivery_enabled": row.rules_delivery_enabled,
+        "rules_source": row.rules_source,
+        "rules_channel_id": str(row.rules_channel_id) if row.rules_channel_id else None,
+        "rules_title": row.rules_title,
+        "rules_description": row.rules_description,
+        "rules_footer": row.rules_footer,
+        "rules_button_text": row.rules_button_text,
+        "auto_role_enabled": row.auto_role_enabled,
+        "auto_role_id": str(row.auto_role_id) if row.auto_role_id else None,
+        "welcome_dm_enabled": row.welcome_dm_enabled,
+        "welcome_dm_title": row.welcome_dm_title,
+        "welcome_dm_description": row.welcome_dm_description,
+        "welcome_dm_footer": row.welcome_dm_footer,
+        "welcome_dm_use_embed": row.welcome_dm_use_embed,
+        "welcome_dm_show_avatar": row.welcome_dm_show_avatar,
+        "welcome_dm_show_server_icon": row.welcome_dm_show_server_icon,
+        "welcome_dm_show_timestamp": row.welcome_dm_show_timestamp,
+        "goodbye_dm_enabled": row.goodbye_dm_enabled,
+        "goodbye_dm_title": row.goodbye_dm_title,
+        "goodbye_dm_description": row.goodbye_dm_description,
+        "goodbye_dm_footer": row.goodbye_dm_footer,
+        "goodbye_dm_use_embed": row.goodbye_dm_use_embed,
+        "goodbye_dm_show_avatar": row.goodbye_dm_show_avatar,
+        "goodbye_dm_show_server_icon": row.goodbye_dm_show_server_icon,
+        "goodbye_dm_show_timestamp": row.goodbye_dm_show_timestamp,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _serialize_invite_settings(row: ServerInviteSettings) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "guild_id": str(row.guild_id),
+        "invite_channel_id": str(row.invite_channel_id) if row.invite_channel_id else None,
+        "invite_code": row.invite_code,
+        "invite_url": row.invite_url,
+        "is_active": row.is_active,
+        "max_age": row.max_age,
+        "max_uses": row.max_uses,
+        "temporary": row.temporary,
+        "verification_status": row.verification_status,
+        "verification_error": row.verification_error,
+        "last_verified_at": row.last_verified_at.isoformat() if row.last_verified_at else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -2700,7 +2751,7 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
 
 @router.get("/greetings")
 async def get_greeting_settings(username: str = Depends(require_auth)):
-    """Get current server greeting settings, channel telemetry, and recent activity."""
+    """Get current server greeting settings, invite info, rules telemetry, and activity."""
     from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
     guild = bot.guild if (bot and bot.is_ready()) else None
@@ -2709,6 +2760,7 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
     session = await get_session_direct()
     try:
         config = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        invite_row = await ServerInviteSettingsRepo.get_or_create(session, guild_id)
         await session.commit()
     finally:
         await session.close()
@@ -2717,6 +2769,7 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
 
     welcome_channel = guild.get_channel(config.welcome_channel_id) if (guild and config.welcome_channel_id) else None
     goodbye_channel = guild.get_channel(config.goodbye_channel_id) if (guild and config.goodbye_channel_id) else None
+    rules_channel = guild.get_channel(config.rules_channel_id) if (guild and config.rules_channel_id) else None
 
     if not config.welcome_channel_id:
         welcome_status = {
@@ -2729,12 +2782,21 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
         }
     elif not guild:
         welcome_status = {
-            "status": "bot_offline",
+            "status": "offline",
             "channel_name": None,
             "can_view": False,
             "can_send": False,
             "can_embed": False,
-            "warning": "Bot is currently offline. Cannot verify Discord channel permissions.",
+            "warning": "Bot is currently offline.",
+        }
+    elif not welcome_channel:
+        welcome_status = {
+            "status": "missing_channel",
+            "channel_name": None,
+            "can_view": False,
+            "can_send": False,
+            "can_embed": False,
+            "warning": "Selected channel is unavailable.",
         }
     else:
         _, welcome_status = service.check_channel_permissions(welcome_channel, requires_embed=bool(config.welcome_use_embed))
@@ -2750,15 +2812,53 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
         }
     elif not guild:
         goodbye_status = {
-            "status": "bot_offline",
+            "status": "offline",
             "channel_name": None,
             "can_view": False,
             "can_send": False,
             "can_embed": False,
-            "warning": "Bot is currently offline. Cannot verify Discord channel permissions.",
+            "warning": "Bot is currently offline.",
+        }
+    elif not goodbye_channel:
+        goodbye_status = {
+            "status": "missing_channel",
+            "channel_name": None,
+            "can_view": False,
+            "can_send": False,
+            "can_embed": False,
+            "warning": "Selected channel is unavailable.",
         }
     else:
         _, goodbye_status = service.check_channel_permissions(goodbye_channel, requires_embed=bool(config.goodbye_use_embed))
+
+    if not config.rules_channel_id:
+        rules_status = {
+            "status": "not_configured",
+            "channel_name": None,
+            "can_view": False,
+            "warning": None,
+        }
+    elif not guild:
+        rules_status = {
+            "status": "offline",
+            "channel_name": None,
+            "can_view": False,
+            "warning": "Bot is offline.",
+        }
+    elif not rules_channel:
+        rules_status = {
+            "status": "missing_channel",
+            "channel_name": None,
+            "can_view": False,
+            "warning": "Selected rules channel is unavailable.",
+        }
+    else:
+        rules_status = {
+            "status": "ok",
+            "channel_name": getattr(rules_channel, "name", "rules"),
+            "can_view": True,
+            "warning": None,
+        }
 
     server_info = {
         "server_id": str(guild_id),
@@ -2770,9 +2870,11 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
 
     return {
         "settings": _serialize_greeting_settings(config),
+        "invite": _serialize_invite_settings(invite_row),
         "server": server_info,
         "welcome_channel_status": welcome_status,
         "goodbye_channel_status": goodbye_status,
+        "rules_channel_status": rules_status,
         "recent_activity": service.get_recent_activity(20),
         "stats": service.get_stats(),
     }
@@ -2795,95 +2897,65 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
     try:
         existing = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
 
-        # 1. Variable validation
-        if "welcome_title" in data and data["welcome_title"] is not None:
-            inv = validate_variables(data["welcome_title"], WELCOME_VARIABLES)
-            if inv:
-                raise HTTPException(status_code=400, detail=f"Unsupported Welcome variable(s): {', '.join(inv)}")
-        if "welcome_description" in data and data["welcome_description"] is not None:
-            inv = validate_variables(data["welcome_description"], WELCOME_VARIABLES)
-            if inv:
-                raise HTTPException(status_code=400, detail=f"Unsupported Welcome variable(s): {', '.join(inv)}")
-        if "welcome_footer" in data and data["welcome_footer"] is not None:
-            inv = validate_variables(data["welcome_footer"], WELCOME_VARIABLES)
-            if inv:
-                raise HTTPException(status_code=400, detail=f"Unsupported Welcome variable(s): {', '.join(inv)}")
+        # 1. Variable validation across template categories
+        val_checks = [
+            ("welcome_title", WELCOME_VARIABLES),
+            ("welcome_description", WELCOME_VARIABLES),
+            ("welcome_footer", WELCOME_VARIABLES),
+            ("goodbye_title", GOODBYE_VARIABLES),
+            ("goodbye_description", GOODBYE_VARIABLES),
+            ("goodbye_footer", GOODBYE_VARIABLES),
+            ("welcome_dm_title", WELCOME_DM_VARIABLES),
+            ("welcome_dm_description", WELCOME_DM_VARIABLES),
+            ("welcome_dm_footer", WELCOME_DM_VARIABLES),
+            ("goodbye_dm_title", GOODBYE_DM_VARIABLES),
+            ("goodbye_dm_description", GOODBYE_DM_VARIABLES),
+            ("goodbye_dm_footer", GOODBYE_DM_VARIABLES),
+            ("rules_title", RULES_VARIABLES),
+            ("rules_description", RULES_VARIABLES),
+            ("rules_footer", RULES_VARIABLES),
+        ]
+        for field, allowed_set in val_checks:
+            if field in data and data[field] is not None:
+                inv = validate_variables(data[field], allowed_set)
+                if inv:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Unsupported variable in {field}: " + ", ".join(f"{{{v}}}" for v in inv),
+                    )
 
-        if "goodbye_title" in data and data["goodbye_title"] is not None:
-            inv = validate_variables(data["goodbye_title"], GOODBYE_VARIABLES)
-            if inv:
-                raise HTTPException(status_code=400, detail=f"Unsupported Goodbye variable(s): {', '.join(inv)}")
-        if "goodbye_description" in data and data["goodbye_description"] is not None:
-            inv = validate_variables(data["goodbye_description"], GOODBYE_VARIABLES)
-            if inv:
-                raise HTTPException(status_code=400, detail=f"Unsupported Goodbye variable(s): {', '.join(inv)}")
-        if "goodbye_footer" in data and data["goodbye_footer"] is not None:
-            inv = validate_variables(data["goodbye_footer"], GOODBYE_VARIABLES)
-            if inv:
-                raise HTTPException(status_code=400, detail=f"Unsupported Goodbye variable(s): {', '.join(inv)}")
-
-        # 2. Mass mention protection
+        # Mass mentions safety check
         allow_mass = data.get("allow_mass_mentions", existing.allow_mass_mentions)
         if not allow_mass:
-            fields_to_check = [
-                data.get("welcome_title", existing.welcome_title),
-                data.get("welcome_description", existing.welcome_description),
-                data.get("welcome_footer", existing.welcome_footer),
-                data.get("goodbye_title", existing.goodbye_title),
-                data.get("goodbye_description", existing.goodbye_description),
-                data.get("goodbye_footer", existing.goodbye_footer),
-            ]
-            for val in fields_to_check:
+            for field, _ in val_checks:
+                val = data.get(field)
                 if val and ("@everyone" in val or "@here" in val):
                     raise HTTPException(
                         status_code=400,
-                        detail="Mass mentions (@everyone/@here) are disabled. Enable 'Allow Mass Mentions' in advanced settings to use them.",
+                        detail="Mass mentions (@everyone, @here) require 'Allow Mass Mentions' to be enabled.",
                     )
 
-        # 3. Channel existence validation
         updates = {}
-        boolean_fields = [
-            "welcome_enabled", "welcome_mention_user", "welcome_show_avatar",
-            "welcome_show_server_icon", "welcome_show_member_count", "welcome_show_timestamp",
-            "welcome_use_embed", "goodbye_enabled", "goodbye_mention_user",
-            "goodbye_show_avatar", "goodbye_show_server_icon", "goodbye_show_member_count",
-            "goodbye_show_timestamp", "goodbye_use_embed", "allow_mass_mentions",
-        ]
-        for bf in boolean_fields:
-            if bf in data:
-                updates[bf] = bool(data[bf])
-
-        text_fields = [
-            "welcome_title", "welcome_description", "welcome_footer",
-            "goodbye_title", "goodbye_description", "goodbye_footer",
-        ]
-        for tf in text_fields:
-            if tf in data:
-                updates[tf] = str(data[tf]) if data[tf] is not None else None
-
-        if "welcome_channel_id" in data:
-            val = data["welcome_channel_id"]
-            if val is None or str(val).strip() == "" or str(val) == "0":
-                updates["welcome_channel_id"] = None
-            else:
-                cid = int(val)
-                if guild:
-                    ch = guild.get_channel(cid)
-                    if not ch or not isinstance(ch, discord.TextChannel):
-                        raise HTTPException(status_code=400, detail="Selected channel is unavailable.")
-                updates["welcome_channel_id"] = cid
-
-        if "goodbye_channel_id" in data:
-            val = data["goodbye_channel_id"]
-            if val is None or str(val).strip() == "" or str(val) == "0":
-                updates["goodbye_channel_id"] = None
-            else:
-                cid = int(val)
-                if guild:
-                    ch = guild.get_channel(cid)
-                    if not ch or not isinstance(ch, discord.TextChannel):
-                        raise HTTPException(status_code=400, detail="Selected channel is unavailable.")
-                updates["goodbye_channel_id"] = cid
+        for key in (
+            "welcome_enabled", "welcome_channel_id", "welcome_title", "welcome_description",
+            "welcome_footer", "welcome_mention_user", "welcome_show_avatar", "welcome_show_server_icon",
+            "welcome_show_member_count", "welcome_show_timestamp", "welcome_use_embed",
+            "goodbye_enabled", "goodbye_channel_id", "goodbye_title", "goodbye_description",
+            "goodbye_footer", "goodbye_mention_user", "goodbye_show_avatar", "goodbye_show_server_icon",
+            "goodbye_show_member_count", "goodbye_show_timestamp", "goodbye_use_embed",
+            "allow_mass_mentions", "rules_delivery_enabled", "rules_source", "rules_channel_id",
+            "rules_title", "rules_description", "rules_footer", "rules_button_text",
+            "auto_role_enabled", "auto_role_id",
+            "welcome_dm_enabled", "welcome_dm_title", "welcome_dm_description", "welcome_dm_footer",
+            "welcome_dm_use_embed", "welcome_dm_show_avatar", "welcome_dm_show_server_icon", "welcome_dm_show_timestamp",
+            "goodbye_dm_enabled", "goodbye_dm_title", "goodbye_dm_description", "goodbye_dm_footer",
+            "goodbye_dm_use_embed", "goodbye_dm_show_avatar", "goodbye_dm_show_server_icon", "goodbye_dm_show_timestamp"
+        ):
+            if key in data:
+                val = data[key]
+                if key in ("welcome_channel_id", "goodbye_channel_id", "rules_channel_id", "auto_role_id"):
+                    val = int(val) if val else None
+                updates[key] = val
 
         updated = await ServerGreetingSettingsRepo.update(session, guild_id, **updates)
         await AuditLogRepo.log(session, username, "update_greeting_settings")
@@ -2894,12 +2966,6 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
             "message": "Greeting settings updated successfully",
             "settings": _serialize_greeting_settings(updated),
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        await session.rollback()
-        logger.exception("Failed to update greeting settings: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
     finally:
         await session.close()
 
@@ -2914,77 +2980,305 @@ async def list_greeting_channels(username: str = Depends(require_auth)):
 
     guild = bot.guild
     me = guild.me
-    channels = []
+    if not me:
+        return []
 
-    for ch in guild.channels:
-        if isinstance(ch, discord.TextChannel):
-            perms = ch.permissions_for(me)
-            ch_type = "announcement" if getattr(ch, "is_news", lambda: False)() else "text"
-            channels.append({
-                "id": str(ch.id),
-                "name": ch.name,
-                "type": ch_type,
-                "category": ch.category.name if ch.category else "Uncategorized",
-                "category_id": str(ch.category.id) if ch.category else None,
-                "position": ch.position,
-                "can_view": bool(perms.view_channel),
-                "can_send": bool(perms.send_messages),
-                "can_embed": bool(perms.embed_links),
-                "is_selectable": bool(perms.view_channel and perms.send_messages),
-            })
+    channels_data = []
+    for channel in guild.channels:
+        if isinstance(channel, discord.TextChannel):
+            c_type = "text"
+        elif isinstance(channel, discord.StageChannel) or isinstance(channel, discord.VoiceChannel):
+            continue
+        elif hasattr(channel, "is_news") and channel.is_news():
+            c_type = "announcement"
+        else:
+            continue
 
-    channels.sort(key=lambda c: (c["category"] or "", c["position"]))
-    return channels
+        perms = channel.permissions_for(me)
+        can_view = bool(perms.view_channel)
+        can_send = bool(perms.send_messages)
+        can_embed = bool(perms.embed_links)
+
+        channels_data.append({
+            "id": str(channel.id),
+            "name": channel.name,
+            "type": c_type,
+            "category": channel.category.name if channel.category else "Uncategorized",
+            "category_id": str(channel.category.id) if channel.category else None,
+            "position": channel.position,
+            "can_view": can_view,
+            "can_send": can_send,
+            "can_embed": can_embed,
+            "is_selectable": can_view and can_send,
+        })
+
+    channels_data.sort(key=lambda c: c["position"])
+    return channels_data
+
+
+@router.get("/greetings/roles")
+async def list_greeting_roles(username: str = Depends(require_auth)):
+    """List guild roles with hierarchy and assignability status."""
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    if not guild:
+        return []
+    service = get_greeting_service(bot)
+    return service.get_guild_roles(guild.id)
+
+
+@router.get("/greetings/rules")
+async def get_rules_settings(username: str = Depends(require_auth)):
+    """Get rules delivery settings and resolved URL."""
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    guild_id = settings.DISCORD_GUILD_ID or (guild.id if guild else 0)
+
+    session = await get_session_direct()
+    try:
+        config = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        await session.commit()
+    finally:
+        await session.close()
+
+    rules_url = build_rules_url(guild_id, config.rules_channel_id)
+    return {
+        "rules_delivery_enabled": config.rules_delivery_enabled,
+        "rules_source": config.rules_source,
+        "rules_channel_id": str(config.rules_channel_id) if config.rules_channel_id else None,
+        "rules_title": config.rules_title,
+        "rules_description": config.rules_description,
+        "rules_footer": config.rules_footer,
+        "rules_button_text": config.rules_button_text,
+        "rules_url": rules_url,
+    }
+
+
+@router.put("/greetings/rules")
+async def update_rules_settings(request: Request, username: str = Depends(require_auth)):
+    """Update rules delivery configuration."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    guild_id = settings.DISCORD_GUILD_ID or (guild.id if guild else 0)
+
+    for field in ("rules_title", "rules_description", "rules_footer"):
+        if field in data and data[field] is not None:
+            inv = validate_variables(data[field], RULES_VARIABLES)
+            if inv:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unsupported variable in {field}: " + ", ".join(f"{{{v}}}" for v in inv),
+                )
+
+    session = await get_session_direct()
+    try:
+        updates = {}
+        for key in ("rules_delivery_enabled", "rules_source", "rules_channel_id", "rules_title", "rules_description", "rules_footer", "rules_button_text"):
+            if key in data:
+                val = data[key]
+                if key == "rules_channel_id":
+                    val = int(val) if val else None
+                updates[key] = val
+
+        updated = await ServerGreetingSettingsRepo.update(session, guild_id, **updates)
+        await AuditLogRepo.log(session, username, "update_rules_settings")
+        await session.commit()
+        return {
+            "success": True,
+            "message": "Rules settings updated successfully",
+            "rules_url": build_rules_url(guild_id, updated.rules_channel_id),
+        }
+    finally:
+        await session.close()
+
+
+@router.get("/greetings/invite")
+async def get_invite_settings(username: str = Depends(require_auth)):
+    """Get current permanent invite configuration and verification status."""
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    guild_id = settings.DISCORD_GUILD_ID or (guild.id if guild else 0)
+
+    session = await get_session_direct()
+    try:
+        invite_row = await ServerInviteSettingsRepo.get_or_create(session, guild_id)
+        await session.commit()
+    finally:
+        await session.close()
+
+    channel_name = None
+    if guild and invite_row.invite_channel_id:
+        ch = guild.get_channel(invite_row.invite_channel_id)
+        channel_name = ch.name if ch else None
+
+    return {
+        "invite": _serialize_invite_settings(invite_row),
+        "channel_name": channel_name,
+        "is_permanent": bool(invite_row.max_age == 0 and invite_row.max_uses == 0 and invite_row.is_active),
+    }
+
+
+@router.post("/greetings/invite/generate")
+async def generate_invite(request: Request, username: str = Depends(require_auth)):
+    """Generate a permanent Discord invite for the designated channel."""
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    if not guild:
+        raise HTTPException(status_code=503, detail="Bot is offline or guild is unavailable.")
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    channel_id = data.get("channel_id")
+    if not channel_id:
+        session = await get_session_direct()
+        try:
+            cfg = await ServerGreetingSettingsRepo.get_or_create(session, guild.id)
+            inv = await ServerInviteSettingsRepo.get_or_create(session, guild.id)
+            channel_id = inv.invite_channel_id or cfg.welcome_channel_id
+        finally:
+            await session.close()
+
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="No invite destination channel specified.")
+
+    service = get_greeting_service(bot)
+    try:
+        res = await service.generate_permanent_invite(guild.id, int(channel_id))
+        session = await get_session_direct()
+        try:
+            await AuditLogRepo.log(session, username, f"generate_permanent_invite:{res.get('invite_code')}")
+            await session.commit()
+        finally:
+            await session.close()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/greetings/invite/verify")
+async def verify_invite_endpoint(username: str = Depends(require_auth)):
+    """Verify validity and permanence of the stored invite."""
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    guild_id = settings.DISCORD_GUILD_ID or (guild.id if guild else 0)
+
+    service = get_greeting_service(bot)
+    return await service.verify_invite(guild_id)
+
+
+@router.post("/greetings/invite/regenerate")
+async def regenerate_invite_endpoint(request: Request, username: str = Depends(require_auth)):
+    """Regenerate the permanent server invite with explicit confirmation."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not data.get("confirm"):
+        raise HTTPException(status_code=400, detail="Regeneration requires explicit confirmation flag.")
+
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    if not guild:
+        raise HTTPException(status_code=503, detail="Bot is offline or guild is unavailable.")
+
+    session = await get_session_direct()
+    try:
+        cfg = await ServerGreetingSettingsRepo.get_or_create(session, guild.id)
+        inv = await ServerInviteSettingsRepo.get_or_create(session, guild.id)
+        channel_id = data.get("channel_id") or inv.invite_channel_id or cfg.welcome_channel_id
+    finally:
+        await session.close()
+
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="No invite channel configured.")
+
+    service = get_greeting_service(bot)
+    try:
+        res = await service.generate_permanent_invite(guild.id, int(channel_id), unique=True)
+        session = await get_session_direct()
+        try:
+            await AuditLogRepo.log(session, username, f"regenerate_invite:{res.get('invite_code')}")
+            await session.commit()
+        finally:
+            await session.close()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/greetings/test/{system_type}")
 async def test_greeting_message(system_type: str, username: str = Depends(require_auth)):
-    """Dispatch a test welcome or goodbye message."""
-    if system_type not in ("welcome", "goodbye"):
-        raise HTTPException(status_code=400, detail="Invalid greeting type. Must be 'welcome' or 'goodbye'.")
+    """Dispatch a test message (welcome, goodbye, welcome-dm, goodbye-dm)."""
+    norm_type = system_type.lower().replace("_", "-")
+    if norm_type not in ("welcome", "goodbye", "welcome-dm", "goodbye-dm"):
+        raise HTTPException(status_code=400, detail="Invalid greeting type. Must be 'welcome', 'goodbye', 'welcome-dm', or 'goodbye-dm'.")
 
     from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
-    service = get_greeting_service(bot)
+    if not bot or not bot.is_ready():
+        raise HTTPException(status_code=503, detail="PB HERO bot is currently offline. Cannot send test Discord message.")
 
+    service = get_greeting_service(bot)
     try:
-        result = await service.send_test_message(system_type)
+        result = await service.send_test_message(norm_type)
         return result
-    except (ValueError, RuntimeError, PermissionError) as e:
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception("Failed to send test %s message: %s", system_type, e)
-        raise HTTPException(status_code=500, detail=f"Failed to send test message: {str(e)}")
+        logger.exception("Failed to dispatch test greeting: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to send test message: {e}")
 
 
 @router.post("/greetings/reset/{system_type}")
 async def reset_greeting_settings(system_type: str, username: str = Depends(require_auth)):
-    """Reset either welcome or goodbye settings to default."""
-    if system_type not in ("welcome", "goodbye"):
-        raise HTTPException(status_code=400, detail="Invalid system type. Must be 'welcome' or 'goodbye'.")
+    """Reset welcome, goodbye, welcome_dm, goodbye_dm, or rules templates to defaults."""
+    norm_type = system_type.lower().replace("-", "_")
+    if norm_type not in ("welcome", "goodbye", "welcome_dm", "goodbye_dm", "rules"):
+        raise HTTPException(status_code=400, detail="Invalid system type.")
 
     from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
-    guild_id = settings.DISCORD_GUILD_ID or (bot.guild.id if (bot and bot.guild) else 0)
+    guild = bot.guild if (bot and bot.is_ready()) else None
+    guild_id = settings.DISCORD_GUILD_ID or (guild.id if guild else 0)
 
     session = await get_session_direct()
     try:
-        if system_type == "welcome":
+        if norm_type == "welcome":
             updated = await ServerGreetingSettingsRepo.reset_welcome(session, guild_id)
-        else:
+        elif norm_type == "goodbye":
             updated = await ServerGreetingSettingsRepo.reset_goodbye(session, guild_id)
+        elif norm_type == "welcome_dm":
+            updated = await ServerGreetingSettingsRepo.reset_welcome_dm(session, guild_id)
+        elif norm_type == "goodbye_dm":
+            updated = await ServerGreetingSettingsRepo.reset_goodbye_dm(session, guild_id)
+        elif norm_type == "rules":
+            updated = await ServerGreetingSettingsRepo.reset_rules(session, guild_id)
 
-        await AuditLogRepo.log(session, username, f"reset_{system_type}_greetings")
+        await AuditLogRepo.log(session, username, f"reset_{norm_type}_greetings")
         await session.commit()
 
         return {
             "success": True,
-            "message": f"{system_type.capitalize()} settings have been reset to defaults.",
+            "message": f"{norm_type.replace('_', ' ').capitalize()} settings have been reset to defaults.",
             "settings": _serialize_greeting_settings(updated),
         }
-    except Exception as e:
-        await session.rollback()
-        logger.exception("Failed to reset %s greeting settings: %s", system_type, e)
-        raise HTTPException(status_code=500, detail=str(e))
     finally:
         await session.close()

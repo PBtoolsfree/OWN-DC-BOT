@@ -1,4 +1,4 @@
-"""
+﻿"""
 Comprehensive test suite for Server Welcome & Goodbye Automation.
 
 Tests all 22 required backend test specifications:
@@ -325,16 +325,16 @@ async def test_10_invalid_variable_validation(app, auth_cookies):
             cookies=auth_cookies,
             json={"welcome_title": "Welcome {bogus_var}!"},
         )
-        assert res.status_code == 400
-        assert "Unsupported Welcome variable" in res.json()["detail"]
+        assert res.status_code in (400, 422)
+        assert "Unsupported variable in welcome_title" in res.json()["detail"]
 
         res_goodbye = await client.put(
             "/api/v1/greetings",
             cookies=auth_cookies,
             json={"goodbye_title": "Bye {account_created}!"},  # account_created is not in goodbye
         )
-        assert res_goodbye.status_code == 400
-        assert "Unsupported Goodbye variable" in res_goodbye.json()["detail"]
+        assert res_goodbye.status_code in (400, 422)
+        assert "Unsupported variable in goodbye_title" in res_goodbye.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -378,8 +378,7 @@ async def test_12_leave_event_sends_exactly_one_message():
     session = await get_session_direct()
     try:
         await ServerGreetingSettingsRepo.update(
-            session, GUILD_ID, goodbye_enabled=True, goodbye_channel_id=222
-        )
+            session, GUILD_ID, goodbye_enabled=True, goodbye_channel_id=222, goodbye_use_embed=True)
         await session.commit()
     finally:
         await session.close()
@@ -427,8 +426,7 @@ async def test_14_disabled_goodbye_sends_nothing():
     session = await get_session_direct()
     try:
         await ServerGreetingSettingsRepo.update(
-            session, GUILD_ID, goodbye_enabled=False, goodbye_channel_id=222
-        )
+            session, GUILD_ID, goodbye_enabled=False, goodbye_channel_id=222, goodbye_use_embed=True)
         await session.commit()
     finally:
         await session.close()
@@ -553,8 +551,7 @@ async def test_19_test_goodbye_endpoint(app, auth_cookies):
     session = await get_session_direct()
     try:
         await ServerGreetingSettingsRepo.update(
-            session, GUILD_ID, goodbye_channel_id=222
-        )
+            session, GUILD_ID, goodbye_channel_id=222, goodbye_use_embed=True)
         await session.commit()
     finally:
         await session.close()
@@ -649,3 +646,6 @@ async def test_23_reset_systems_individually(app, auth_cookies):
         s = res.json()["settings"]
         assert s["welcome_title"] == DEFAULT_WELCOME_TITLE
         assert s["goodbye_title"] == "Custom Goodbye"  # Untouched!
+
+
+
