@@ -20,6 +20,7 @@ import {
   ShieldAlert,
   Zap,
   AlertTriangle,
+  UserPlus,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -179,6 +180,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <NavLink to="/moderator/warnings" className={subNavLinkClass} onClick={onCloseMobile}>
                 <AlertTriangle className="w-3.5 h-3.5" />
                 <span>Warnings & Actions</span>
+              </NavLink>
+              <NavLink to="/moderator/greetings" className={subNavLinkClass} onClick={onCloseMobile}>
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Welcome & Goodbye</span>
               </NavLink>
               <NavLink to="/moderator/logs" className={subNavLinkClass} onClick={onCloseMobile}>
                 <ScrollText className="w-3.5 h-3.5" />

@@ -87,6 +87,7 @@ class PBHeroBot(commands.Bot):
             "app.bot.cogs.channel_policy",
             "app.bot.cogs.youtube",
             "app.bot.cogs.admin",
+            "app.bot.cogs.greetings",
         ]
 
         for module in cog_modules:
@@ -125,6 +126,11 @@ class PBHeroBot(commands.Bot):
         self.youtube_scheduler = YouTubeScheduler(self)
         await self.youtube_scheduler.start()
         logger.info("YouTube scheduler started")
+
+        # Initialize greeting service
+        from app.greetings.service import get_greeting_service
+        self.greeting_service = get_greeting_service(self)
+        logger.info("Greeting service initialized")
 
         from app.runtime_state import BotState, set_bot_state
         set_bot_state(BotState.READY)

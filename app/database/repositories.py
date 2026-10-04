@@ -29,6 +29,7 @@ from app.database.models import (
     PolicyValue,
     RoleOverride,
     ServerConfig,
+    ServerGreetingSettings,
     WarningEscalationRule,
     WarningRecord,
     YouTubeChannel,
@@ -1638,3 +1639,100 @@ class WarningEscalationRepo:
         ]
         for item in ladder:
             await WarningEscalationRepo.create(session, **item)
+
+
+# ??? Server Greeting Settings ??????????????????????????????????????????????????
+
+class ServerGreetingSettingsRepo:
+    """Repository for server welcome and goodbye automation settings."""
+
+    DEFAULT_WELCOME_TITLE = "?? Welcome to {server_name}!"
+    DEFAULT_WELCOME_DESCRIPTION = "Welcome {user_mention} to **{server_name}**! ??\n\nYou are member **#{member_count}**.\n\nPlease check the rules and enjoy your stay!"
+    DEFAULT_WELCOME_FOOTER = "PB HERO SERVER"
+
+    DEFAULT_GOODBYE_TITLE = "?? Goodbye {display_name}"
+    DEFAULT_GOODBYE_DESCRIPTION = "**{display_name}** has left **{server_name}**.\n\nWe had **{member_count} members** before the departure."
+    DEFAULT_GOODBYE_FOOTER = "PB HERO SERVER"
+
+    @staticmethod
+    async def get(session: AsyncSession, guild_id: int) -> Optional[ServerGreetingSettings]:
+        result = await session.execute(
+            select(ServerGreetingSettings).where(ServerGreetingSettings.guild_id == guild_id).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_or_create(session: AsyncSession, guild_id: int) -> ServerGreetingSettings:
+        settings_row = await ServerGreetingSettingsRepo.get(session, guild_id)
+        if not settings_row:
+            settings_row = ServerGreetingSettings(
+                guild_id=guild_id,
+                welcome_enabled=False,
+                welcome_channel_id=None,
+                welcome_title=ServerGreetingSettingsRepo.DEFAULT_WELCOME_TITLE,
+                welcome_description=ServerGreetingSettingsRepo.DEFAULT_WELCOME_DESCRIPTION,
+                welcome_footer=ServerGreetingSettingsRepo.DEFAULT_WELCOME_FOOTER,
+                welcome_mention_user=True,
+                welcome_show_avatar=True,
+                welcome_show_server_icon=True,
+                welcome_show_member_count=True,
+                welcome_show_timestamp=True,
+                welcome_use_embed=True,
+                goodbye_enabled=False,
+                goodbye_channel_id=None,
+                goodbye_title=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_TITLE,
+                goodbye_description=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DESCRIPTION,
+                goodbye_footer=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_FOOTER,
+                goodbye_mention_user=False,
+                goodbye_show_avatar=True,
+                goodbye_show_server_icon=True,
+                goodbye_show_member_count=True,
+                goodbye_show_timestamp=True,
+                goodbye_use_embed=True,
+                allow_mass_mentions=False,
+            )
+            session.add(settings_row)
+            await session.flush()
+        return settings_row
+
+    @staticmethod
+    async def update(session: AsyncSession, guild_id: int, **kwargs) -> ServerGreetingSettings:
+        settings_row = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        for key, value in kwargs.items():
+            if hasattr(settings_row, key) and key not in ("id", "guild_id", "created_at"):
+                setattr(settings_row, key, value)
+        settings_row.updated_at = datetime.utcnow()
+        await session.flush()
+        return settings_row
+
+    @staticmethod
+    async def reset_welcome(session: AsyncSession, guild_id: int) -> ServerGreetingSettings:
+        settings_row = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        settings_row.welcome_title = ServerGreetingSettingsRepo.DEFAULT_WELCOME_TITLE
+        settings_row.welcome_description = ServerGreetingSettingsRepo.DEFAULT_WELCOME_DESCRIPTION
+        settings_row.welcome_footer = ServerGreetingSettingsRepo.DEFAULT_WELCOME_FOOTER
+        settings_row.welcome_mention_user = True
+        settings_row.welcome_show_avatar = True
+        settings_row.welcome_show_server_icon = True
+        settings_row.welcome_show_member_count = True
+        settings_row.welcome_show_timestamp = True
+        settings_row.welcome_use_embed = True
+        settings_row.updated_at = datetime.utcnow()
+        await session.flush()
+        return settings_row
+
+    @staticmethod
+    async def reset_goodbye(session: AsyncSession, guild_id: int) -> ServerGreetingSettings:
+        settings_row = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        settings_row.goodbye_title = ServerGreetingSettingsRepo.DEFAULT_GOODBYE_TITLE
+        settings_row.goodbye_description = ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DESCRIPTION
+        settings_row.goodbye_footer = ServerGreetingSettingsRepo.DEFAULT_GOODBYE_FOOTER
+        settings_row.goodbye_mention_user = False
+        settings_row.goodbye_show_avatar = True
+        settings_row.goodbye_show_server_icon = True
+        settings_row.goodbye_show_member_count = True
+        settings_row.goodbye_show_timestamp = True
+        settings_row.goodbye_use_embed = True
+        settings_row.updated_at = datetime.utcnow()
+        await session.flush()
+        return settings_row

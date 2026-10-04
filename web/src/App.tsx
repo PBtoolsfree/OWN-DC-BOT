@@ -12,6 +12,7 @@ import AutomodRules from './pages/AutomodRules';
 import WarningsActions from './pages/WarningsActions';
 import ModerationLogs from './pages/ModerationLogs';
 import ModeratorSettings from './pages/ModeratorSettings';
+import WelcomeGoodbye from './pages/WelcomeGoodbye';
 import Channels from './pages/Channels';
 import Security from './pages/Security';
 import System from './pages/System';
@@ -34,7 +35,9 @@ function App() {
           <Route path="moderator/profiles" element={<PolicyProfiles />} />
           <Route path="moderator/exemptions" element={<ExemptionsBypass />} />
           <Route path="moderator/automod" element={<AutomodRules />} />
-          <Route path="moderator/warnings" element={<WarningsActions />} />
+                    <Route path="moderator/warnings" element={<WarningsActions />} />
+          <Route path="moderator/greetings" element={<WelcomeGoodbye />} />
+          <Route path="moderator/welcome-goodbye" element={<Navigate to="/moderator/greetings" replace />} />
           <Route path="moderator/logs" element={<ModerationLogs />} />
           <Route path="moderator/settings" element={<ModeratorSettings />} />
           <Route path="channels" element={<Channels />} />

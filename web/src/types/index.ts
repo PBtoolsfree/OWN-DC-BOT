@@ -404,3 +404,87 @@ export interface NotificationTemplate {
   updated_at?: string | null;
 }
 
+
+
+export interface ServerGreetingSettings {
+  id: number;
+  guild_id: string;
+  welcome_enabled: boolean;
+  welcome_channel_id: string | null;
+  welcome_title: string | null;
+  welcome_description: string | null;
+  welcome_footer: string | null;
+  welcome_mention_user: boolean;
+  welcome_show_avatar: boolean;
+  welcome_show_server_icon: boolean;
+  welcome_show_member_count: boolean;
+  welcome_show_timestamp: boolean;
+  welcome_use_embed: boolean;
+  goodbye_enabled: boolean;
+  goodbye_channel_id: string | null;
+  goodbye_title: string | null;
+  goodbye_description: string | null;
+  goodbye_footer: string | null;
+  goodbye_mention_user: boolean;
+  goodbye_show_avatar: boolean;
+  goodbye_show_server_icon: boolean;
+  goodbye_show_member_count: boolean;
+  goodbye_show_timestamp: boolean;
+  goodbye_use_embed: boolean;
+  allow_mass_mentions: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface GreetingChannelTelemetry {
+  status: 'ok' | 'not_configured' | 'bot_offline' | 'missing_channel' | 'permission_denied';
+  channel_name: string | null;
+  can_view: boolean;
+  can_send: boolean;
+  can_embed: boolean;
+  warning: string | null;
+}
+
+export interface GreetingRecentActivity {
+  id: string;
+  timestamp: string;
+  event_type: 'welcome' | 'goodbye';
+  username: string;
+  user_id: string;
+  channel_id: string | null;
+  channel_name: string;
+  status: 'delivered' | 'failed';
+  error_message?: string | null;
+  is_test?: boolean;
+}
+
+export interface GreetingChannelOption {
+  id: string;
+  name: string;
+  type: string;
+  category: string;
+  category_id?: string | null;
+  position: number;
+  can_view: boolean;
+  can_send: boolean;
+  can_embed: boolean;
+  is_selectable: boolean;
+}
+
+export interface GreetingsResponse {
+  settings: ServerGreetingSettings;
+  server: {
+    server_id: string;
+    server_name: string;
+    member_count: number;
+    server_icon: string | null;
+    bot_online: boolean;
+  };
+  welcome_channel_status: GreetingChannelTelemetry;
+  goodbye_channel_status: GreetingChannelTelemetry;
+  recent_activity: GreetingRecentActivity[];
+  stats: {
+    welcome_sent_today: number;
+    goodbye_sent_today: number;
+  };
+}

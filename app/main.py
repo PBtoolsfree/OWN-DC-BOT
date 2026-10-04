@@ -23,6 +23,7 @@ from app.database.repositories import (
     PolicyProfileRepo,
     WarningEscalationRepo,
     YouTubeTemplateRepo,
+    ServerGreetingSettingsRepo,
 )
 from app.dashboard.auth import hash_password
 from app.logging_config import setup_logging
@@ -74,6 +75,11 @@ async def init_database(create_admin_user: bool = True) -> None:
         # Initialize default YouTube notification templates
         await YouTubeTemplateRepo.create_defaults(session)
         await session.commit()
+
+        # Initialize default Server Greeting settings if guild configured
+        if settings.DISCORD_GUILD_ID:
+            await ServerGreetingSettingsRepo.get_or_create(session, settings.DISCORD_GUILD_ID)
+            await session.commit()
 
         # Initialize admin user if configured in environment
         if create_admin_user and settings.ADMIN_USERNAME:

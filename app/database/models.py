@@ -513,3 +513,42 @@ class ServerConfig(Base):
     rate_limit_user_actions_per_min = Column(Integer, default=5)
     rate_limit_auto_bans_per_hour = Column(Integer, default=10)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class ServerGreetingSettings(Base):
+    """Server welcome and goodbye message configuration (single-server)."""
+    __tablename__ = "server_greeting_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, unique=True, nullable=False, index=True)
+
+    # Welcome Settings
+    welcome_enabled = Column(Boolean, default=False, nullable=False)
+    welcome_channel_id = Column(BigInteger, nullable=True)
+    welcome_title = Column(String(256), nullable=True)
+    welcome_description = Column(Text, nullable=True)
+    welcome_footer = Column(String(256), nullable=True)
+    welcome_mention_user = Column(Boolean, default=True, nullable=False)
+    welcome_show_avatar = Column(Boolean, default=True, nullable=False)
+    welcome_show_server_icon = Column(Boolean, default=True, nullable=False)
+    welcome_show_member_count = Column(Boolean, default=True, nullable=False)
+    welcome_show_timestamp = Column(Boolean, default=True, nullable=False)
+    welcome_use_embed = Column(Boolean, default=True, nullable=False)
+
+    # Goodbye Settings
+    goodbye_enabled = Column(Boolean, default=False, nullable=False)
+    goodbye_channel_id = Column(BigInteger, nullable=True)
+    goodbye_title = Column(String(256), nullable=True)
+    goodbye_description = Column(Text, nullable=True)
+    goodbye_footer = Column(String(256), nullable=True)
+    goodbye_mention_user = Column(Boolean, default=False, nullable=False)
+    goodbye_show_avatar = Column(Boolean, default=True, nullable=False)
+    goodbye_show_server_icon = Column(Boolean, default=True, nullable=False)
+    goodbye_show_member_count = Column(Boolean, default=True, nullable=False)
+    goodbye_show_timestamp = Column(Boolean, default=True, nullable=False)
+    goodbye_use_embed = Column(Boolean, default=True, nullable=False)
+
+    # Safety
+    allow_mass_mentions = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

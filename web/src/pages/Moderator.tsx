@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { moderationApi } from '../api/moderation';
+import { greetingsApi } from '../api/greetings';
+import { GreetingsResponse } from '../types';
+import { Link } from 'react-router-dom';
 import { ModerationCase, ModerationOverviewStats } from '../types';
 import { StatCard } from '../components/StatCard';
 import { ModerationTable } from '../components/ModerationTable';
@@ -22,6 +25,7 @@ export default function Moderator() {
   const [cases, setCases] = useState<ModerationCase[]>([]);
   const [stats, setStats] = useState<ModerationOverviewStats | null>(null);
   const [selectedCase, setSelectedCase] = useState<ModerationCase | null>(null);
+  const [greetingsData, setGreetingsData] = useState<GreetingsResponse | null>(null);
 
   // Pagination for cases
   const [page, setPage] = useState(1);
@@ -31,11 +35,15 @@ export default function Moderator() {
     async function loadData() {
       setLoading(true);
       try {
-        const [statsData, casesData] = await Promise.all([
+        const [statsData, casesData, gData] = await Promise.all([
+          moderationApi.getStats().catch(() => null),
+          moderationApi.getCases({ limit: 100 }),
+          greetingsApi.getGreetings().catch(() => null),
           moderationApi.getStats().catch(() => null),
           moderationApi.getCases({ limit: 100 }),
         ]);
         if (statsData) setStats(statsData);
+        if (gData) setGreetingsData(gData);
         setCases(casesData);
       } catch (err: any) {
         toast.error(err.message || 'Failed to load moderation data');
@@ -122,6 +130,54 @@ export default function Moderator() {
           subtitle="Auto-removed messages"
         />
       </div>
+
+      {/* Greetings Automation Telemetry */}
+      {greetingsData && (
+        <div className="bg-[#151921] border border-gray-800 rounded-2xl p-4 shadow-lg flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-6 text-xs">
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Welcome System:</span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                greetingsData.settings.welcome_enabled
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-gray-800 text-gray-400 border border-gray-700'
+              }`}>
+                {greetingsData.settings.welcome_enabled ? 'ACTIVE' : 'DISABLED'}
+              </span>
+              <span className="text-gray-300 font-mono">
+                {greetingsData.welcome_channel_status.channel_name ? `#${greetingsData.welcome_channel_status.channel_name}` : 'No channel'}
+              </span>
+              <span className="text-gray-500">?</span>
+              <span className="text-gray-300">Sent Today: <strong className="text-emerald-400">{greetingsData.stats.welcome_sent_today}</strong></span>
+            </div>
+
+            <div className="h-4 w-[1px] bg-gray-800 hidden md:block" />
+
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Goodbye System:</span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                greetingsData.settings.goodbye_enabled
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-gray-800 text-gray-400 border border-gray-700'
+              }`}>
+                {greetingsData.settings.goodbye_enabled ? 'ACTIVE' : 'DISABLED'}
+              </span>
+              <span className="text-gray-300 font-mono">
+                {greetingsData.goodbye_channel_status.channel_name ? `#${greetingsData.goodbye_channel_status.channel_name}` : 'No channel'}
+              </span>
+              <span className="text-gray-500">?</span>
+              <span className="text-gray-300">Sent Today: <strong className="text-rose-400">{greetingsData.stats.goodbye_sent_today}</strong></span>
+            </div>
+          </div>
+
+          <Link
+            to="/moderator/greetings"
+            className="text-xs font-semibold text-[#858eff] hover:text-white bg-[#5865F2]/10 hover:bg-[#5865F2]/20 border border-[#5865F2]/30 px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+          >
+            Manage Welcome & Goodbye ?
+          </Link>
+        </div>
+      )}
 
       {/* Row 2: Top Violations Widget */}
       {stats?.top_violations && stats.top_violations.length > 0 && (
