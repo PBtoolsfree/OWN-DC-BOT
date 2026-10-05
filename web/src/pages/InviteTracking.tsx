@@ -18,10 +18,20 @@ import {
   X,
   User,
   Activity,
+  Radio,
+  Sparkles,
+  RotateCcw,
+  Send,
+  Palette,
+  CheckCircle2,
+  Hash,
+  Sliders,
 } from 'lucide-react';
 import { invitesApi } from '../api/invites';
 import {
   DiscordTrackedInvite,
+  InviteActivitySettings,
+  InviteChannelOption,
   InviteJoinRecord,
   InviteLeaderboardEntry,
   InviteOverviewStats,
@@ -32,7 +42,7 @@ import { toast } from '../hooks/useToast';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 
 export default function InviteTracking() {
-  const [activeTab, setActiveTab] = useState<'invites' | 'joins' | 'diagnostics'>('invites');
+  const [activeTab, setActiveTab] = useState<'invites' | 'joins' | 'activity' | 'diagnostics'>('invites');
   const [timeframe, setTimeframe] = useState<'today' | '7d' | '30d' | 'all'>('all');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -41,6 +51,24 @@ export default function InviteTracking() {
   const [stats, setStats] = useState<InviteOverviewStats | null>(null);
   const [health, setHealth] = useState<InviteTrackerHealth | null>(null);
   const [leaderboard, setLeaderboard] = useState<InviteLeaderboardEntry[]>([]);
+
+  // Activity Log & Channel settings
+  const [activitySettings, setActivitySettings] = useState<InviteActivitySettings | null>(null);
+  const [activityChannels, setActivityChannels] = useState<InviteChannelOption[]>([]);
+  const [loadingActivity, setLoadingActivity] = useState(false);
+  const [savingActivity, setSavingActivity] = useState(false);
+  const [testingActivity, setTestingActivity] = useState(false);
+  const [activityForm, setActivityForm] = useState({
+    enabled: false,
+    channel_id: '',
+    title_template: '🎉 NEW MEMBER INVITED',
+    description_template: '{inviter_mention} invited {member_mention}',
+    color_hex: '#5865F2',
+    log_unknown: true,
+    log_vanity: true,
+    log_created: false,
+    log_revoked: false,
+  });
 
   // Invites list state
   const [invites, setInvites] = useState<DiscordTrackedInvite[]>([]);
@@ -124,13 +152,96 @@ export default function InviteTracking() {
     }
   }, [joinSourceFilter, joinSearch, joinsPage]);
 
+  // Fetch Activity Log settings & Discord channels
+  const fetchActivitySettings = useCallback(async () => {
+    try {
+      setLoadingActivity(true);
+      const [settingsData, channelsData] = await Promise.all([
+        invitesApi.getActivitySettings(),
+        invitesApi.getActivityChannels(),
+      ]);
+      setActivitySettings(settingsData);
+      setActivityChannels(channelsData || []);
+      setActivityForm({
+        enabled: settingsData.enabled,
+        channel_id: settingsData.channel_id || '',
+        title_template: settingsData.title_template || '🎉 NEW MEMBER INVITED',
+        description_template: settingsData.description_template || '{inviter_mention} invited {member_mention}',
+        color_hex: settingsData.color_hex || '#5865F2',
+        log_unknown: settingsData.log_unknown,
+        log_vanity: settingsData.log_vanity,
+        log_created: settingsData.log_created,
+        log_revoked: settingsData.log_revoked,
+      });
+    } catch (err: any) {
+      toast.error('Failed to load invite activity settings: ' + (err.message || 'Unknown error'));
+    } finally {
+      setLoadingActivity(false);
+    }
+  }, []);
+
+  const handleSaveActivitySettings = async () => {
+    try {
+      setSavingActivity(true);
+      const updated = await invitesApi.updateActivitySettings({
+        enabled: activityForm.enabled,
+        channel_id: activityForm.channel_id ? activityForm.channel_id : null,
+        title_template: activityForm.title_template,
+        description_template: activityForm.description_template,
+        color_hex: activityForm.color_hex,
+        log_unknown: activityForm.log_unknown,
+        log_vanity: activityForm.log_vanity,
+        log_created: activityForm.log_created,
+        log_revoked: activityForm.log_revoked,
+      });
+      setActivitySettings(updated);
+      toast.success('Invite activity channel settings saved successfully!');
+      fetchOverview();
+    } catch (err: any) {
+      toast.error('Failed to save activity settings: ' + (err.message || 'Unknown error'));
+    } finally {
+      setSavingActivity(false);
+    }
+  };
+
+  const handleResetActivityTemplate = async () => {
+    try {
+      setSavingActivity(true);
+      const res = await invitesApi.resetActivitySettings();
+      setActivitySettings(res);
+      setActivityForm((prev) => ({
+        ...prev,
+        title_template: res.title_template,
+        description_template: res.description_template,
+        color_hex: res.color_hex,
+      }));
+      toast.success('Template reset to default values.');
+    } catch (err: any) {
+      toast.error('Failed to reset template: ' + (err.message || 'Unknown error'));
+    } finally {
+      setSavingActivity(false);
+    }
+  };
+
+  const handleTestActivityLog = async () => {
+    try {
+      setTestingActivity(true);
+      const res = await invitesApi.testActivityLog();
+      toast.success(`Test invite notification sent to #${res.channel_name}!`);
+    } catch (err: any) {
+      toast.error('Test notification failed: ' + (err.message || 'Unknown error'));
+    } finally {
+      setTestingActivity(false);
+    }
+  };
+
   // Initial load
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchOverview(), fetchInvites(), fetchJoins()]).finally(() => {
+    Promise.all([fetchOverview(), fetchInvites(), fetchJoins(), fetchActivitySettings()]).finally(() => {
       setLoading(false);
     });
-  }, [fetchOverview, fetchInvites, fetchJoins]);
+  }, [fetchOverview, fetchInvites, fetchJoins, fetchActivitySettings]);
 
   // Re-fetch overview when timeframe changes
   useEffect(() => {
@@ -146,6 +257,38 @@ export default function InviteTracking() {
   useEffect(() => {
     fetchJoins();
   }, [fetchJoins]);
+
+  // Re-fetch activity settings when tab switches to activity
+  useEffect(() => {
+    if (activeTab === 'activity') {
+      fetchActivitySettings();
+    }
+  }, [activeTab, fetchActivitySettings]);
+
+  const selectedChannel = activityChannels.find((c) => c.id === activityForm.channel_id);
+
+  const previewVars: Record<string, string> = {
+    inviter: 'Rex12400',
+    inviter_mention: '@Rex12400',
+    inviter_id: '123456789012345678',
+    member: 'Rahul',
+    member_mention: '@Rahul',
+    member_id: '987654321098765432',
+    invite_code: 'xFP2SD3UVF',
+    invite_channel: selectedChannel ? `#${selectedChannel.name}` : '# 🦋┃INVITES',
+    total_invites: '12',
+    rank: '#1',
+    joined_at: 'Today at 12:35 PM',
+    server_name: 'PB HERO Server',
+  };
+
+  const renderPreview = (text: string) => {
+    let result = text || '';
+    for (const [k, v] of Object.entries(previewVars)) {
+      result = result.split(`{${k}}`).join(v);
+    }
+    return result;
+  };
 
   // Copy to clipboard helper
   const handleCopy = (code: string) => {
@@ -285,6 +428,34 @@ export default function InviteTracking() {
         return (
           <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-gray-800 text-gray-300">
             {source}
+          </span>
+        );
+    }
+  };
+
+  const renderPermissionBadge = (status?: string) => {
+    const s = (status || 'UNAVAILABLE').toUpperCase();
+    switch (s) {
+      case 'READY':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <CheckCircle2 className="w-3 h-3" />
+            Ready
+          </span>
+        );
+      case 'MISSING_PERMISSION':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            <AlertCircle className="w-3 h-3" />
+            Missing permission
+          </span>
+        );
+      case 'UNAVAILABLE':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+            <X className="w-3 h-3" />
+            Unavailable
           </span>
         );
     }
@@ -532,6 +703,21 @@ export default function InviteTracking() {
             <span className="ml-1 px-1.5 py-0.5 rounded-full bg-gray-800 text-[10px] text-gray-400">
               {joinsTotal}
             </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('activity')}
+            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold border-b-2 transition-all ${
+              activeTab === 'activity'
+                ? 'border-[#5865F2] text-[#858eff] bg-[#5865F2]/5'
+                : 'border-transparent text-gray-400 hover:text-white hover:bg-gray-800/20'
+            }`}
+          >
+            <Radio className="w-4 h-4" />
+            <span>Invite Activity Channel & Logs</span>
+            {activitySettings?.enabled && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            )}
           </button>
 
           <button
@@ -931,7 +1117,610 @@ export default function InviteTracking() {
         </div>
       )}
 
-      {/* TAB 3: DIAGNOSTICS & HEALTH */}
+      {/* TAB 3: INVITE ACTIVITY LOG & CHANNEL CONFIGURATION */}
+      {activeTab === 'activity' && (
+        <div className="space-y-6">
+          {/* Top Info & Action Card */}
+          <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-[#5865F2]/10 border border-[#5865F2]/20 rounded-xl text-[#5865F2]">
+                  <Radio className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-extrabold text-white flex items-center gap-2">
+                    <span>Invite Activity Channel & Notification System</span>
+                    {activitySettings?.enabled ? (
+                      selectedChannel?.is_ready ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <CheckCircle2 className="w-3 h-3" />
+                          ACTIVE & READY
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                          <AlertCircle className="w-3 h-3" />
+                          DEGRADED
+                        </span>
+                      )
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-gray-800 text-gray-400 border border-gray-700">
+                        DISABLED
+                      </span>
+                    )}
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Select where invite tracking activity will be posted in Discord, configure templates, and test live embeds.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Action Buttons */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleTestActivityLog}
+                disabled={testingActivity || !activityForm.channel_id}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white text-xs font-bold rounded-xl border border-gray-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-md"
+                title={!activityForm.channel_id ? 'Select a channel first to send test notification' : 'Send test embed to Discord'}
+              >
+                <Send className={`w-3.5 h-3.5 ${testingActivity ? 'animate-bounce' : ''}`} />
+                <span>{testingActivity ? 'Sending Test...' : 'Test Invite Log'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveActivitySettings}
+                disabled={savingActivity}
+                className="inline-flex items-center gap-2 px-5 py-2 bg-[#5865F2] hover:bg-[#4752c4] text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-[#5865F2]/20 disabled:opacity-50"
+              >
+                <Check className="w-4 h-4" />
+                <span>{savingActivity ? 'Saving...' : 'Save Configuration'}</span>
+              </button>
+            </div>
+          </div>
+
+          {loadingActivity ? (
+            <div className="bg-[#151921] border border-gray-800 rounded-2xl p-8">
+              <LoadingSkeleton rows={6} />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              {/* Left Column: Settings Form (7 cols) */}
+              <div className="lg:col-span-7 space-y-6">
+                {/* 1. Channel Selector Card */}
+                <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-5">
+                  <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Hash className="w-4 h-4 text-[#5865F2]" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                        Destination Discord Channel
+                      </h3>
+                    </div>
+
+                    {/* Enable Toggle Switch */}
+                    <label className="flex items-center gap-2.5 cursor-pointer">
+                      <span className="text-xs font-semibold text-gray-300">
+                        Enable Invite Activity Logs
+                      </span>
+                      <div className="relative">
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={activityForm.enabled}
+                          onChange={(e) =>
+                            setActivityForm((prev) => ({ ...prev, enabled: e.target.checked }))
+                          }
+                        />
+                        <div
+                          className={`w-11 h-6 rounded-full transition-colors ${
+                            activityForm.enabled ? 'bg-[#5865F2]' : 'bg-gray-700'
+                          }`}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded-full bg-white transition-transform transform mt-1 ml-1 ${
+                              activityForm.enabled ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Channel Dropdown */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-gray-300 block">
+                      Target Text Channel
+                    </label>
+                    <select
+                      value={activityForm.channel_id}
+                      onChange={(e) =>
+                        setActivityForm((prev) => ({ ...prev, channel_id: e.target.value }))
+                      }
+                      className="w-full bg-[#0B0E14] border border-gray-800 rounded-xl px-4 py-2.5 text-xs text-white font-medium focus:outline-none focus:border-[#5865F2] transition-colors"
+                    >
+                      <option value="">No channel selected (Activity logs disabled in Discord)</option>
+                      {activityChannels.map((c) => (
+                        <option
+                          key={c.id}
+                          value={c.id}
+                          disabled={!c.can_view || !c.can_send || !c.can_embed}
+                        >
+                          #{c.name} {c.permission_status === 'READY' ? '— ✅ Ready' : c.permission_status === 'MISSING_PERMISSION' ? '— ⚠️ Missing permission' : '— ❌ Unavailable'}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-gray-500">
+                      Select where invite tracking activity will be posted in Discord. If no channel is selected, invite activity remains stored in the dashboard/database, but nothing is posted to Discord.
+                    </p>
+                  </div>
+
+                  {/* Selected Channel Permission Diagnostics */}
+                  {selectedChannel && (
+                    <div className="bg-[#0B0E14] border border-gray-800 rounded-xl p-4 space-y-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-white flex items-center gap-1.5">
+                          <Hash className="w-3.5 h-3.5 text-gray-400" />
+                          <span>#{selectedChannel.name}</span>
+                        </span>
+                        {renderPermissionBadge(selectedChannel.permission_status)}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 text-[11px] pt-1 border-t border-gray-800/80">
+                        <div className="flex items-center gap-1.5">
+                          {selectedChannel.can_view ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <X className="w-3.5 h-3.5 text-rose-400" />
+                          )}
+                          <span className={selectedChannel.can_view ? 'text-gray-300' : 'text-rose-400'}>
+                            View Channel
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {selectedChannel.can_send ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <X className="w-3.5 h-3.5 text-rose-400" />
+                          )}
+                          <span className={selectedChannel.can_send ? 'text-gray-300' : 'text-rose-400'}>
+                            Send Messages
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {selectedChannel.can_embed ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <X className="w-3.5 h-3.5 text-rose-400" />
+                          )}
+                          <span className={selectedChannel.can_embed ? 'text-gray-300' : 'text-rose-400'}>
+                            Embed Links
+                          </span>
+                        </div>
+                      </div>
+
+                      {!selectedChannel.is_ready && (
+                        <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px] flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                          <div>
+                            <span className="font-bold">DEGRADED: </span>
+                            {selectedChannel.reason || 'Bot cannot send messages to this channel.'}
+                            <div className="text-[10px] text-rose-400/80 mt-0.5">
+                              Please verify bot role permissions in Discord: View Channel, Send Messages, and Embed Links.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Event Filters Card */}
+                <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center gap-2 border-b border-gray-800 pb-3">
+                    <Sliders className="w-4 h-4 text-[#5865F2]" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                      Event Notification Filters
+                    </h3>
+                  </div>
+
+                  <p className="text-xs text-gray-400">
+                    Choose which Discord invite activity events trigger public log messages:
+                  </p>
+
+                  <div className="space-y-3">
+                    {/* Successful Attributed Join */}
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-[#0B0E14] border border-gray-800/80 opacity-90">
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">🎉</span>
+                        <div>
+                          <span className="text-xs font-semibold text-white block">
+                            Successful Attributed Join
+                          </span>
+                          <span className="text-[11px] text-gray-400">
+                            Posts full inviter attribution, referral count, and current rank.
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={true}
+                        disabled
+                        className="rounded border-gray-700 text-[#5865F2] focus:ring-0 cursor-not-allowed"
+                      />
+                    </div>
+
+                    {/* Unknown Join */}
+                    <label className="flex items-center justify-between p-3 rounded-xl bg-[#0B0E14] border border-gray-800/80 hover:border-gray-700 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">⚠️</span>
+                        <div>
+                          <span className="text-xs font-semibold text-white block">
+                            Unknown Join (No false attribution)
+                          </span>
+                          <span className="text-[11px] text-gray-400">
+                            Posts a clean generic join log without assigning false credit or incrementing counters.
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={activityForm.log_unknown}
+                        onChange={(e) =>
+                          setActivityForm((prev) => ({ ...prev, log_unknown: e.target.checked }))
+                        }
+                        className="rounded border-gray-700 text-[#5865F2] focus:ring-0 cursor-pointer"
+                      />
+                    </label>
+
+                    {/* Vanity URL Join */}
+                    <label className="flex items-center justify-between p-3 rounded-xl bg-[#0B0E14] border border-gray-800/80 hover:border-gray-700 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">✨</span>
+                        <div>
+                          <span className="text-xs font-semibold text-white block">
+                            Vanity URL Join
+                          </span>
+                          <span className="text-[11px] text-gray-400">
+                            Posts a vanity attribution notice without adding joins to personal inviter leaderboards.
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={activityForm.log_vanity}
+                        onChange={(e) =>
+                          setActivityForm((prev) => ({ ...prev, log_vanity: e.target.checked }))
+                        }
+                        className="rounded border-gray-700 text-[#5865F2] focus:ring-0 cursor-pointer"
+                      />
+                    </label>
+
+                    {/* Invite Created */}
+                    <label className="flex items-center justify-between p-3 rounded-xl bg-[#0B0E14] border border-gray-800/80 hover:border-gray-700 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">🔗</span>
+                        <div>
+                          <span className="text-xs font-semibold text-white block">
+                            Invite Created Notice (Optional)
+                          </span>
+                          <span className="text-[11px] text-gray-400">
+                            Logs whenever a member creates a new invite code for this server.
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={activityForm.log_created}
+                        onChange={(e) =>
+                          setActivityForm((prev) => ({ ...prev, log_created: e.target.checked }))
+                        }
+                        className="rounded border-gray-700 text-[#5865F2] focus:ring-0 cursor-pointer"
+                      />
+                    </label>
+
+                    {/* Invite Revoked */}
+                    <label className="flex items-center justify-between p-3 rounded-xl bg-[#0B0E14] border border-gray-800/80 hover:border-gray-700 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">🗑️</span>
+                        <div>
+                          <span className="text-xs font-semibold text-white block">
+                            Invite Revoked / Deleted Notice (Optional)
+                          </span>
+                          <span className="text-[11px] text-gray-400">
+                            Logs whenever an invite code is deleted or revoked by staff.
+                          </span>
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={activityForm.log_revoked}
+                        onChange={(e) =>
+                          setActivityForm((prev) => ({ ...prev, log_revoked: e.target.checked }))
+                        }
+                        className="rounded border-gray-700 text-[#5865F2] focus:ring-0 cursor-pointer"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                {/* 3. Embed Template Editor */}
+                <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Palette className="w-4 h-4 text-[#5865F2]" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                        Invite Activity Message Template
+                      </h3>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleResetActivityTemplate}
+                      disabled={savingActivity}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg text-xs font-medium border border-gray-700 transition-colors"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Reset to Default</span>
+                    </button>
+                  </div>
+
+                  {/* Title & Color */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="sm:col-span-2 space-y-1.5">
+                      <label className="text-xs font-semibold text-gray-300">
+                        Embed Title Template
+                      </label>
+                      <input
+                        type="text"
+                        value={activityForm.title_template}
+                        onChange={(e) =>
+                          setActivityForm((prev) => ({ ...prev, title_template: e.target.value }))
+                        }
+                        className="w-full bg-[#0B0E14] border border-gray-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2] transition-colors"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-gray-300">
+                        Accent Color Hex
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={activityForm.color_hex}
+                          onChange={(e) =>
+                            setActivityForm((prev) => ({ ...prev, color_hex: e.target.value }))
+                          }
+                          className="w-8 h-8 rounded-lg border border-gray-800 bg-transparent cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={activityForm.color_hex}
+                          onChange={(e) =>
+                            setActivityForm((prev) => ({ ...prev, color_hex: e.target.value }))
+                          }
+                          className="w-full bg-[#0B0E14] border border-gray-800 rounded-xl px-3 py-2 text-xs text-white font-mono uppercase focus:outline-none focus:border-[#5865F2] transition-colors"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Description Template */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-gray-300">
+                      Description Template
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={activityForm.description_template}
+                      onChange={(e) =>
+                        setActivityForm((prev) => ({ ...prev, description_template: e.target.value }))
+                      }
+                      className="w-full bg-[#0B0E14] border border-gray-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#5865F2] transition-colors"
+                    />
+                  </div>
+
+                  {/* Available Variables */}
+                  <div className="space-y-2 pt-2 border-t border-gray-800/80">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 block">
+                      Available Variables (Click to copy)
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        '{inviter}',
+                        '{inviter_mention}',
+                        '{inviter_id}',
+                        '{member}',
+                        '{member_mention}',
+                        '{member_id}',
+                        '{invite_code}',
+                        '{invite_channel}',
+                        '{total_invites}',
+                        '{rank}',
+                        '{joined_at}',
+                        '{server_name}',
+                      ].map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(v);
+                            toast.success(`Copied ${v} to clipboard`);
+                          }}
+                          className="px-2 py-1 rounded bg-[#0B0E14] hover:bg-gray-800 border border-gray-800 text-[11px] font-mono text-[#858eff] transition-colors"
+                          title="Click to copy variable"
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Live Discord Preview & Diagnostics (5 cols) */}
+              <div className="lg:col-span-5 space-y-6">
+                {/* Live Discord Embed Preview */}
+                <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                        Discord Invite Log Preview
+                      </h3>
+                    </div>
+                    <span className="text-[10px] text-gray-500 font-mono">Live Simulation</span>
+                  </div>
+
+                  {/* Discord Chat Container */}
+                  <div className="bg-[#313338] rounded-xl p-4 text-xs font-sans text-gray-200 shadow-inner">
+                    {/* Message Header */}
+                    <div className="flex items-start gap-3 mb-2.5">
+                      <div className="w-10 h-10 rounded-full bg-[#5865F2] flex items-center justify-center font-black text-white shrink-0 shadow-md">
+                        PB
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-white text-sm">PB HERO</span>
+                          <span className="bg-[#5865F2] text-white text-[9px] font-bold px-1 py-0.5 rounded leading-none">
+                            BOT
+                          </span>
+                          <span className="text-[11px] text-gray-400 ml-1">Today at 12:35 PM</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Simulated Discord Embed */}
+                    <div
+                      className="bg-[#2b2d31] rounded-r-lg p-3.5 space-y-3 shadow-md"
+                      style={{ borderLeft: `4px solid ${activityForm.color_hex || '#5865F2'}` }}
+                    >
+                      {/* Embed Title */}
+                      <div className="font-bold text-white text-sm">
+                        {renderPreview(activityForm.title_template)}
+                      </div>
+
+                      {/* Embed Description */}
+                      <div className="text-gray-300 text-xs">
+                        {renderPreview(activityForm.description_template)}
+                      </div>
+
+                      {/* Embed Fields (2 cols) */}
+                      <div className="grid grid-cols-2 gap-2.5 pt-1 text-xs">
+                        <div>
+                          <span className="font-bold text-gray-400 text-[10px] uppercase block">
+                            👤 Inviter
+                          </span>
+                          <span className="text-white font-medium">Rex12400</span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-gray-400 text-[10px] uppercase block">
+                            👥 New Member
+                          </span>
+                          <span className="text-white font-medium">Rahul</span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-gray-400 text-[10px] uppercase block">
+                            🔗 Invite
+                          </span>
+                          <span className="font-mono text-indigo-400 font-semibold">xFP2SD3UVF</span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-gray-400 text-[10px] uppercase block">
+                            📍 Invite Channel
+                          </span>
+                          <span className="text-gray-300 font-mono">
+                            {selectedChannel ? `#${selectedChannel.name}` : '# 🦋┃INVITES'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-gray-400 text-[10px] uppercase block">
+                            📊 Total Invites
+                          </span>
+                          <span className="text-emerald-400 font-bold">12</span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-gray-400 text-[10px] uppercase block">
+                            🏆 Current Rank
+                          </span>
+                          <span className="text-amber-400 font-bold">#1</span>
+                        </div>
+                      </div>
+
+                      {/* Embed Footer */}
+                      <div className="border-t border-gray-700/60 pt-2 text-[10px] text-gray-400 flex items-center justify-between">
+                        <span>PB HERO Discord Invite Tracker</span>
+                        <span>Today at 12:35 PM</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-gray-500 italic">
+                    The live preview accurately reflects current template settings with sample attribution test data.
+                  </p>
+                </div>
+
+                {/* Status Diagnostic Card */}
+                <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center gap-2 border-b border-gray-800 pb-3">
+                    <ShieldCheck className="w-4 h-4 text-[#5865F2]" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                      Invite Activity Diagnostics
+                    </h3>
+                  </div>
+
+                  <div className="space-y-3 text-xs">
+                    <div className="flex items-center justify-between bg-[#0B0E14] p-3 rounded-xl border border-gray-800/80">
+                      <span className="text-gray-400">Activity System Enabled:</span>
+                      <span
+                        className={`font-bold ${
+                          activityForm.enabled ? 'text-emerald-400' : 'text-gray-500'
+                        }`}
+                      >
+                        {activityForm.enabled ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-[#0B0E14] p-3 rounded-xl border border-gray-800/80">
+                      <span className="text-gray-400">Channel Selected:</span>
+                      <span
+                        className={`font-semibold ${
+                          activityForm.channel_id ? 'text-white' : 'text-gray-500'
+                        }`}
+                      >
+                        {selectedChannel ? `#${selectedChannel.name}` : 'None'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-[#0B0E14] p-3 rounded-xl border border-gray-800/80">
+                      <span className="text-gray-400">Bot Channel Permissions:</span>
+                      <span
+                        className={`font-bold ${
+                          selectedChannel?.is_ready ? 'text-emerald-400' : 'text-amber-400'
+                        }`}
+                      >
+                        {selectedChannel?.is_ready ? 'ALL GRANTED (Ready)' : 'INSUFFICIENT'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-[#0B0E14] rounded-xl border border-gray-800/80 text-[11px] text-gray-400 space-y-1">
+                    <span className="font-bold text-gray-300 block">Spam & Reconnect Protection:</span>
+                    <p>
+                      Each member join generates at most one activity message. Reconnects and restarts do not replay historical joins.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 4: DIAGNOSTICS & HEALTH */}
       {activeTab === 'diagnostics' && (
         <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-6">
           <div className="border-b border-gray-800 pb-4 flex items-center justify-between">
@@ -954,7 +1743,7 @@ export default function InviteTracking() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* Gateway & Permissions */}
             <div className="space-y-4">
               <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">
@@ -1025,6 +1814,71 @@ export default function InviteTracking() {
                 <div className="flex items-center justify-between">
                   <span className="text-gray-400">Historical Database Joins</span>
                   <span className="font-bold text-emerald-400">{health?.total_joins ?? 0}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Activity Channel Status */}
+            <div className="space-y-4">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400">
+                Invite Activity Channel
+              </h3>
+              <div className="bg-[#0B0E14] border border-gray-800 rounded-xl p-4 space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Configured Destination</span>
+                  <span className="font-mono text-white font-semibold truncate max-w-[130px]">
+                    {health?.activity_channel?.configured
+                      ? `#${health.activity_channel.channel_name}`
+                      : 'None'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">View Channel</span>
+                  <span
+                    className={`font-bold ${
+                      health?.activity_channel?.can_view ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                  >
+                    {health?.activity_channel?.can_view ? 'GRANTED' : 'MISSING'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Send Messages</span>
+                  <span
+                    className={`font-bold ${
+                      health?.activity_channel?.can_send ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                  >
+                    {health?.activity_channel?.can_send ? 'GRANTED' : 'MISSING'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Embed Links</span>
+                  <span
+                    className={`font-bold ${
+                      health?.activity_channel?.can_embed ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                  >
+                    {health?.activity_channel?.can_embed ? 'GRANTED' : 'MISSING'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between border-t border-gray-800/80 pt-2">
+                  <span className="text-gray-400">Delivery Status</span>
+                  <span
+                    className={`font-bold ${
+                      !health?.activity_channel?.configured
+                        ? 'text-gray-400'
+                        : health?.activity_channel?.is_ready
+                        ? 'text-emerald-400'
+                        : 'text-amber-400'
+                    }`}
+                  >
+                    {!health?.activity_channel?.configured
+                      ? 'NOT SET'
+                      : health?.activity_channel?.is_ready
+                      ? 'READY'
+                      : 'DEGRADED'}
+                  </span>
                 </div>
               </div>
             </div>

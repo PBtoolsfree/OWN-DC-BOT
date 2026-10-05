@@ -1,6 +1,8 @@
 import { apiClient } from './client';
 import {
   DiscordTrackedInvite,
+  InviteActivitySettings,
+  InviteChannelOption,
   InviteJoinRecord,
   InviteLeaderboardEntry,
   InviteOverviewStats,
@@ -91,4 +93,19 @@ export const invitesApi = {
 
   revokeInvite: (code: string) =>
     apiClient.delete<{ success: boolean; invite_code: string; deleted_from_discord: boolean; status: string }>(`/moderation/invites/${encodeURIComponent(code)}`),
+
+  getActivitySettings: () =>
+    apiClient.get<InviteActivitySettings>('/moderation/invites/activity-settings'),
+
+  updateActivitySettings: (payload: Partial<InviteActivitySettings>) =>
+    apiClient.put<InviteActivitySettings>('/moderation/invites/activity-settings', payload),
+
+  resetActivitySettings: () =>
+    apiClient.post<InviteActivitySettings>('/moderation/invites/activity-settings/reset'),
+
+  testActivityLog: () =>
+    apiClient.post<{ success: boolean; channel_id: string; channel_name: string; message_id: string }>('/moderation/invites/activity-settings/test'),
+
+  getActivityChannels: () =>
+    apiClient.get<InviteChannelOption[]>('/moderation/invites/channels'),
 };

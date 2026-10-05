@@ -23,8 +23,61 @@ vi.mock('../api/invites', () => ({
     getUserProfile: vi.fn(),
     syncInvites: vi.fn(),
     revokeInvite: vi.fn(),
+    getActivitySettings: vi.fn(),
+    updateActivitySettings: vi.fn(),
+    resetActivitySettings: vi.fn(),
+    testActivityLog: vi.fn(),
+    getActivityChannels: vi.fn(),
   },
 }));
+
+const mockActivitySettings = {
+  guild_id: '1234567890',
+  enabled: true,
+  channel_id: '2001',
+  title_template: '🎉 NEW MEMBER INVITED',
+  description_template: '{inviter_mention} invited {member_mention}',
+  color_hex: '#5865F2',
+  log_unknown: true,
+  log_vanity: true,
+  log_created: false,
+  log_revoked: false,
+  updated_at: '2026-10-05T10:00:00Z',
+};
+
+const mockActivityChannels = [
+  {
+    id: '2001',
+    name: 'invites',
+    type: 'text',
+    category: 'Welcome & Logs',
+    position: 1,
+    can_view: true,
+    can_send: true,
+    can_embed: true,
+    status: 'ready' as const,
+    status_label: '✅ Ready',
+    is_selectable: true,
+    is_ready: true,
+    permission_status: 'READY',
+  },
+  {
+    id: '2002',
+    name: 'staff-only',
+    type: 'text',
+    category: 'Admin',
+    position: 2,
+    can_view: true,
+    can_send: false,
+    can_embed: false,
+    status: 'missing_permission' as const,
+    status_label: '⚠️ Missing permission',
+    is_selectable: false,
+    is_ready: false,
+    permission_status: 'MISSING_PERMISSION',
+    reason: 'Missing permissions: Send Messages, Embed Links',
+  },
+];
 
 const mockStats: InviteOverviewStats = {
   timeframe: 'all',
@@ -167,6 +220,16 @@ describe('InviteTracking Page Component', () => {
       page: 1,
       page_size: 25,
       total_pages: 1,
+    });
+    vi.mocked(invitesApi.getActivitySettings).mockResolvedValue(mockActivitySettings as any);
+    vi.mocked(invitesApi.getActivityChannels).mockResolvedValue(mockActivityChannels as any);
+    vi.mocked(invitesApi.updateActivitySettings).mockResolvedValue(mockActivitySettings as any);
+    vi.mocked(invitesApi.resetActivitySettings).mockResolvedValue(mockActivitySettings as any);
+    vi.mocked(invitesApi.testActivityLog).mockResolvedValue({
+      success: true,
+      channel_id: '2001',
+      channel_name: 'invites',
+      message_id: '999888777',
     });
   });
 
@@ -322,6 +385,100 @@ describe('InviteTracking Page Component', () => {
       expect(screen.getByText(/invite tracking diagnostics & gateway state/i)).toBeInTheDocument();
       expect(screen.getByText('Manage Server Permission')).toBeInTheDocument();
       expect(screen.getByText('Cached Active Invites (RAM)')).toBeInTheDocument();
+    });
+  });
+
+  it('navigates to Invite Activity tab and renders configuration, channel selector, and preview', async () => {
+    render(
+      <BrowserRouter>
+        <InviteTracking />
+      </BrowserRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('HERO2026')).toBeInTheDocument();
+    });
+
+    // Switch to Invite Activity tab
+    const activityTab = screen.getByRole('button', { name: /invite activity channel & logs/i });
+    fireEvent.click(activityTab);
+
+    await waitFor(() => {
+      expect(screen.getByText(/invite activity channel & notification system/i)).toBeInTheDocument();
+      expect(screen.getByText(/destination discord channel/i)).toBeInTheDocument();
+      expect(screen.getByText(/discord invite log preview/i)).toBeInTheDocument();
+      expect(screen.getByText(/event notification filters/i)).toBeInTheDocument();
+      expect(screen.getByText(/invite activity message template/i)).toBeInTheDocument();
+    });
+
+    // Check channel option is populated
+    expect(screen.getByText(/#invites — ✅ Ready/i)).toBeInTheDocument();
+    // Inaccessible channel shows missing permission
+    expect(screen.getByText(/#staff-only — ⚠️ Missing permission/i)).toBeInTheDocument();
+
+    // Check preview elements
+    expect(screen.getAllByText(/🎉 NEW MEMBER INVITED/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Rex12400/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('allows saving activity configuration', async () => {
+    render(
+      <BrowserRouter>
+        <InviteTracking />
+      </BrowserRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('HERO2026')).toBeInTheDocument();
+    });
+
+    const activityTab = screen.getByRole('button', { name: /invite activity channel & logs/i });
+    fireEvent.click(activityTab);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /save configuration/i })).toBeInTheDocument();
+    });
+
+    const saveBtn = screen.getByRole('button', { name: /save configuration/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(invitesApi.updateActivitySettings).toHaveBeenCalled();
+    });
+  });
+
+  it('triggers test invite log notification and reset template', async () => {
+    render(
+      <BrowserRouter>
+        <InviteTracking />
+      </BrowserRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('HERO2026')).toBeInTheDocument();
+    });
+
+    const activityTab = screen.getByRole('button', { name: /invite activity channel & logs/i });
+    fireEvent.click(activityTab);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /test invite log/i })).toBeInTheDocument();
+    });
+
+    // Click test button
+    const testBtn = screen.getByRole('button', { name: /test invite log/i });
+    fireEvent.click(testBtn);
+
+    await waitFor(() => {
+      expect(invitesApi.testActivityLog).toHaveBeenCalled();
+    });
+
+    // Click reset to default template
+    const resetBtn = screen.getByRole('button', { name: /reset to default/i });
+    fireEvent.click(resetBtn);
+
+    await waitFor(() => {
+      expect(invitesApi.resetActivitySettings).toHaveBeenCalled();
     });
   });
 });

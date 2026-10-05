@@ -18,8 +18,10 @@ from discord.ext import commands
 
 from app.config import get_settings
 from app.database.engine import get_session_direct
+from app.database.models import InviteJoin
 from app.database.repositories import (
     DiscordInviteRepo,
+    InviteActivitySettingsRepo,
     InviteJoinRepo,
     ServerConfigRepo,
     ServerInviteSettingsRepo,
@@ -617,9 +619,11 @@ class InviteTracker:
                     channel_name=chosen_channel_name,
                     joined_at=now_naive,
                 )
+                join_record_id = join_record.id if join_record else None
                 await session.commit()
             except Exception as e:
                 logger.exception("Failed to persist join attribution in database: %s", e)
+                join_record_id = None
             finally:
                 await session.close()
 
@@ -642,15 +646,22 @@ class InviteTracker:
             except Exception as e:
                 logger.warning("Failed to send invite join log embed: %s", e)
 
+            # Dispatch Dedicated Discord Invite Activity Log
+            try:
+                await self._dispatch_activity_log(member, result, join_record_id=join_record_id)
+            except Exception as e:
+                logger.warning("Failed to send dedicated invite activity embed: %s", e)
+
             return result
 
     async def _record_unknown_join(
         self, member: discord.Member, reason: str, joined_at: datetime
     ) -> AttributionResult:
         """Record join with UNKNOWN attribution."""
+        join_record_id = None
         session = await get_session_direct()
         try:
-            await InviteJoinRepo.record_join(
+            join_record = await InviteJoinRepo.record_join(
                 session,
                 guild_id=member.guild.id,
                 member_id=member.id,
@@ -663,6 +674,7 @@ class InviteTracker:
                 channel_name=None,
                 joined_at=joined_at,
             )
+            join_record_id = join_record.id if join_record else None
             await session.commit()
         except Exception as e:
             logger.warning("Failed to store unknown join record: %s", e)
@@ -686,6 +698,13 @@ class InviteTracker:
             await self._dispatch_join_log(member, res)
         except Exception:
             pass
+
+        # Dispatch Dedicated Discord Invite Activity Log
+        try:
+            await self._dispatch_activity_log(member, res, join_record_id=join_record_id)
+        except Exception as e:
+            logger.warning("Failed to send dedicated unknown invite activity embed: %s", e)
+
         return res
 
     # ========================================================
@@ -770,6 +789,12 @@ class InviteTracker:
         except Exception as e:
             logger.warning("Failed to dispatch invite_create log: %s", e)
 
+        # Dedicated Invite Activity Log
+        try:
+            await self._dispatch_activity_lifecycle("invite_create", invite)
+        except Exception as e:
+            logger.warning("Failed to dispatch activity invite_create: %s", e)
+
     async def handle_invite_delete(self, invite: discord.Invite) -> None:
         """Handle on_invite_delete event. Marks revoked, preserves history."""
         if not invite.guild or invite.guild.id != self.guild_id:
@@ -794,6 +819,12 @@ class InviteTracker:
             await self._dispatch_lifecycle_log("invite_revoke", invite)
         except Exception as e:
             logger.warning("Failed to dispatch invite_revoke log: %s", e)
+
+        # Dedicated Invite Activity Log
+        try:
+            await self._dispatch_activity_lifecycle("invite_revoke", invite)
+        except Exception as e:
+            logger.warning("Failed to dispatch activity invite_revoke: %s", e)
 
     # ========================================================
     # Administrative Actions (Revoke)
@@ -1012,6 +1043,401 @@ class InviteTracker:
             embed.add_field(name="Status", value="REVOKED (joins preserved)", inline=True)
             embed.set_footer(text="PB HERO Invite Tracker")
             await channel.send(embed=embed)
+
+    # ========================================================
+    # Dedicated Discord Invite Activity Logging
+    # ========================================================
+
+    @staticmethod
+    def _safe_format_template(template_str: str, format_vars: Dict[str, Any]) -> str:
+        """Safely format a template string by replacing {variable} tags."""
+        res = template_str or ""
+        for k, v in format_vars.items():
+            res = res.replace(f"{{{k}}}", str(v))
+        return res
+
+    async def get_activity_diagnostics(self) -> Dict[str, Any]:
+        """Check status and permissions of configured invite activity channel."""
+        session = await get_session_direct()
+        try:
+            cfg = await InviteActivitySettingsRepo.get_or_create(session, self.guild_id)
+            if not cfg.enabled or not cfg.channel_id:
+                return {
+                    "enabled": bool(cfg.enabled),
+                    "channel_id": str(cfg.channel_id) if cfg.channel_id else None,
+                    "channel_name": None,
+                    "status": "DISABLED" if not cfg.enabled else "NO_CHANNEL",
+                    "reason": "Invite activity logging is disabled" if not cfg.enabled else "No Discord channel selected",
+                    "can_view": False,
+                    "can_send": False,
+                    "can_embed": False,
+                    "is_ready": False,
+                }
+
+            if not self.bot or not self.bot.is_ready():
+                return {
+                    "enabled": True,
+                    "channel_id": str(cfg.channel_id),
+                    "channel_name": None,
+                    "status": "DEGRADED",
+                    "reason": "Discord bot is offline or not ready",
+                    "can_view": False,
+                    "can_send": False,
+                    "can_embed": False,
+                    "is_ready": False,
+                }
+
+            guild = self.bot.get_guild(self.guild_id)
+            if not guild:
+                return {
+                    "enabled": True,
+                    "channel_id": str(cfg.channel_id),
+                    "channel_name": None,
+                    "status": "DEGRADED",
+                    "reason": "Configured guild not accessible by bot",
+                    "can_view": False,
+                    "can_send": False,
+                    "can_embed": False,
+                    "is_ready": False,
+                }
+
+            channel = guild.get_channel(int(cfg.channel_id))
+            if not channel or not isinstance(channel, discord.TextChannel):
+                return {
+                    "enabled": True,
+                    "channel_id": str(cfg.channel_id),
+                    "channel_name": None,
+                    "status": "DEGRADED",
+                    "reason": "Bot cannot send messages to the configured invite log channel.",
+                    "can_view": False,
+                    "can_send": False,
+                    "can_embed": False,
+                    "is_ready": False,
+                }
+
+            me = guild.me
+            perms = channel.permissions_for(me) if me else None
+            can_view = bool(perms.view_channel) if perms else False
+            can_send = bool(perms.send_messages) if perms else False
+            can_embed = bool(perms.embed_links) if perms else False
+
+            is_ready = can_view and can_send and can_embed
+            status = "HEALTHY" if is_ready else "DEGRADED"
+            reason = None if is_ready else "Bot cannot send messages to the configured invite log channel."
+
+            return {
+                "enabled": True,
+                "channel_id": str(channel.id),
+                "channel_name": channel.name,
+                "status": status,
+                "reason": reason,
+                "can_view": can_view,
+                "can_send": can_send,
+                "can_embed": can_embed,
+                "is_ready": is_ready,
+            }
+        finally:
+            await session.close()
+
+    async def _dispatch_activity_log(
+        self,
+        member: discord.Member,
+        result: AttributionResult,
+        join_record_id: Optional[int] = None,
+    ) -> Optional[int]:
+        """Dispatch a professional Discord embed to the dedicated invite activity channel."""
+        session = await get_session_direct()
+        try:
+            cfg = await InviteActivitySettingsRepo.get_or_create(session, member.guild.id)
+            if not cfg.enabled or not cfg.channel_id:
+                return None
+
+            # Event filters
+            if result.source_type == "UNKNOWN" and not cfg.log_unknown:
+                return None
+            if result.source_type == "VANITY_URL" and not cfg.log_vanity:
+                return None
+
+            # Channel validation
+            channel = member.guild.get_channel(int(cfg.channel_id))
+            if not channel or not isinstance(channel, discord.TextChannel):
+                logger.warning(
+                    "Configured invite activity channel %s not found or invalid in guild %s",
+                    cfg.channel_id,
+                    member.guild.id,
+                )
+                return None
+
+            me = member.guild.me
+            perms = channel.permissions_for(me) if me else None
+            if not perms or not (perms.view_channel and perms.send_messages and perms.embed_links):
+                logger.warning(
+                    "Bot lacks permissions (view/send/embed) in invite activity channel %s",
+                    channel.name,
+                )
+                return None
+
+            # Duplicate check if join record already posted
+            if join_record_id:
+                join_obj = await session.get(InviteJoin, join_record_id)
+                if join_obj and join_obj.activity_message_id:
+                    logger.info("Activity embed already dispatched for join %s, skipping duplicate", join_record_id)
+                    return join_obj.activity_message_id
+
+            # Color resolution
+            color_int = 0x5865F2
+            if cfg.color_hex:
+                clean_hex = str(cfg.color_hex).lstrip("#")
+                try:
+                    color_int = int(clean_hex, 16)
+                except ValueError:
+                    pass
+
+            joined_timestamp = int(member.joined_at.timestamp()) if member.joined_at else int(time.time())
+            joined_str = f"<t:{joined_timestamp}:f>"
+
+            if result.source_type == "NORMAL_INVITE":
+                total_invites = 0
+                rank_str = "N/A"
+                if result.inviter_id:
+                    stats = await InviteJoinRepo.get_user_stats(session, member.guild.id, result.inviter_id)
+                    total_invites = stats.get("total_joins", stats.get("total_invites", 0))
+                    rank = await InviteJoinRepo.get_user_rank(session, member.guild.id, result.inviter_id)
+                    if rank is not None:
+                        rank_str = f"#{rank}"
+
+                inviter_mention = f"<@{result.inviter_id}>" if result.inviter_id else (result.inviter_name or "Unknown")
+                chan_str = f"<#{result.channel_id}>" if result.channel_id else (f"#{result.channel_name}" if result.channel_name else "Unknown")
+
+                format_vars = {
+                    "inviter": result.inviter_name or "Unknown",
+                    "inviter_mention": inviter_mention,
+                    "inviter_id": str(result.inviter_id or ""),
+                    "member": member.name,
+                    "member_mention": member.mention,
+                    "member_id": str(member.id),
+                    "invite_code": result.invite_code or "Unknown",
+                    "invite_channel": chan_str,
+                    "total_invites": str(total_invites),
+                    "rank": rank_str,
+                    "joined_at": joined_str,
+                    "server_name": member.guild.name,
+                }
+
+                title = self._safe_format_template(cfg.title_template or "🎉 NEW MEMBER INVITED", format_vars)
+                desc = self._safe_format_template(cfg.description_template or "{inviter_mention} invited {member_mention}", format_vars)
+
+                embed = discord.Embed(
+                    title=title,
+                    description=desc if desc.strip() else None,
+                    color=color_int,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                embed.add_field(name="👤 Inviter", value=inviter_mention, inline=True)
+                embed.add_field(name="👥 New Member", value=member.mention, inline=True)
+                embed.add_field(name="🔗 Invite", value=f"`{result.invite_code or 'Unknown'}`", inline=True)
+                embed.add_field(name="📍 Invite Channel", value=chan_str, inline=True)
+                embed.add_field(name="📊 Total Invites", value=str(total_invites), inline=True)
+                if rank_str != "N/A":
+                    embed.add_field(name="🏆 Rank", value=rank_str, inline=True)
+                embed.add_field(name="🕐 Joined", value=joined_str, inline=True)
+
+                # Milestone check
+                if total_invites in (5, 10, 25, 50, 100):
+                    embed.add_field(
+                        name="🏆 Invite Milestone",
+                        value=f"{inviter_mention} has reached {total_invites} invites!",
+                        inline=False,
+                    )
+
+            elif result.source_type == "VANITY_URL":
+                embed = discord.Embed(
+                    title="✨ MEMBER JOINED VIA VANITY",
+                    description="Member joined using the server's vanity URL.",
+                    color=0x3498DB,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                embed.add_field(name="👥 Member", value=f"{member.mention} (`{member.name}`)", inline=False)
+                embed.add_field(name="📍 Source", value="Server Vanity URL", inline=True)
+                if result.invite_code:
+                    embed.add_field(name="🔗 Invite", value=f"`{result.invite_code}`", inline=True)
+                embed.add_field(name="🕐 Time", value=joined_str, inline=True)
+
+            else:
+                embed = discord.Embed(
+                    title="⚠️ MEMBER JOINED",
+                    description="Join could not be reliably attributed to a specific active invite.",
+                    color=0xE67E22,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                embed.add_field(name="👥 Member", value=f"{member.mention} (`{member.name}`)", inline=False)
+                embed.add_field(name="🔗 Invite", value="Unknown", inline=True)
+                embed.add_field(name="📍 Source", value="Unknown", inline=True)
+                embed.add_field(name="🕐 Time", value=joined_str, inline=True)
+
+            if getattr(member, "display_avatar", None):
+                embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_footer(text="PB HERO Discord Invite Tracker")
+
+            msg = await channel.send(embed=embed)
+            if join_record_id and msg:
+                await InviteJoinRepo.update_activity_message_id(session, join_record_id, msg.id)
+                await session.commit()
+            return msg.id if msg else None
+        except Exception as e:
+            logger.warning("Failed to dispatch invite activity log embed: %s", e)
+            return None
+        finally:
+            await session.close()
+
+    async def _dispatch_activity_lifecycle(self, event_type: str, invite: discord.Invite) -> None:
+        """Dispatch lifecycle logs (invite created / revoked) to the dedicated activity channel."""
+        session = await get_session_direct()
+        try:
+            cfg = await InviteActivitySettingsRepo.get_or_create(session, self.guild_id)
+            if not cfg.enabled or not cfg.channel_id:
+                return
+
+            if event_type == "invite_create" and not cfg.log_created:
+                return
+            if event_type == "invite_revoke" and not cfg.log_revoked:
+                return
+
+            guild = self.bot.get_guild(self.guild_id) if self.bot else None
+            if not guild:
+                return
+
+            channel = guild.get_channel(int(cfg.channel_id))
+            if not channel or not isinstance(channel, discord.TextChannel):
+                return
+
+            me = guild.me
+            perms = channel.permissions_for(me) if me else None
+            if not perms or not (perms.view_channel and perms.send_messages and perms.embed_links):
+                return
+
+            inviter_str = f"{invite.inviter.mention} (`{invite.inviter}`)" if invite.inviter else "System / Unknown"
+            chan_str = f"{invite.channel.mention}" if invite.channel else "Unknown"
+
+            if event_type == "invite_create":
+                embed = discord.Embed(
+                    title="🔗 NEW INVITE CREATED",
+                    color=0x5865F2,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                embed.add_field(name="Invite Code", value=f"`{invite.code}`", inline=True)
+                embed.add_field(name="Created By", value=inviter_str, inline=True)
+                embed.add_field(name="Target Channel", value=chan_str, inline=True)
+                max_uses_str = str(invite.max_uses) if invite.max_uses else "Unlimited"
+                max_age_str = f"{invite.max_age}s" if invite.max_age else "Never"
+                embed.add_field(name="Max Uses", value=max_uses_str, inline=True)
+                embed.add_field(name="Expires", value=max_age_str, inline=True)
+                embed.set_footer(text="PB HERO Invite Tracker")
+                await channel.send(embed=embed)
+
+            elif event_type == "invite_revoke":
+                embed = discord.Embed(
+                    title="🗑️ INVITE REVOKED",
+                    color=0xED4245,
+                    timestamp=datetime.now(timezone.utc),
+                )
+                embed.add_field(name="Invite Code", value=f"`{invite.code}`", inline=True)
+                embed.add_field(name="Channel", value=chan_str, inline=True)
+                embed.add_field(name="Status", value="REVOKED (joins preserved)", inline=True)
+                embed.set_footer(text="PB HERO Invite Tracker")
+                await channel.send(embed=embed)
+        except Exception as e:
+            logger.warning("Failed to dispatch activity lifecycle log (%s): %s", event_type, e)
+        finally:
+            await session.close()
+
+    async def send_test_activity_log(self) -> Dict[str, Any]:
+        """Send a test invite activity embed to the configured channel without modifying DB counters."""
+        if not self.bot or not self.bot.is_ready():
+            raise RuntimeError("Discord bot is offline or not ready.")
+
+        guild = self.bot.get_guild(self.guild_id)
+        if not guild:
+            raise RuntimeError(f"Configured guild {self.guild_id} not accessible by bot.")
+
+        session = await get_session_direct()
+        try:
+            cfg = await InviteActivitySettingsRepo.get_or_create(session, self.guild_id)
+            if not cfg.enabled or not cfg.channel_id:
+                raise ValueError("Invite activity logging is disabled or no channel is selected.")
+
+            channel = guild.get_channel(int(cfg.channel_id))
+            if not channel or not isinstance(channel, discord.TextChannel):
+                raise ValueError(f"Configured channel ID {cfg.channel_id} not found as a text channel.")
+
+            me = guild.me
+            perms = channel.permissions_for(me) if me else None
+            missing = []
+            if not perms or not perms.view_channel:
+                missing.append("View Channel")
+            if not perms or not perms.send_messages:
+                missing.append("Send Messages")
+            if not perms or not perms.embed_links:
+                missing.append("Embed Links")
+            if missing:
+                raise ValueError(f"Bot lacks required permissions in #{channel.name}: {', '.join(missing)}")
+
+            test_vars = {
+                "inviter": "Rex12400",
+                "inviter_mention": "@Rex12400",
+                "inviter_id": "123456789012345678",
+                "member": "Rahul",
+                "member_mention": "@Rahul",
+                "member_id": "987654321098765432",
+                "invite_code": "xFP2SD3UVF",
+                "invite_channel": f"#{channel.name}",
+                "total_invites": "12",
+                "rank": "#1",
+                "joined_at": "Today at 12:35 PM",
+                "server_name": guild.name,
+            }
+
+            title = "🧪 INVITE TRACKING TEST"
+            desc = self._safe_format_template(
+                cfg.description_template or "@Rex12400 invited @Rahul", test_vars
+            )
+            color_int = 0x5865F2
+            if cfg.color_hex:
+                clean_hex = str(cfg.color_hex).lstrip("#")
+                try:
+                    color_int = int(clean_hex, 16)
+                except ValueError:
+                    pass
+
+            embed = discord.Embed(
+                title=title,
+                description=desc if desc.strip() else None,
+                color=color_int,
+                timestamp=datetime.now(timezone.utc),
+            )
+            embed.add_field(name="👤 Inviter", value="@Rex12400", inline=True)
+            embed.add_field(name="👥 New Member", value="@Rahul", inline=True)
+            embed.add_field(name="🔗 Invite", value="`xFP2SD3UVF`", inline=True)
+            embed.add_field(name="📍 Invite Channel", value=f"#{channel.name}", inline=True)
+            embed.add_field(name="📊 Total Invites", value="12", inline=True)
+            embed.add_field(name="🏆 Rank", value="#1", inline=True)
+            embed.add_field(name="🕐 Joined", value="Today at 12:35 PM", inline=True)
+            embed.add_field(
+                name="🧪 Notice",
+                value="This is a test notification from PB HERO Bot. No database counters were modified.",
+                inline=False,
+            )
+            embed.set_footer(text="PB HERO Discord Invite Tracker • Test Mode")
+
+            msg = await channel.send(embed=embed)
+            return {
+                "success": True,
+                "channel_id": str(channel.id),
+                "channel_name": channel.name,
+                "message_id": str(msg.id),
+            }
+        finally:
+            await session.close()
 
 
 _invite_tracker: Optional[InviteTracker] = None

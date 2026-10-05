@@ -31,6 +31,7 @@ from app.database.engine import get_session_direct, test_connection
 from app.database.models import (
     DiscordInvite,
     EventType,
+    InviteActivitySettings,
     InviteJoin,
     ModerationAction,
     PolicyValue,
@@ -57,6 +58,7 @@ from app.database.repositories import (
     CustomModerationStyleRepo,
     DiscordInviteRepo,
     ExemptionRuleRepo,
+    InviteActivitySettingsRepo,
     InviteJoinRepo,
     ModerationCaseRepo,
     ModerationExemptionRepo,
@@ -3739,9 +3741,29 @@ def _serialize_invite_join(row: InviteJoin) -> Dict[str, Any]:
         "source_type": row.source_type,
         "channel_id": str(row.channel_id) if row.channel_id else None,
         "channel_name": row.channel_name,
+        "activity_message_id": str(row.activity_message_id) if getattr(row, "activity_message_id", None) else None,
         "joined_at": row.joined_at.isoformat() if row.joined_at else None,
         "is_still_member": row.is_still_member,
         "left_at": row.left_at.isoformat() if row.left_at else None,
+    }
+
+
+def _serialize_invite_activity_settings(
+    row: InviteActivitySettings, diagnostics: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    return {
+        "guild_id": str(row.guild_id),
+        "enabled": bool(row.enabled),
+        "channel_id": str(row.channel_id) if row.channel_id else None,
+        "title_template": row.title_template or "🎉 NEW MEMBER INVITED",
+        "description_template": row.description_template or "{inviter_mention} invited {member_mention}",
+        "color_hex": row.color_hex or "#5865F2",
+        "log_unknown": bool(row.log_unknown),
+        "log_vanity": bool(row.log_vanity),
+        "log_created": bool(row.log_created),
+        "log_revoked": bool(row.log_revoked),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "diagnostics": diagnostics or {},
     }
 
 
@@ -3868,6 +3890,21 @@ async def get_invite_tracker_health(
     tracker = get_invite_tracker(bot)
     health = tracker.get_health()
 
+    try:
+        activity_diag = await tracker.get_activity_diagnostics()
+        activity_diag["configured"] = bool(activity_diag.get("channel_id"))
+        health["activity_channel"] = activity_diag
+        if activity_diag.get("status") == "DEGRADED":
+            health["status"] = "DEGRADED"
+            if not health.get("status_reason"):
+                health["status_reason"] = activity_diag.get("reason")
+    except Exception as e:
+        health["activity_channel"] = {
+            "configured": False,
+            "status": "ERROR",
+            "reason": f"Failed to check activity channel: {e}",
+        }
+
     session = await get_session_direct()
     try:
         counts = await DiscordInviteRepo.get_counts(session, settings.DISCORD_GUILD_ID)
@@ -3897,6 +3934,204 @@ async def get_user_invite_profile(
         return stats
     finally:
         await session.close()
+
+
+@router.get("/moderation/invites/activity-settings")
+async def get_invite_activity_settings(
+    username: str = Depends(require_auth),
+):
+    """Get the current invite activity logging configuration and destination channel status."""
+    from app.invites.tracker import get_invite_tracker
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    tracker = get_invite_tracker(bot)
+    diagnostics = await tracker.get_activity_diagnostics()
+
+    session = await get_session_direct()
+    try:
+        settings_row = await InviteActivitySettingsRepo.get_or_create(session, settings.DISCORD_GUILD_ID)
+        return _serialize_invite_activity_settings(settings_row, diagnostics)
+    finally:
+        await session.close()
+
+
+@router.put("/moderation/invites/activity-settings")
+async def update_invite_activity_settings(
+    request: Request,
+    username: str = Depends(require_auth),
+):
+    """Update invite activity log configuration."""
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    updates = {}
+    if "enabled" in data:
+        updates["enabled"] = bool(data["enabled"])
+    if "channel_id" in data:
+        cid = data["channel_id"]
+        updates["channel_id"] = int(cid) if cid and str(cid).strip() else None
+    if "title_template" in data:
+        updates["title_template"] = str(data["title_template"]).strip() or "🎉 NEW MEMBER INVITED"
+    if "description_template" in data:
+        updates["description_template"] = str(data["description_template"]).strip()
+    if "color_hex" in data:
+        hex_val = str(data["color_hex"]).strip()
+        if hex_val and not hex_val.startswith("#"):
+            hex_val = f"#{hex_val}"
+        updates["color_hex"] = hex_val or "#5865F2"
+    if "log_unknown" in data:
+        updates["log_unknown"] = bool(data["log_unknown"])
+    if "log_vanity" in data:
+        updates["log_vanity"] = bool(data["log_vanity"])
+    if "log_created" in data:
+        updates["log_created"] = bool(data["log_created"])
+    if "log_revoked" in data:
+        updates["log_revoked"] = bool(data["log_revoked"])
+
+    session = await get_session_direct()
+    try:
+        updated = await InviteActivitySettingsRepo.update(session, settings.DISCORD_GUILD_ID, **updates)
+        await AuditLogRepo.log(session, username, "updated_invite_activity_settings")
+        await session.commit()
+
+        from app.invites.tracker import get_invite_tracker
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        tracker = get_invite_tracker(bot)
+        diagnostics = await tracker.get_activity_diagnostics()
+
+        return _serialize_invite_activity_settings(updated, diagnostics)
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/invites/activity-settings/reset")
+async def reset_invite_activity_template(
+    username: str = Depends(require_auth),
+):
+    """Reset the embed template to defaults."""
+    session = await get_session_direct()
+    try:
+        updated = await InviteActivitySettingsRepo.reset_template(session, settings.DISCORD_GUILD_ID)
+        await AuditLogRepo.log(session, username, "reset_invite_activity_template")
+        await session.commit()
+
+        from app.invites.tracker import get_invite_tracker
+        from app.runtime_state import get_bot_instance
+        bot = get_bot_instance()
+        tracker = get_invite_tracker(bot)
+        diagnostics = await tracker.get_activity_diagnostics()
+
+        return _serialize_invite_activity_settings(updated, diagnostics)
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/invites/activity-settings/test")
+async def test_invite_activity_log(
+    username: str = Depends(require_auth),
+):
+    """Send a real test invite log embed to the configured Discord channel without incrementing DB counters."""
+    from app.invites.tracker import get_invite_tracker
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    tracker = get_invite_tracker(bot)
+
+    try:
+        res = await tracker.send_test_activity_log()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send test invite log: {e}")
+
+    session = await get_session_direct()
+    try:
+        await AuditLogRepo.log(session, username, "tested_invite_activity_log")
+        await session.commit()
+    finally:
+        await session.close()
+
+    return res
+
+
+@router.get("/moderation/invites/channels")
+async def get_invite_activity_channels(
+    username: str = Depends(require_auth),
+):
+    """
+    List real Discord guild text channels with granular permission states for invite activity logging.
+
+    Only shows channels with permission breakdown:
+    - View Channel
+    - Send Messages
+    - Embed Links
+    Status:
+    - ✅ Ready (all permissions present)
+    - ⚠️ Missing permission (view/send without embed or vice versa)
+    - ❌ Unavailable (missing view or send)
+    """
+    from app.runtime_state import get_bot_instance
+    bot = get_bot_instance()
+    if not bot or not bot.is_ready():
+        return []
+
+    guild = bot.get_guild(settings.DISCORD_GUILD_ID)
+    if not guild:
+        return []
+
+    me = guild.me
+    if not me:
+        return []
+
+    channels_data = []
+    for channel in guild.channels:
+        if isinstance(channel, discord.TextChannel):
+            c_type = "text"
+        elif hasattr(channel, "is_news") and channel.is_news():
+            c_type = "announcement"
+        else:
+            continue
+
+        perms = channel.permissions_for(me)
+        can_view = bool(perms.view_channel)
+        can_send = bool(perms.send_messages)
+        can_embed = bool(perms.embed_links)
+
+        is_ready = can_view and can_send and can_embed
+        if is_ready:
+            status = "ready"
+            status_label = "✅ Ready"
+        elif can_view or can_send:
+            status = "missing_permission"
+            status_label = "⚠️ Missing permission"
+        else:
+            status = "unavailable"
+            status_label = "❌ Unavailable"
+
+        channels_data.append({
+            "id": str(channel.id),
+            "name": channel.name,
+            "type": c_type,
+            "category": channel.category.name if channel.category else "Uncategorized",
+            "category_id": str(channel.category.id) if channel.category else None,
+            "position": channel.position,
+            "can_view": can_view,
+            "can_send": can_send,
+            "can_embed": can_embed,
+            "status": status,
+            "status_label": status_label,
+            "is_selectable": is_ready,
+            "is_ready": is_ready,
+            "permission_status": status.upper(),
+            "reason": None if is_ready else ("Missing permissions: " + ", ".join([p for p, ok in [("View Channel", can_view), ("Send Messages", can_send), ("Embed Links", can_embed)] if not ok])),
+        })
+
+    channels_data.sort(key=lambda c: c["position"])
+    return channels_data
 
 
 @router.get("/moderation/invites/{code}")

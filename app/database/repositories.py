@@ -24,6 +24,7 @@ from app.database.models import (
     EventStatus,
     EventType,
     ExemptionRule,
+    InviteActivitySettings,
     InviteJoin,
     ModerationAction,
     ModerationCase,
@@ -2147,6 +2148,7 @@ class InviteJoinRepo:
         channel_id: Optional[int],
         channel_name: Optional[str],
         joined_at: Optional[datetime] = None,
+        activity_message_id: Optional[int] = None,
     ) -> InviteJoin:
         now = joined_at or datetime.utcnow()
         # Deduplication check: check if same member joined within last 60 seconds
@@ -2177,6 +2179,7 @@ class InviteJoinRepo:
             channel_name=channel_name,
             joined_at=now,
             is_still_member=True,
+            activity_message_id=activity_message_id,
         )
         session.add(join)
         await session.flush()
@@ -2461,4 +2464,93 @@ class InviteJoinRepo:
         result = await session.execute(stmt)
         items = list(result.scalars().all())
         return items, total
+
+    @staticmethod
+    async def get_user_rank(session: AsyncSession, guild_id: int, user_id: int) -> Optional[int]:
+        """Calculate member's 1-based leaderboard rank by attributed joins count."""
+        user_joins_res = await session.execute(
+            select(func.count(InviteJoin.id)).where(
+                InviteJoin.guild_id == guild_id,
+                InviteJoin.inviter_id == user_id,
+                InviteJoin.source_type == "NORMAL_INVITE",
+            )
+        )
+        user_joins = user_joins_res.scalar_one() or 0
+        if user_joins == 0:
+            return None
+
+        subq = (
+            select(InviteJoin.inviter_id)
+            .where(
+                InviteJoin.guild_id == guild_id,
+                InviteJoin.source_type == "NORMAL_INVITE",
+                InviteJoin.inviter_id.isnot(None),
+                InviteJoin.inviter_id != 0,
+            )
+            .group_by(InviteJoin.inviter_id)
+            .having(func.count(InviteJoin.id) > user_joins)
+            .subquery()
+        )
+        better_res = await session.execute(select(func.count()).select_from(subq))
+        better_count = better_res.scalar_one() or 0
+        return better_count + 1
+
+    @staticmethod
+    async def update_activity_message_id(
+        session: AsyncSession, join_id: int, message_id: int
+    ) -> None:
+        """Record Discord activity log message ID on an invite join record."""
+        await session.execute(
+            update(InviteJoin)
+            .where(InviteJoin.id == join_id)
+            .values(activity_message_id=message_id)
+        )
+        await session.flush()
+
+
+class InviteActivitySettingsRepo:
+    """Repository for managing dedicated Discord Invite Activity Log channel settings."""
+
+    @staticmethod
+    async def get_or_create(session: AsyncSession, guild_id: int) -> InviteActivitySettings:
+        res = await session.execute(
+            select(InviteActivitySettings).where(InviteActivitySettings.guild_id == guild_id)
+        )
+        row = res.scalar_one_or_none()
+        if not row:
+            row = InviteActivitySettings(
+                guild_id=guild_id,
+                enabled=False,
+                channel_id=None,
+                title_template="🎉 NEW MEMBER INVITED",
+                description_template="{inviter_mention} invited {member_mention}",
+                color_hex="#5865F2",
+                log_unknown=True,
+                log_vanity=True,
+                log_created=False,
+                log_revoked=False,
+            )
+            session.add(row)
+            await session.flush()
+        return row
+
+    @staticmethod
+    async def update(session: AsyncSession, guild_id: int, **kwargs) -> InviteActivitySettings:
+        row = await InviteActivitySettingsRepo.get_or_create(session, guild_id)
+        for k, v in kwargs.items():
+            if hasattr(row, k):
+                setattr(row, k, v)
+        row.updated_at = datetime.utcnow()
+        await session.flush()
+        return row
+
+    @staticmethod
+    async def reset_template(session: AsyncSession, guild_id: int) -> InviteActivitySettings:
+        row = await InviteActivitySettingsRepo.get_or_create(session, guild_id)
+        row.title_template = "🎉 NEW MEMBER INVITED"
+        row.description_template = "{inviter_mention} invited {member_mention}"
+        row.color_hex = "#5865F2"
+        row.updated_at = datetime.utcnow()
+        await session.flush()
+        return row
 

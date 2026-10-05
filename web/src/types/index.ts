@@ -670,5 +670,60 @@ export interface InviteTrackerHealth {
     intents_ok: boolean;
     details: string;
   };
+  activity_channel?: {
+    configured?: boolean;
+    enabled?: boolean;
+    channel_id?: string | null;
+    channel_name?: string | null;
+    status?: 'HEALTHY' | 'DEGRADED' | 'DISABLED' | 'NO_CHANNEL' | 'ERROR';
+    reason?: string | null;
+    can_view?: boolean;
+    can_send?: boolean;
+    can_embed?: boolean;
+    is_ready?: boolean;
+  };
+}
+
+export interface InviteActivitySettings {
+  guild_id: string;
+  enabled: boolean;
+  channel_id: string | null;
+  title_template: string;
+  description_template: string;
+  color_hex: string;
+  log_unknown: boolean;
+  log_vanity: boolean;
+  log_created: boolean;
+  log_revoked: boolean;
+  updated_at: string | null;
+  diagnostics?: {
+    enabled?: boolean;
+    channel_id?: string | null;
+    channel_name?: string | null;
+    status?: 'HEALTHY' | 'DEGRADED' | 'DISABLED' | 'NO_CHANNEL' | 'ERROR';
+    reason?: string | null;
+    can_view?: boolean;
+    can_send?: boolean;
+    can_embed?: boolean;
+    is_ready?: boolean;
+  };
+}
+
+export interface InviteChannelOption {
+  id: string;
+  name: string;
+  type: string;
+  category: string;
+  category_id?: string | null;
+  position: number;
+  can_view: boolean;
+  can_send: boolean;
+  can_embed: boolean;
+  status: 'ready' | 'missing_permission' | 'unavailable';
+  status_label: string;
+  is_selectable: boolean;
+  is_ready?: boolean;
+  permission_status?: string;
+  reason?: string | null;
 }
 

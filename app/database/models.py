@@ -669,10 +669,30 @@ class InviteJoin(Base):
     joined_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     is_still_member = Column(Boolean, default=True, nullable=False)
     left_at = Column(DateTime, nullable=True)
+    activity_message_id = Column(BigInteger, nullable=True)
 
     __table_args__ = (
         Index("ix_invite_joins_lookup", "guild_id", "member_id", "joined_at"),
         Index("ix_invite_joins_guild_inviter", "guild_id", "inviter_id"),
         Index("ix_invite_joins_guild_code", "guild_id", "invite_code"),
     )
+
+
+class InviteActivitySettings(Base):
+    """Configuration for dedicated Discord Invite Activity Log channel and notifications."""
+    __tablename__ = "invite_activity_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    enabled = Column(Boolean, default=False, nullable=False)
+    channel_id = Column(BigInteger, nullable=True)
+    title_template = Column(String(256), default="🎉 NEW MEMBER INVITED", nullable=False)
+    description_template = Column(Text, default="{inviter_mention} invited {member_mention}", nullable=False)
+    color_hex = Column(String(16), default="#5865F2", nullable=False)
+    log_unknown = Column(Boolean, default=True, nullable=False)
+    log_vanity = Column(Boolean, default=True, nullable=False)
+    log_created = Column(Boolean, default=False, nullable=False)
+    log_revoked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
