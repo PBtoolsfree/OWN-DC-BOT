@@ -20,7 +20,7 @@ interface EventToggleConfig {
   key: string;
   label: string;
   description: string;
-  category: 'AUTOMOD INTERCEPTIONS' | 'PUNISHMENTS' | 'SYSTEM';
+  category: 'AUTOMOD INTERCEPTIONS' | 'PUNISHMENTS' | 'INVITES' | 'SYSTEM';
 }
 
 const LOG_EVENTS: EventToggleConfig[] = [
@@ -92,6 +92,32 @@ const LOG_EVENTS: EventToggleConfig[] = [
     label: 'User DM Warning',
     description: 'Direct message notifications dispatched to users',
     category: 'PUNISHMENTS',
+  },
+
+  // INVITES
+  {
+    key: 'invite_join',
+    label: 'Invite Join Attribution',
+    description: 'Real-time Discord alerts when a member joins via an attributed or tracked invite',
+    category: 'INVITES',
+  },
+  {
+    key: 'invite_create',
+    label: 'Invite Created',
+    description: 'Notifications when new server invite links are generated',
+    category: 'INVITES',
+  },
+  {
+    key: 'invite_revoke',
+    label: 'Invite Revoked',
+    description: 'Audit logs when server invite links are deleted or revoked',
+    category: 'INVITES',
+  },
+  {
+    key: 'invite_expire',
+    label: 'Invite Expired',
+    description: 'Alerts when temporary or expiring invite links reach their time limit',
+    category: 'INVITES',
   },
 
   // SYSTEM
@@ -199,7 +225,7 @@ export default function ModeratorSettings() {
   }
 
   const status = settings.channel_status;
-  const categories = ['AUTOMOD INTERCEPTIONS', 'PUNISHMENTS', 'SYSTEM'] as const;
+  const categories = ['AUTOMOD INTERCEPTIONS', 'PUNISHMENTS', 'INVITES', 'SYSTEM'] as const;
 
   return (
     <div className="space-y-8 animate-fade-in max-w-5xl">

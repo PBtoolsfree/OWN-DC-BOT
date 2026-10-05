@@ -6,10 +6,10 @@ All repositories operate within the single configured Guild context.
 
 import json
 import logging
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
@@ -20,9 +20,11 @@ from app.database.models import (
     BlockedMessage,
     ChannelPolicy,
     CustomModerationStyle,
+    DiscordInvite,
     EventStatus,
     EventType,
     ExemptionRule,
+    InviteJoin,
     ModerationAction,
     ModerationCase,
     ModerationExemption,
@@ -1983,3 +1985,480 @@ class CustomModerationStyleRepo:
             delete(CustomModerationStyle).where(CustomModerationStyle.id == style_id)
         )
         return result.rowcount > 0
+
+
+# ─── Discord Invites & Joins ──────────────────────────────────────────────────
+
+class DiscordInviteRepo:
+    """Repository for Discord guild invites."""
+
+    @staticmethod
+    async def get_by_code(session: AsyncSession, code: str) -> Optional[DiscordInvite]:
+        result = await session.execute(
+            select(DiscordInvite).where(DiscordInvite.invite_code == code).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_all(
+        session: AsyncSession,
+        guild_id: int,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+        channel_id: Optional[int] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[List[DiscordInvite], int]:
+        stmt = select(DiscordInvite).where(DiscordInvite.guild_id == guild_id)
+        count_stmt = select(func.count(DiscordInvite.id)).where(DiscordInvite.guild_id == guild_id)
+
+        if status and status.upper() != "ALL":
+            stmt = stmt.where(func.upper(DiscordInvite.status) == status.upper())
+            count_stmt = count_stmt.where(func.upper(DiscordInvite.status) == status.upper())
+
+        if channel_id:
+            stmt = stmt.where(DiscordInvite.channel_id == channel_id)
+            count_stmt = count_stmt.where(DiscordInvite.channel_id == channel_id)
+
+        if search:
+            pattern = f"%{search.strip()}%"
+            filter_cond = or_(
+                DiscordInvite.invite_code.ilike(pattern),
+                DiscordInvite.inviter_name.ilike(pattern),
+                DiscordInvite.channel_name.ilike(pattern),
+            )
+            stmt = stmt.where(filter_cond)
+            count_stmt = count_stmt.where(filter_cond)
+
+        count_res = await session.execute(count_stmt)
+        total = count_res.scalar_one()
+
+        stmt = stmt.order_by(DiscordInvite.created_at.desc()).offset(offset).limit(limit)
+        result = await session.execute(stmt)
+        items = list(result.scalars().all())
+        return items, total
+
+    @staticmethod
+    async def upsert(
+        session: AsyncSession,
+        guild_id: int,
+        invite_code: str,
+        **kwargs,
+    ) -> DiscordInvite:
+        existing = await DiscordInviteRepo.get_by_code(session, invite_code)
+        if existing:
+            for k, v in kwargs.items():
+                if hasattr(existing, k) and k not in ("id", "guild_id", "invite_code", "created_at"):
+                    setattr(existing, k, v)
+            existing.updated_at = datetime.utcnow()
+            await session.flush()
+            return existing
+        else:
+            inv = DiscordInvite(
+                guild_id=guild_id,
+                invite_code=invite_code,
+                **kwargs,
+            )
+            session.add(inv)
+            await session.flush()
+            return inv
+
+    @staticmethod
+    async def update_uses(
+        session: AsyncSession,
+        invite_code: str,
+        uses: int,
+        last_seen_at: Optional[datetime] = None,
+    ) -> Optional[DiscordInvite]:
+        existing = await DiscordInviteRepo.get_by_code(session, invite_code)
+        if not existing:
+            return None
+        existing.uses = uses
+        if last_seen_at:
+            existing.last_seen_at = last_seen_at
+        existing.updated_at = datetime.utcnow()
+        await session.flush()
+        return existing
+
+    @staticmethod
+    async def mark_revoked(session: AsyncSession, invite_code: str) -> Optional[DiscordInvite]:
+        existing = await DiscordInviteRepo.get_by_code(session, invite_code)
+        if not existing:
+            return None
+        existing.status = "REVOKED"
+        existing.revoked_at = datetime.utcnow()
+        existing.updated_at = datetime.utcnow()
+        await session.flush()
+        return existing
+
+    @staticmethod
+    async def mark_expired(session: AsyncSession, invite_code: str) -> Optional[DiscordInvite]:
+        existing = await DiscordInviteRepo.get_by_code(session, invite_code)
+        if not existing:
+            return None
+        existing.status = "EXPIRED"
+        existing.updated_at = datetime.utcnow()
+        await session.flush()
+        return existing
+
+    @staticmethod
+    async def get_user_invites(
+        session: AsyncSession, guild_id: int, inviter_id: int
+    ) -> List[DiscordInvite]:
+        stmt = (
+            select(DiscordInvite)
+            .where(DiscordInvite.guild_id == guild_id, DiscordInvite.inviter_id == inviter_id)
+            .order_by(DiscordInvite.created_at.desc())
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_counts(session: AsyncSession, guild_id: int) -> Dict[str, int]:
+        stmt = select(
+            func.count(DiscordInvite.id),
+            func.sum(case((func.upper(DiscordInvite.status) == "ACTIVE", 1), else_=0)),
+            func.sum(case((func.upper(DiscordInvite.status) == "REVOKED", 1), else_=0)),
+            func.sum(case((func.upper(DiscordInvite.status) == "EXPIRED", 1), else_=0)),
+        ).where(DiscordInvite.guild_id == guild_id)
+        res = await session.execute(stmt)
+        row = res.one()
+        return {
+            "total_invites": row[0] or 0,
+            "active_invites": row[1] or 0,
+            "revoked_invites": row[2] or 0,
+            "expired_invites": row[3] or 0,
+        }
+
+
+class InviteJoinRepo:
+    """Repository for invite joins audit history and analytics."""
+
+    @staticmethod
+    async def record_join(
+        session: AsyncSession,
+        guild_id: int,
+        member_id: int,
+        member_name: str,
+        invite_code: Optional[str],
+        inviter_id: Optional[int],
+        inviter_name: Optional[str],
+        source_type: str,
+        channel_id: Optional[int],
+        channel_name: Optional[str],
+        joined_at: Optional[datetime] = None,
+    ) -> InviteJoin:
+        now = joined_at or datetime.utcnow()
+        # Deduplication check: check if same member joined within last 60 seconds
+        recent_threshold = now - timedelta(seconds=60)
+        recent_check = await session.execute(
+            select(InviteJoin)
+            .where(
+                InviteJoin.guild_id == guild_id,
+                InviteJoin.member_id == member_id,
+                InviteJoin.joined_at >= recent_threshold,
+            )
+            .order_by(InviteJoin.joined_at.desc())
+            .limit(1)
+        )
+        existing = recent_check.scalar_one_or_none()
+        if existing:
+            return existing
+
+        join = InviteJoin(
+            guild_id=guild_id,
+            member_id=member_id,
+            member_name=member_name,
+            invite_code=invite_code,
+            inviter_id=inviter_id,
+            inviter_name=inviter_name,
+            source_type=source_type,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            joined_at=now,
+            is_still_member=True,
+        )
+        session.add(join)
+        await session.flush()
+        return join
+
+    @staticmethod
+    async def record_leave(session: AsyncSession, guild_id: int, member_id: int) -> None:
+        """Mark member's join records as no longer a member when they leave."""
+        stmt = (
+            update(InviteJoin)
+            .where(InviteJoin.guild_id == guild_id, InviteJoin.member_id == member_id)
+            .values(is_still_member=False, left_at=datetime.utcnow())
+        )
+        await session.execute(stmt)
+        await session.flush()
+
+    @staticmethod
+    async def get_joins_for_invite(
+        session: AsyncSession,
+        invite_code: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[InviteJoin], int]:
+        stmt = select(InviteJoin).where(InviteJoin.invite_code == invite_code)
+        count_stmt = select(func.count(InviteJoin.id)).where(InviteJoin.invite_code == invite_code)
+
+        count_res = await session.execute(count_stmt)
+        total = count_res.scalar_one()
+
+        stmt = stmt.order_by(InviteJoin.joined_at.desc()).offset(offset).limit(limit)
+        result = await session.execute(stmt)
+        return list(result.scalars().all()), total
+
+    @staticmethod
+    async def get_leaderboard(
+        session: AsyncSession,
+        guild_id: int,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        # Query total successful attributed joins (non-unknown, non-vanity, valid inviter)
+        total_joins_stmt = select(func.count(InviteJoin.id)).where(
+            InviteJoin.guild_id == guild_id,
+            InviteJoin.source_type == "NORMAL_INVITE",
+            InviteJoin.inviter_id.isnot(None),
+            InviteJoin.inviter_id != 0,
+        )
+        tot_res = await session.execute(total_joins_stmt)
+        total_attributed_joins = tot_res.scalar_one() or 0
+
+        stmt = (
+            select(
+                InviteJoin.inviter_id,
+                InviteJoin.inviter_name,
+                func.count(InviteJoin.id).label("join_count"),
+                func.max(InviteJoin.joined_at).label("last_join_at"),
+            )
+            .where(
+                InviteJoin.guild_id == guild_id,
+                InviteJoin.source_type == "NORMAL_INVITE",
+                InviteJoin.inviter_id.isnot(None),
+                InviteJoin.inviter_id != 0,
+            )
+            .group_by(InviteJoin.inviter_id, InviteJoin.inviter_name)
+            .order_by(func.count(InviteJoin.id).desc(), func.max(InviteJoin.joined_at).desc())
+            .limit(limit)
+        )
+        res = await session.execute(stmt)
+        leaderboard = []
+        rank = 1
+        for row in res.all():
+            count = row.join_count
+            pct = round((count / total_attributed_joins * 100), 1) if total_attributed_joins > 0 else 0.0
+            leaderboard.append({
+                "rank": rank,
+                "user_id": str(row.inviter_id),
+                "username": row.inviter_name or f"User {row.inviter_id}",
+                "joins": count,
+                "percentage": pct,
+                "last_invite_join": row.last_join_at.isoformat() if row.last_join_at else None,
+            })
+            rank += 1
+        return leaderboard
+
+    @staticmethod
+    async def get_user_stats(
+        session: AsyncSession, guild_id: int, user_id: int
+    ) -> Dict[str, Any]:
+        now = datetime.utcnow()
+        week_ago = now - timedelta(days=7)
+        month_start = datetime(now.year, now.month, 1)
+
+        stmt = select(
+            func.count(InviteJoin.id),
+            func.sum(case((InviteJoin.joined_at >= month_start, 1), else_=0)),
+            func.sum(case((InviteJoin.joined_at >= week_ago, 1), else_=0)),
+            func.sum(case((InviteJoin.is_still_member.is_(True), 1), else_=0)),
+            func.sum(case((InviteJoin.is_still_member.is_(False), 1), else_=0)),
+            func.max(InviteJoin.joined_at),
+        ).where(
+            InviteJoin.guild_id == guild_id,
+            InviteJoin.inviter_id == user_id,
+            InviteJoin.source_type == "NORMAL_INVITE",
+        )
+        res = await session.execute(stmt)
+        row = res.one()
+
+        invites = await DiscordInviteRepo.get_user_invites(session, guild_id, user_id)
+
+        # Get latest username if known
+        user_name = None
+        if invites and invites[0].inviter_name:
+            user_name = invites[0].inviter_name
+        else:
+            latest_join_res = await session.execute(
+                select(InviteJoin.inviter_name)
+                .where(InviteJoin.guild_id == guild_id, InviteJoin.inviter_id == user_id)
+                .limit(1)
+            )
+            user_name = latest_join_res.scalar_one_or_none()
+
+        return {
+            "user_id": str(user_id),
+            "username": user_name or f"User {user_id}",
+            "total_joins": row[0] or 0,
+            "this_month_joins": row[1] or 0,
+            "this_week_joins": row[2] or 0,
+            "current_members_referred": row[3] or 0,
+            "former_members_referred": row[4] or 0,
+            "last_invite_join": row[5].isoformat() if row[5] else None,
+            "invites": [
+                {
+                    "invite_code": inv.invite_code,
+                    "channel_name": inv.channel_name,
+                    "uses": inv.uses,
+                    "status": inv.status,
+                    "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                }
+                for inv in invites
+            ],
+        }
+
+    @staticmethod
+    async def get_overview_stats(
+        session: AsyncSession, guild_id: int, timeframe: str = "all"
+    ) -> Dict[str, Any]:
+        now = datetime.utcnow()
+        time_filter = None
+        if timeframe == "today":
+            time_filter = datetime(now.year, now.month, now.day)
+        elif timeframe == "7d":
+            time_filter = now - timedelta(days=7)
+        elif timeframe == "30d":
+            time_filter = now - timedelta(days=30)
+
+        # Total Joins, Unknown, Vanity, Normal
+        agg_stmt = select(
+            func.count(InviteJoin.id),
+            func.sum(case((InviteJoin.source_type == "UNKNOWN", 1), else_=0)),
+            func.sum(case((InviteJoin.source_type == "VANITY_URL", 1), else_=0)),
+            func.sum(case((InviteJoin.source_type == "NORMAL_INVITE", 1), else_=0)),
+            func.count(func.distinct(InviteJoin.inviter_id)),
+        ).where(InviteJoin.guild_id == guild_id)
+        if time_filter:
+            agg_stmt = agg_stmt.where(InviteJoin.joined_at >= time_filter)
+
+        agg_res = await session.execute(agg_stmt)
+        agg_row = agg_res.one()
+
+        # Top Inviter
+        top_inviter_stmt = (
+            select(InviteJoin.inviter_name, func.count(InviteJoin.id))
+            .where(
+                InviteJoin.guild_id == guild_id,
+                InviteJoin.source_type == "NORMAL_INVITE",
+                InviteJoin.inviter_id.isnot(None),
+                InviteJoin.inviter_id != 0,
+            )
+        )
+        if time_filter:
+            top_inviter_stmt = top_inviter_stmt.where(InviteJoin.joined_at >= time_filter)
+        top_inviter_stmt = (
+            top_inviter_stmt.group_by(InviteJoin.inviter_id, InviteJoin.inviter_name)
+            .order_by(func.count(InviteJoin.id).desc())
+            .limit(1)
+        )
+        top_inv_res = await session.execute(top_inviter_stmt)
+        top_inv_row = top_inv_res.first()
+
+        # Top Invite Code
+        top_code_stmt = (
+            select(InviteJoin.invite_code, func.count(InviteJoin.id))
+            .where(
+                InviteJoin.guild_id == guild_id,
+                InviteJoin.invite_code.isnot(None),
+            )
+        )
+        if time_filter:
+            top_code_stmt = top_code_stmt.where(InviteJoin.joined_at >= time_filter)
+        top_code_stmt = (
+            top_code_stmt.group_by(InviteJoin.invite_code)
+            .order_by(func.count(InviteJoin.id).desc())
+            .limit(1)
+        )
+        top_code_res = await session.execute(top_code_stmt)
+        top_code_row = top_code_res.first()
+
+        # Total invites & active invites from DiscordInvite
+        inv_counts = await DiscordInviteRepo.get_counts(session, guild_id)
+
+        return {
+            "timeframe": timeframe,
+            "total_joins": agg_row[0] or 0,
+            "unknown_joins": agg_row[1] or 0,
+            "vanity_joins": agg_row[2] or 0,
+            "normal_joins": agg_row[3] or 0,
+            "unique_inviters": agg_row[4] or 0,
+            "top_inviter": {
+                "name": top_inv_row[0] if top_inv_row else "None",
+                "count": top_inv_row[1] if top_inv_row else 0,
+            },
+            "top_invite": {
+                "code": top_code_row[0] if top_code_row else "None",
+                "count": top_code_row[1] if top_code_row else 0,
+            },
+            "total_invites": inv_counts["total_invites"],
+            "active_invites": inv_counts["active_invites"],
+            "revoked_invites": inv_counts["revoked_invites"],
+            "expired_invites": inv_counts["expired_invites"],
+        }
+
+    @staticmethod
+    async def get_joins_filtered(
+        session: AsyncSession,
+        guild_id: int,
+        source_type: Optional[str] = None,
+        search: Optional[str] = None,
+        invite_code: Optional[str] = None,
+        inviter_id: Optional[int] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[InviteJoin], int]:
+        stmt = select(InviteJoin).where(InviteJoin.guild_id == guild_id)
+        count_stmt = select(func.count(InviteJoin.id)).where(InviteJoin.guild_id == guild_id)
+
+        if source_type and source_type.upper() != "ALL":
+            stmt = stmt.where(func.upper(InviteJoin.source_type) == source_type.upper())
+            count_stmt = count_stmt.where(func.upper(InviteJoin.source_type) == source_type.upper())
+
+        if invite_code:
+            stmt = stmt.where(InviteJoin.invite_code == invite_code)
+            count_stmt = count_stmt.where(InviteJoin.invite_code == invite_code)
+
+        if inviter_id:
+            stmt = stmt.where(InviteJoin.inviter_id == inviter_id)
+            count_stmt = count_stmt.where(InviteJoin.inviter_id == inviter_id)
+
+        if start_date:
+            stmt = stmt.where(InviteJoin.joined_at >= start_date)
+            count_stmt = count_stmt.where(InviteJoin.joined_at >= start_date)
+
+        if end_date:
+            stmt = stmt.where(InviteJoin.joined_at <= end_date)
+            count_stmt = count_stmt.where(InviteJoin.joined_at <= end_date)
+
+        if search:
+            pattern = f"%{search.strip()}%"
+            filter_cond = or_(
+                InviteJoin.member_name.ilike(pattern),
+                InviteJoin.inviter_name.ilike(pattern),
+                InviteJoin.invite_code.ilike(pattern),
+                InviteJoin.channel_name.ilike(pattern),
+            )
+            stmt = stmt.where(filter_cond)
+            count_stmt = count_stmt.where(filter_cond)
+
+        count_res = await session.execute(count_stmt)
+        total = count_res.scalar_one()
+
+        stmt = stmt.order_by(InviteJoin.joined_at.desc()).offset(offset).limit(limit)
+        result = await session.execute(stmt)
+        items = list(result.scalars().all())
+        return items, total
+

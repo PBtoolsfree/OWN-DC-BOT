@@ -622,3 +622,57 @@ class CustomModerationStyle(Base):
     is_builtin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class DiscordInvite(Base):
+    """Tracked Discord guild invites and metadata."""
+    __tablename__ = "discord_invites"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False, index=True)
+    invite_code = Column(String(64), unique=True, nullable=False, index=True)
+    inviter_id = Column(BigInteger, nullable=True, index=True)
+    inviter_name = Column(String(255), nullable=True)
+    channel_id = Column(BigInteger, nullable=True)
+    channel_name = Column(String(255), nullable=True)
+    uses = Column(Integer, default=0, nullable=False)
+    max_uses = Column(Integer, default=0, nullable=False)
+    max_age = Column(Integer, default=0, nullable=False)
+    temporary = Column(Boolean, default=False, nullable=False)
+    status = Column(String(32), default="ACTIVE", nullable=False)  # ACTIVE, EXPIRED, REVOKED, MAX_USES_REACHED, UNKNOWN
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    is_vanity = Column(Boolean, default=False, nullable=False)
+    is_permanent_config = Column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        Index("ix_discord_invites_guild_status", "guild_id", "status"),
+    )
+
+
+class InviteJoin(Base):
+    """Audit log of member joins attributed to invites."""
+    __tablename__ = "invite_joins"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False, index=True)
+    member_id = Column(BigInteger, nullable=False, index=True)
+    member_name = Column(String(255), nullable=True)
+    invite_code = Column(String(64), nullable=True, index=True)
+    inviter_id = Column(BigInteger, nullable=True, index=True)
+    inviter_name = Column(String(255), nullable=True)
+    source_type = Column(String(32), default="NORMAL_INVITE", nullable=False)  # NORMAL_INVITE, VANITY_URL, UNKNOWN, SYSTEM
+    channel_id = Column(BigInteger, nullable=True)
+    channel_name = Column(String(255), nullable=True)
+    joined_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    is_still_member = Column(Boolean, default=True, nullable=False)
+    left_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_invite_joins_lookup", "guild_id", "member_id", "joined_at"),
+        Index("ix_invite_joins_guild_inviter", "guild_id", "inviter_id"),
+        Index("ix_invite_joins_guild_code", "guild_id", "invite_code"),
+    )
+

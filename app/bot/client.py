@@ -45,14 +45,16 @@ class PBHeroBot(commands.Bot):
         intents.messages = True
         intents.message_content = True  # Required for message filtering
         intents.members = True  # Required for member permission checks
+        intents.invites = True  # Required for invite tracking
 
         # Startup diagnostic log for gateway intents
         logger.info(
-            "Bot Gateway Intents Diagnostic: message_content=%s, messages=%s, guilds=%s, members=%s",
+            "Bot Gateway Intents Diagnostic: message_content=%s, messages=%s, guilds=%s, members=%s, invites=%s",
             intents.message_content,
             intents.messages,
             intents.guilds,
             intents.members,
+            intents.invites,
         )
         if not intents.message_content:
             logger.error("CRITICAL: message_content intent is DISABLED in bot code! Content-based moderation will fail.")
@@ -102,6 +104,7 @@ class PBHeroBot(commands.Bot):
             "app.bot.cogs.youtube",
             "app.bot.cogs.admin",
             "app.bot.cogs.greetings",
+            "app.bot.cogs.invites",
         ]
 
         for module in cog_modules:
@@ -142,6 +145,11 @@ class PBHeroBot(commands.Bot):
             logger.info("Gateway reconnected: session re-established (skipping duplicate cogs/scheduler init)")
             if self.moderation_engine:
                 await self.moderation_engine.refresh_cache()
+            if getattr(self, "invite_tracker", None):
+                try:
+                    await self.invite_tracker.sync_invites()
+                except Exception as e:
+                    logger.warning("Invite tracking reconnect sync error: %s", e)
             set_bot_state(BotState.READY)
             return
 
@@ -165,6 +173,15 @@ class PBHeroBot(commands.Bot):
         from app.greetings.service import get_greeting_service
         self.greeting_service = get_greeting_service(self)
         logger.info("Greeting service initialized")
+
+        # Initialize invite tracking service
+        from app.invites.tracker import get_invite_tracker
+        self.invite_tracker = get_invite_tracker(self)
+        try:
+            await self.invite_tracker.sync_invites()
+            logger.info("Invite tracking initialized")
+        except Exception as e:
+            logger.warning("Invite tracking startup sync error: %s", e)
 
         set_bot_state(BotState.READY)
         logger.info("PB HERO Bot is ready!")

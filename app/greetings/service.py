@@ -636,6 +636,25 @@ class GreetingService:
         invite_url = invite_row.invite_url if (invite_row and invite_row.is_active) else None
         rules_url = build_rules_url(member.guild.id, config.rules_channel_id)
 
+        # 0. Invite Attribution Pipeline
+        attribution = None
+        try:
+            from app.invites.tracker import get_invite_tracker
+            tracker = get_invite_tracker(self.bot)
+            attribution = await tracker.attribute_member_join(member)
+            if attribution and attribution.source_type != "UNKNOWN":
+                self.record_activity(
+                    event_type="INVITE_ATTRIBUTED",
+                    username=str(member),
+                    user_id=str(member.id),
+                    channel_id=attribution.channel_id,
+                    channel_name=attribution.channel_name or "Invite",
+                    status="delivered",
+                    error_message=f"Invited by: {attribution.inviter_name} (Code: {attribution.invite_code})",
+                )
+        except Exception as e:
+            logger.exception("Invite attribution error for %s: %s", member, e)
+
         # 1. Auto Role Assignment
         if config.auto_role_enabled and config.auto_role_id:
             try:
@@ -767,6 +786,14 @@ class GreetingService:
             await session.close()
 
         invite_url = invite_row.invite_url if (invite_row and invite_row.is_active) else None
+
+        # 0. Invite Tracking - Record Member Leave
+        try:
+            from app.invites.tracker import get_invite_tracker
+            tracker = get_invite_tracker(self.bot)
+            await tracker.handle_member_leave(member)
+        except Exception as e:
+            logger.warning("Invite tracker leave error for %s: %s", member, e)
 
         # 1. Public Goodbye
         if config.goodbye_enabled and config.goodbye_channel_id:

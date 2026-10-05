@@ -28,7 +28,15 @@ from app.dashboard.auth import (
 )
 from app.dashboard.dependencies import check_ip_allowlist, require_auth, session_manager
 from app.database.engine import get_session_direct, test_connection
-from app.database.models import EventType, ModerationAction, PolicyValue, ServerGreetingSettings, ServerInviteSettings
+from app.database.models import (
+    DiscordInvite,
+    EventType,
+    InviteJoin,
+    ModerationAction,
+    PolicyValue,
+    ServerGreetingSettings,
+    ServerInviteSettings,
+)
 from app.database.serializers import (
     deserialize_json_field,
     normalize_domain,
@@ -47,7 +55,9 @@ from app.database.repositories import (
     BlockedMessageRepo,
     ChannelPolicyRepo,
     CustomModerationStyleRepo,
+    DiscordInviteRepo,
     ExemptionRuleRepo,
+    InviteJoinRepo,
     ModerationCaseRepo,
     ModerationExemptionRepo,
     PolicyProfileRepo,
@@ -1460,7 +1470,7 @@ async def get_mod_log_settings(username: str = Depends(require_auth)):
             config.mod_log_events,
             default=[
                 "policy_violation", "blocked_link", "blocked_attachment", "blocked_mention",
-                "warning", "timeout", "kick", "ban",
+                "warning", "timeout", "kick", "ban", "invite_join", "invite_create", "invite_revoke", "invite_expire",
             ],
         )
 
@@ -3686,3 +3696,275 @@ async def reset_greeting_settings(system_type: str, username: str = Depends(requ
         }
     finally:
         await session.close()
+
+
+# ========================================================
+# Invite Tracking & Analytics Routes
+# ========================================================
+
+def _serialize_discord_invite(row: DiscordInvite, tracked_joins: int = 0) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "guild_id": str(row.guild_id),
+        "invite_code": row.invite_code,
+        "inviter_id": str(row.inviter_id) if row.inviter_id else None,
+        "inviter_name": row.inviter_name,
+        "channel_id": str(row.channel_id) if row.channel_id else None,
+        "channel_name": row.channel_name,
+        "uses": row.uses,
+        "tracked_joins": tracked_joins,
+        "max_uses": row.max_uses,
+        "max_age": row.max_age,
+        "temporary": row.temporary,
+        "status": row.status,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+        "is_vanity": row.is_vanity,
+        "is_permanent_config": row.is_permanent_config,
+        "invite_url": f"https://discord.gg/{row.invite_code}",
+    }
+
+
+def _serialize_invite_join(row: InviteJoin) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "guild_id": str(row.guild_id),
+        "member_id": str(row.member_id),
+        "member_name": row.member_name,
+        "invite_code": row.invite_code,
+        "inviter_id": str(row.inviter_id) if row.inviter_id else None,
+        "inviter_name": row.inviter_name,
+        "source_type": row.source_type,
+        "channel_id": str(row.channel_id) if row.channel_id else None,
+        "channel_name": row.channel_name,
+        "joined_at": row.joined_at.isoformat() if row.joined_at else None,
+        "is_still_member": row.is_still_member,
+        "left_at": row.left_at.isoformat() if row.left_at else None,
+    }
+
+
+@router.get("/moderation/invites")
+async def get_tracked_invites(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    channel_id: Optional[int] = None,
+    page: int = 1,
+    page_size: int = 50,
+    username: str = Depends(require_auth),
+):
+    """List tracked guild invites with filtering and pagination."""
+    session = await get_session_direct()
+    try:
+        offset = max(0, (page - 1) * page_size)
+        invites, total = await DiscordInviteRepo.get_all(
+            session,
+            guild_id=settings.DISCORD_GUILD_ID,
+            status=status,
+            search=search,
+            channel_id=channel_id,
+            limit=page_size,
+            offset=offset,
+        )
+
+        # Batch query join counts for these invites
+        join_counts: Dict[str, int] = {}
+        for inv in invites:
+            _, c = await InviteJoinRepo.get_joins_for_invite(session, inv.invite_code, limit=1)
+            join_counts[inv.invite_code] = c
+
+        return {
+            "items": [_serialize_discord_invite(inv, join_counts.get(inv.invite_code, 0)) for inv in invites],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+        }
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/invites/leaderboard")
+async def get_invite_leaderboard(
+    limit: int = 50,
+    username: str = Depends(require_auth),
+):
+    """Get the top server inviters sorted by successful joins."""
+    session = await get_session_direct()
+    try:
+        leaderboard = await InviteJoinRepo.get_leaderboard(
+            session, guild_id=settings.DISCORD_GUILD_ID, limit=limit
+        )
+        return {"leaderboard": leaderboard}
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/invites/stats")
+async def get_invite_statistics(
+    timeframe: str = "all",
+    username: str = Depends(require_auth),
+):
+    """Get server invite metrics across timeframes (today, 7d, 30d, all)."""
+    norm_tf = timeframe.lower().strip()
+    if norm_tf not in ("today", "7d", "30d", "all"):
+        norm_tf = "all"
+
+    session = await get_session_direct()
+    try:
+        stats = await InviteJoinRepo.get_overview_stats(
+            session, guild_id=settings.DISCORD_GUILD_ID, timeframe=norm_tf
+        )
+        return stats
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/invites/joins")
+async def get_invite_joins_history(
+    source_type: Optional[str] = None,
+    search: Optional[str] = None,
+    invite_code: Optional[str] = None,
+    inviter_id: Optional[int] = None,
+    page: int = 1,
+    page_size: int = 50,
+    username: str = Depends(require_auth),
+):
+    """Get historical log of member joins attributed to invites."""
+    session = await get_session_direct()
+    try:
+        offset = max(0, (page - 1) * page_size)
+        joins, total = await InviteJoinRepo.get_joins_filtered(
+            session,
+            guild_id=settings.DISCORD_GUILD_ID,
+            source_type=source_type,
+            search=search,
+            invite_code=invite_code,
+            inviter_id=inviter_id,
+            limit=page_size,
+            offset=offset,
+        )
+        return {
+            "items": [_serialize_invite_join(j) for j in joins],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+        }
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/invites/health")
+async def get_invite_tracker_health(
+    username: str = Depends(require_auth),
+):
+    """Get real-time invite tracking engine health and permission diagnostics."""
+    from app.invites.tracker import get_invite_tracker
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    tracker = get_invite_tracker(bot)
+    health = tracker.get_health()
+
+    session = await get_session_direct()
+    try:
+        counts = await DiscordInviteRepo.get_counts(session, settings.DISCORD_GUILD_ID)
+        stats = await InviteJoinRepo.get_overview_stats(session, settings.DISCORD_GUILD_ID, timeframe="all")
+        health.update({
+            "total_invites": counts["total_invites"],
+            "active_invites": counts["active_invites"],
+            "total_joins": stats["total_joins"],
+            "unknown_joins": stats["unknown_joins"],
+            "vanity_joins": stats["vanity_joins"],
+        })
+    finally:
+        await session.close()
+
+    return health
+
+
+@router.get("/moderation/invites/users/{user_id}")
+async def get_user_invite_profile(
+    user_id: int,
+    username: str = Depends(require_auth),
+):
+    """Get detailed invite statistics and created codes for a specific member."""
+    session = await get_session_direct()
+    try:
+        stats = await InviteJoinRepo.get_user_stats(session, settings.DISCORD_GUILD_ID, user_id)
+        return stats
+    finally:
+        await session.close()
+
+
+@router.get("/moderation/invites/{code}")
+async def get_invite_details(
+    code: str,
+    username: str = Depends(require_auth),
+):
+    """Get detailed metadata and joins for a specific invite code."""
+    session = await get_session_direct()
+    try:
+        inv = await DiscordInviteRepo.get_by_code(session, code)
+        if not inv:
+            raise HTTPException(status_code=404, detail=f"Invite code '{code}' not found.")
+        joins, total = await InviteJoinRepo.get_joins_for_invite(session, code, limit=100)
+        return {
+            "invite": _serialize_discord_invite(inv, total),
+            "joins": [_serialize_invite_join(j) for j in joins],
+            "total_joins": total,
+        }
+    finally:
+        await session.close()
+
+
+@router.post("/moderation/invites/sync")
+async def force_invite_sync(
+    username: str = Depends(require_auth),
+):
+    """Force an immediate refresh and reconciliation of Discord guild invites."""
+    from app.invites.tracker import get_invite_tracker
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    tracker = get_invite_tracker(bot)
+    res = await tracker.sync_invites(force=True)
+
+    session = await get_session_direct()
+    try:
+        await AuditLogRepo.log(session, username, "forced_invite_sync")
+        await session.commit()
+    finally:
+        await session.close()
+
+    return res
+
+
+@router.delete("/moderation/invites/{code}")
+async def revoke_invite(
+    code: str,
+    username: str = Depends(require_auth),
+):
+    """Revoke an invite link on Discord and mark as revoked in database."""
+    from app.invites.tracker import get_invite_tracker
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    tracker = get_invite_tracker(bot)
+
+    try:
+        res = await tracker.revoke_invite(code)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to revoke invite: {e}")
+
+    session = await get_session_direct()
+    try:
+        await AuditLogRepo.log(session, username, f"revoked_invite_{code}")
+        await session.commit()
+    finally:
+        await session.close()
+
+    return res
+

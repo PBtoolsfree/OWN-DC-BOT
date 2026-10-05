@@ -561,3 +561,114 @@ export interface GreetingsResponse {
     dm_failures_today?: number;
   };
 }
+
+
+// ─── Invite Tracking & Analytics ─────────────────────────────────────────────
+
+export interface DiscordTrackedInvite {
+  id: number;
+  guild_id: string;
+  invite_code: string;
+  inviter_id: string | null;
+  inviter_name: string | null;
+  channel_id: string | null;
+  channel_name: string | null;
+  uses: number;
+  tracked_joins: number;
+  max_uses: number;
+  max_age: number;
+  temporary: boolean;
+  status: 'ACTIVE' | 'EXPIRED' | 'REVOKED' | 'MAX_USES_REACHED' | 'UNKNOWN';
+  created_at: string | null;
+  updated_at: string | null;
+  last_seen_at: string | null;
+  revoked_at: string | null;
+  is_vanity: boolean;
+  is_permanent_config: boolean;
+  invite_url: string;
+}
+
+export interface InviteJoinRecord {
+  id: number;
+  guild_id: string;
+  member_id: string;
+  member_name: string | null;
+  invite_code: string | null;
+  inviter_id: string | null;
+  inviter_name: string | null;
+  source_type: 'NORMAL_INVITE' | 'VANITY_URL' | 'UNKNOWN' | 'SYSTEM';
+  channel_id: string | null;
+  channel_name: string | null;
+  joined_at: string | null;
+  is_still_member: boolean;
+  left_at: string | null;
+}
+
+export interface InviteLeaderboardEntry {
+  rank: number;
+  user_id: string;
+  username: string;
+  joins: number;
+  percentage: number;
+  last_invite_join: string | null;
+}
+
+export interface UserInviteProfile {
+  user_id: string;
+  username: string;
+  total_joins: number;
+  this_month_joins: number;
+  this_week_joins: number;
+  current_members_referred: number;
+  former_members_referred: number;
+  last_invite_join: string | null;
+  invites: Array<{
+    invite_code: string;
+    channel_name: string | null;
+    uses: number;
+    status: string;
+    created_at: string | null;
+  }>;
+}
+
+export interface InviteOverviewStats {
+  timeframe: string;
+  total_joins: number;
+  unknown_joins: number;
+  vanity_joins: number;
+  normal_joins: number;
+  unique_inviters: number;
+  top_inviter: {
+    name: string;
+    count: number;
+  };
+  top_invite: {
+    code: string;
+    count: number;
+  };
+  total_invites: number;
+  active_invites: number;
+  revoked_invites: number;
+  expired_invites: number;
+}
+
+export interface InviteTrackerHealth {
+  status: 'HEALTHY' | 'DEGRADED' | 'ERROR';
+  sync_status: string;
+  sync_error: string | null;
+  last_sync: string | null;
+  last_attribution: string | null;
+  tracked_invites_cached: number;
+  total_invites?: number;
+  active_invites?: number;
+  total_joins?: number;
+  unknown_joins?: number;
+  vanity_joins?: number;
+  permissions: {
+    has_manage_guild: boolean;
+    can_read_invites: boolean;
+    intents_ok: boolean;
+    details: string;
+  };
+}
+
