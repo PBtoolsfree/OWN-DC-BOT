@@ -755,6 +755,26 @@ class FreeGameSettings(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "guild_id": self.guild_id,
+            "enabled": self.enabled,
+            "destination_channel_id": self.destination_channel_id,
+            "role_mention_id": self.role_mention_id,
+            "poll_interval_seconds": self.poll_interval_seconds,
+            "enabled_sources_json": self.enabled_sources_json,
+            "offer_types_json": self.offer_types_json,
+            "ending_soon_enabled": self.ending_soon_enabled,
+            "ending_soon_hours": self.ending_soon_hours,
+            "post_thumbnail": self.post_thumbnail,
+            "post_description": self.post_description,
+            "show_price": self.show_price,
+            "show_expiry": self.show_expiry,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
 
 class FreeGameOfferModel(Base):
     """Normalized store free game and deals offer."""
@@ -793,6 +813,35 @@ class FreeGameOfferModel(Base):
         Index("ix_free_game_offers_status_ends", "status", "ends_at"),
     )
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "source": self.source,
+            "external_id": self.external_id,
+            "unique_key": self.unique_key,
+            "title": self.title,
+            "description": self.description,
+            "store_name": self.store_name,
+            "platform": self.platform,
+            "offer_type": self.offer_type,
+            "original_price": self.original_price,
+            "current_price": self.current_price,
+            "currency": self.currency,
+            "discount_percent": self.discount_percent,
+            "claim_url": self.claim_url,
+            "source_url": self.source_url,
+            "thumbnail_url": self.thumbnail_url,
+            "starts_at": self.starts_at.isoformat() if self.starts_at else None,
+            "ends_at": self.ends_at.isoformat() if self.ends_at else None,
+            "is_free": self.is_free,
+            "status": self.status,
+            "first_seen_at": self.first_seen_at.isoformat() if self.first_seen_at else None,
+            "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
+            "last_posted_at": self.last_posted_at.isoformat() if self.last_posted_at else None,
+            "posted_message_id": self.posted_message_id,
+            "posted_channel_id": self.posted_channel_id,
+        }
+
 
 class FreeGameSourceModel(Base):
     """Source health, metrics, and error state tracking."""
@@ -811,6 +860,22 @@ class FreeGameSourceModel(Base):
     response_latency_ms = Column(Float, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "source_name": self.source_name,
+            "category": self.category,
+            "status": self.status,
+            "last_checked_at": self.last_checked_at.isoformat() if self.last_checked_at else None,
+            "last_success_at": self.last_success_at.isoformat() if self.last_success_at else None,
+            "last_error_at": self.last_error_at.isoformat() if self.last_error_at else None,
+            "last_error_message": self.last_error_message,
+            "consecutive_failures": self.consecutive_failures,
+            "offer_count": self.offer_count,
+            "response_latency_ms": self.response_latency_ms,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
 
 class FreeGameNotificationModel(Base):
     """Audit log of delivered Discord notifications for free games."""
@@ -825,5 +890,6 @@ class FreeGameNotificationModel(Base):
     status = Column(String(32), default="delivered", nullable=False)  # delivered, failed
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
 
 
