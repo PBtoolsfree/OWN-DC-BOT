@@ -8,7 +8,11 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from app.freegames.normalizer import normalize_claim_url, parse_utc_timestamp
+from app.freegames.normalizer import (
+    normalize_claim_url,
+    normalize_epic_claim_url,
+    parse_utc_timestamp,
+)
 from app.freegames.schemas import FreeGameOffer, OfferType
 from app.freegames.sources.base import FreeGameSource
 
@@ -57,6 +61,78 @@ class EpicGamesSource(FreeGameSource):
             logger.warning("[epic] Failed to fetch promotions: %s", e)
             return []
 
+    def _extract_canonical_claim_url(self, el: Dict[str, Any]) -> str:
+        """
+        Extract canonical official Epic product claim URL directly from element payload.
+        Section 3: Source-First URL Extraction:
+        - Prefer canonical URL directly provided by source data (product_url, url, canonical_url, etc.)
+        - Extract full canonical product path preserving identifier (offerMappings / catalogNs.mappings productHome pageSlug)
+        - Never truncate required product identifiers (e.g. buried-stars-d7c88c)
+        """
+        # 1. Direct URL fields
+        for field in (
+            "canonicalUrl", "canonical_url",
+            "productUrl", "product_url",
+            "url", "offerUrl", "offer_url",
+            "catalogProductUrl", "catalog_product_url",
+        ):
+            val = el.get(field)
+            if val and isinstance(val, str) and val.strip():
+                clean_val = val.strip()
+                if clean_val.startswith("http") or "/p/" in clean_val:
+                    return normalize_epic_claim_url(clean_val)
+
+        slug = None
+
+        # 2. offerMappings: productHome is the canonical store product page
+        offer_mappings = el.get("offerMappings") or []
+        for m in offer_mappings:
+            if isinstance(m, dict) and m.get("pageType") == "productHome" and m.get("pageSlug"):
+                slug = m["pageSlug"]
+                break
+
+        # 3. catalogNs.mappings: productHome mapping
+        if not slug:
+            ns_mappings = el.get("catalogNs", {}).get("mappings", [])
+            for m in ns_mappings:
+                if isinstance(m, dict) and m.get("pageType") == "productHome" and m.get("pageSlug"):
+                    slug = m["pageSlug"]
+                    break
+
+        # 4. Any offerMappings or catalogNs mapping with pageSlug
+        if not slug:
+            for m in offer_mappings:
+                if isinstance(m, dict) and m.get("pageSlug"):
+                    slug = m["pageSlug"]
+                    break
+
+        if not slug:
+            ns_mappings = el.get("catalogNs", {}).get("mappings", [])
+            for m in ns_mappings:
+                if isinstance(m, dict) and m.get("pageSlug"):
+                    slug = m["pageSlug"]
+                    break
+
+        # 5. customAttributes
+        if not slug:
+            for ca in (el.get("customAttributes") or []):
+                if isinstance(ca, dict) and ca.get("key") in ("com.epicgames.app.productSlug", "productSlug") and ca.get("value"):
+                    slug = ca["value"]
+                    break
+
+        # 6. productSlug (clean subpath like /home)
+        if not slug and el.get("productSlug"):
+            slug = str(el["productSlug"]).strip().split("/")[0]
+
+        # 7. Fallback to urlSlug or id
+        if not slug:
+            slug = el.get("urlSlug") or el.get("id")
+
+        if not slug:
+            return ""
+
+        return normalize_epic_claim_url(f"https://store.epicgames.com/p/{slug}")
+
     def _parse_element(self, el: Dict[str, Any], now: datetime) -> Optional[FreeGameOffer]:
         title = el.get("title")
         if not title:
@@ -97,19 +173,10 @@ class EpicGamesSource(FreeGameSource):
         if not is_free_promo:
             return None
 
-        # Slug extraction
-        slug = el.get("productSlug") or el.get("urlSlug")
-        if not slug:
-            mappings = el.get("catalogNs", {}).get("mappings", [])
-            for m in mappings:
-                if m.get("pageSlug"):
-                    slug = m["pageSlug"]
-                    break
-
-        if not slug:
-            slug = el.get("id")
-
-        claim_url = normalize_claim_url(f"https://store.epicgames.com/p/{slug}")
+        # Extract canonical URL using source-first priority
+        claim_url = self._extract_canonical_claim_url(el)
+        if not claim_url:
+            return None
 
         # Thumbnail
         thumb = None
@@ -122,7 +189,7 @@ class EpicGamesSource(FreeGameSource):
         if not thumb and key_images:
             thumb = key_images[0].get("url")
 
-        external_id = str(el.get("id") or slug)
+        external_id = str(el.get("id") or claim_url.split("/")[-1])
         description = el.get("description")
 
         return FreeGameOffer(
@@ -138,7 +205,10 @@ class EpicGamesSource(FreeGameSource):
             currency="USD",
             discount_percent=100,
             claim_url=claim_url,
+            canonical_claim_url=claim_url,
             source_url=claim_url,
+            claim_url_status="VALID",
+            validated_at=now,
             thumbnail_url=thumb,
             starts_at=starts_at,
             ends_at=ends_at,

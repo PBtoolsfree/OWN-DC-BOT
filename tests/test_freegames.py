@@ -32,6 +32,7 @@ from app.freegames.dedupe import (
 )
 from app.freegames.normalizer import (
     normalize_claim_url,
+    normalize_epic_claim_url,
     parse_price,
     parse_utc_timestamp,
 )
@@ -59,6 +60,8 @@ from app.freegames.sources import (
 )
 from app.freegames.validator import (
     TRUSTED_SOURCE_DOMAINS,
+    resolve_canonical_epic_url,
+    validate_claim_url,
     validate_claim_url_security,
     validate_offer_eligibility,
 )
@@ -681,3 +684,324 @@ async def test_admin_test_does_not_persist():
     assert res["message_id"] == 555444333
     assert "store.epicgames.com" in res["claim_url"]
     channel.send.assert_called_once()
+
+
+# ─── 26. Epic Canonical URL Extraction & Normalization ───────────────────────
+
+@pytest.mark.asyncio
+async def test_epic_canonical_url_extraction():
+    """Requirement 12.1: Epic canonical URL extraction preserves product identifier from offerMappings."""
+    mock_payload = {
+        "data": {
+            "Catalog": {
+                "searchStore": {
+                    "elements": [
+                        {
+                            "id": "epic-buried-stars-1",
+                            "title": "BURIED STARS",
+                            "description": "Mystery visual novel.",
+                            "productSlug": None,
+                            "urlSlug": "buried-stars",  # Incomplete base slug
+                            "offerMappings": [
+                                {
+                                    "pageSlug": "buried-stars-d7c88c",  # Canonical product identifier
+                                    "pageType": "productHome",
+                                }
+                            ],
+                            "catalogNs": {
+                                "mappings": [
+                                    {
+                                        "pageSlug": "buried-stars-d7c88c",
+                                        "pageType": "productHome",
+                                    }
+                                ]
+                            },
+                            "promotions": {
+                                "promotionalOffers": [
+                                    {
+                                        "promotionalOffers": [
+                                            {
+                                                "startDate": "2026-10-01T15:00:00.000Z",
+                                                "endDate": "2026-10-15T15:00:00.000Z",
+                                                "discountSetting": {
+                                                    "discountType": "PERCENTAGE",
+                                                    "discountPercentage": 0,
+                                                },
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            "price": {
+                                "totalPrice": {
+                                    "originalPrice": 3999,
+                                    "discountPrice": 0,
+                                    "currencyCode": "USD",
+                                }
+                            },
+                            "keyImages": [],
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    source = EpicGamesSource()
+    with patch.object(source, "_fetch_json", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_payload
+        offers = await source.fetch_offers()
+
+    assert len(offers) == 1
+    offer = offers[0]
+    assert offer.title == "BURIED STARS"
+    # Must use canonical pageSlug, not incomplete urlSlug
+    assert offer.claim_url == "https://store.epicgames.com/p/buried-stars-d7c88c"
+    assert offer.canonical_claim_url == "https://store.epicgames.com/p/buried-stars-d7c88c"
+    assert "buried-stars-d7c88c" in offer.claim_url
+    assert offer.claim_url != "https://store.epicgames.com/p/buried-stars"
+
+
+@pytest.mark.asyncio
+async def test_incomplete_epic_slug_rejection():
+    """Requirement 12.2: Incomplete Epic slug that cannot be resolved to canonical product is rejected."""
+    # When Epic GraphQL returns no matching elements for an incomplete/invalid slug
+    with patch("app.freegames.validator.resolve_canonical_epic_url", new_callable=AsyncMock) as mock_res:
+        mock_res.return_value = None
+        is_valid, reason, canonical = await validate_claim_url(
+            "https://store.epicgames.com/p/unknown-incomplete-slug",
+            source="epic",
+        )
+
+    assert is_valid is False
+    assert "SKIPPED_OFFER_INVALID_CLAIM_URL" in reason
+    assert canonical is None
+
+
+@pytest.mark.asyncio
+async def test_complete_epic_url_acceptance():
+    """Requirement 12.3: Complete Epic canonical URL with identifier is accepted."""
+    url = "https://store.epicgames.com/p/buried-stars-d7c88c"
+    with patch("app.freegames.validator.resolve_canonical_epic_url", new_callable=AsyncMock) as mock_res:
+        mock_res.return_value = url
+        is_valid, reason, canonical = await validate_claim_url(url, source="epic")
+
+    assert is_valid is True
+    assert reason == "OK"
+    assert canonical == "https://store.epicgames.com/p/buried-stars-d7c88c"
+
+
+@pytest.mark.asyncio
+async def test_redirect_to_canonical_url():
+    """Requirement 12.4: Redirects to canonical URL within trusted domain are followed and accepted."""
+    offer = FreeGameOffer(
+        source="steam",
+        external_id="steam-12345",
+        title="Test Redirect Game",
+        store_name="Steam",
+        platform="PC",
+        claim_url="https://store.steampowered.com/app/12345/OldTitle/?utm_source=test",
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.url = "https://store.steampowered.com/app/12345/"
+
+    mock_client = AsyncMock()
+    mock_client.head.return_value = mock_resp
+
+    is_valid, reason, canonical = await validate_claim_url(offer, client=mock_client)
+    assert is_valid is True
+    assert reason == "OK"
+    assert canonical == "https://store.steampowered.com/app/12345/"
+    assert offer.canonical_claim_url == "https://store.steampowered.com/app/12345/"
+
+
+@pytest.mark.asyncio
+async def test_not_found_rejection():
+    """Requirement 12.5: URL pointing to /not-found is immediately rejected."""
+    is_valid, reason, canonical = await validate_claim_url(
+        "https://store.epicgames.com/not-found",
+        source="epic",
+    )
+    assert is_valid is False
+    assert "SKIPPED_OFFER_INVALID_CLAIM_URL" in reason
+    assert canonical is None
+
+
+@pytest.mark.asyncio
+async def test_404_rejection():
+    """Requirement 12.6: Preflight returning HTTP 404 is rejected."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+
+    mock_client = AsyncMock()
+    mock_client.head.return_value = mock_resp
+    mock_client.get.return_value = mock_resp
+
+    is_valid, reason, canonical = await validate_claim_url(
+        "https://store.steampowered.com/app/99999999/",
+        source="steam",
+        client=mock_client,
+    )
+    assert is_valid is False
+    assert "HTTP_404" in reason or "SKIPPED_OFFER_INVALID_CLAIM_URL" in reason
+    assert canonical is None
+
+
+@pytest.mark.asyncio
+async def test_malicious_domain_rejection():
+    """Requirement 12.7: Malicious domain or scheme is strictly rejected."""
+    # Untrusted domain masquerading as epic
+    is_valid, reason, canonical = await validate_claim_url(
+        "https://fake-epicgames.phishing.com/p/buried-stars",
+        source="epic",
+    )
+    assert is_valid is False
+    assert "UNTRUSTED_DOMAIN" in reason or "SKIPPED_OFFER" in reason
+
+    # Dangerous scheme
+    is_valid_scheme, reason_scheme, _ = await validate_claim_url(
+        "javascript:alert('malicious')",
+        source="epic",
+    )
+    assert is_valid_scheme is False
+    assert "MALICIOUS" in reason_scheme or "SKIPPED" in reason_scheme
+
+
+def test_discord_button_uses_canonical_url():
+    """Requirement 12.8 & 9: Discord CLAIM GAME button MUST use canonical_claim_url."""
+    offer = FreeGameOffer(
+        source="epic",
+        external_id="epic-test-bs",
+        title="BURIED STARS",
+        store_name="Epic Games Store",
+        platform="PC",
+        claim_url="https://store.epicgames.com/p/buried-stars",  # Raw/scraped
+        canonical_claim_url="https://store.epicgames.com/p/buried-stars-d7c88c",  # Canonical
+    )
+
+    content, embed, view, mentions = prepare_notification_payload(offer)
+
+    assert view is not None
+    assert len(view.children) == 1
+    button = view.children[0]
+
+    # Regression assertion: button.url == offer.canonical_claim_url
+    assert button.url == offer.canonical_claim_url
+    assert button.url == "https://store.epicgames.com/p/buried-stars-d7c88c"
+    assert button.url != "https://store.epicgames.com/p/buried-stars"
+    assert button.label == "🎁 CLAIM GAME"
+    assert button.style == discord.ButtonStyle.link
+    assert embed.url == "https://store.epicgames.com/p/buried-stars-d7c88c"
+
+
+@pytest.mark.asyncio
+async def test_existing_invalid_db_url_repair(db_session):
+    """Requirement 12.9: Repair routine updates invalid/incomplete DB URLs to canonical paths."""
+    now = datetime.utcnow()
+    # Insert offer with legacy/incomplete claim URL
+    db_offer = FreeGameOfferModel(
+        source="epic",
+        external_id="epic-legacy-1",
+        unique_key="epic:epic-legacy-1",
+        title="BURIED STARS",
+        store_name="Epic Games Store",
+        platform="PC",
+        claim_url="https://store.epicgames.com/p/buried-stars",  # Incomplete
+        canonical_claim_url=None,
+        claim_url_status="NEW",
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    db_session.add(db_offer)
+    await db_session.commit()
+
+    service = FreeGameService()
+
+    with patch("app.freegames.service.get_session_direct") as mock_sess, \
+         patch("app.freegames.validator.resolve_canonical_epic_url", new_callable=AsyncMock) as mock_res:
+        mock_sess.return_value = db_session
+        mock_res.return_value = "https://store.epicgames.com/p/buried-stars-d7c88c"
+
+        result = await service.repair_urls(source_filter="epic")
+
+    assert result["success"] is True
+    assert result["repaired"] == 1
+
+    # Reload from session
+    updated = await FreeGameOfferRepo.get_by_unique_key(db_session, "epic:epic-legacy-1")
+    assert updated is not None
+    assert updated.canonical_claim_url == "https://store.epicgames.com/p/buried-stars-d7c88c"
+    assert updated.claim_url == "https://store.epicgames.com/p/buried-stars-d7c88c"
+    assert updated.claim_url_status == "VALID"
+    assert updated.validated_at is not None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_protection_after_url_repair(db_session):
+    """Requirement 12.10: Re-running repair or subsequent syncs does not create duplicate offer records."""
+    now = datetime.utcnow()
+    db_offer = FreeGameOfferModel(
+        source="epic",
+        external_id="epic-dup-test",
+        unique_key="epic:epic-dup-test",
+        title="BURIED STARS",
+        store_name="Epic Games Store",
+        platform="PC",
+        claim_url="https://store.epicgames.com/p/buried-stars",
+        canonical_claim_url="https://store.epicgames.com/p/buried-stars-d7c88c",
+        claim_url_status="VALID",
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    db_session.add(db_offer)
+    await db_session.commit()
+
+    service = FreeGameService()
+
+    with patch("app.freegames.service.get_session_direct") as mock_sess, \
+         patch("app.freegames.validator.resolve_canonical_epic_url", new_callable=AsyncMock) as mock_res:
+        mock_sess.return_value = db_session
+        mock_res.return_value = "https://store.epicgames.com/p/buried-stars-d7c88c"
+
+        # Run repair twice
+        await service.repair_urls(source_filter="epic")
+        await service.repair_urls(source_filter="epic")
+
+    all_offers = await FreeGameOfferRepo.get_all_offers(db_session, source="epic")
+    matching = [o for o in all_offers if o.external_id == "epic-dup-test"]
+    assert len(matching) == 1  # Exactly 1 record, no duplicates!
+
+
+@pytest.mark.asyncio
+async def test_buried_stars_regression_assertion():
+    """
+    Requirement 12 Specific Regression Test:
+    Input: https://store.epicgames.com/p/buried-stars
+    Expected: Either resolve to canonical https://store.epicgames.com/p/buried-stars-d7c88c
+    OR reject the offer and do not post it.
+    Never post the incomplete URL.
+    """
+    input_bad_url = "https://store.epicgames.com/p/buried-stars"
+    canonical_good_url = "https://store.epicgames.com/p/buried-stars-d7c88c"
+
+    # Case A: Resolution succeeds
+    with patch("app.freegames.validator.resolve_canonical_epic_url", new_callable=AsyncMock) as mock_res:
+        mock_res.return_value = canonical_good_url
+        is_valid, reason, resolved_url = await validate_claim_url(input_bad_url, source="epic")
+
+        assert is_valid is True
+        assert resolved_url == canonical_good_url
+        assert resolved_url != input_bad_url
+
+    # Case B: Resolution cannot find canonical product -> MUST reject, NEVER post incomplete URL
+    with patch("app.freegames.validator.resolve_canonical_epic_url", new_callable=AsyncMock) as mock_res:
+        mock_res.return_value = None
+        is_valid, reason, resolved_url = await validate_claim_url(input_bad_url, source="epic")
+
+        assert is_valid is False
+        assert resolved_url is None
+        # Assert incomplete bad URL is rejected and not returned
+        assert resolved_url != input_bad_url
+

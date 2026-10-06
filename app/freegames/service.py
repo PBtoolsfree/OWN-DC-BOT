@@ -25,7 +25,7 @@ from app.freegames.dedupe import compute_offer_unique_key
 from app.freegames.notifier import prepare_notification_payload
 from app.freegames.schemas import FreeGameOffer, SourceHealth
 from app.freegames.sources import get_all_sources, get_source
-from app.freegames.validator import validate_offer_eligibility
+from app.freegames.validator import validate_claim_url, validate_offer_eligibility
 
 logger = logging.getLogger("pbhero.freegames.service")
 settings = get_settings()
@@ -215,7 +215,7 @@ class FreeGameService:
         allowed_offer_types: List[str],
     ) -> bool:
         """Validate, upsert, and optionally post a single offer."""
-        # 1. Validation
+        # 1. Eligibility validation
         is_eligible, reason = validate_offer_eligibility(offer, allowed_offer_types)
         if not is_eligible:
             if "NO_CLAIM_URL" in reason:
@@ -224,10 +224,22 @@ class FreeGameService:
                 logger.info("Offer skipped (%s): '%s' from %s", reason, offer.title, offer.source)
             return False
 
-        # 2. Compute unique identity
-        offer.unique_key = compute_offer_unique_key(offer.source, offer.external_id, offer.claim_url)
+        # 2. Canonical URL preflight validation
+        is_valid_url, url_reason, canonical_url = await validate_claim_url(offer)
+        if not is_valid_url:
+            offer.claim_url_status = "INVALID"
+            logger.warning("SKIPPED_OFFER_INVALID_CLAIM_URL: '%s' (%s) - %s", offer.title, offer.source, url_reason)
+            return False
 
-        # 3. Database Upsert
+        offer.canonical_claim_url = canonical_url or offer.claim_url
+        offer.claim_url = canonical_url or offer.claim_url
+        offer.claim_url_status = "VALID"
+        offer.validated_at = datetime.utcnow()
+
+        # 3. Compute unique identity using canonical URL
+        offer.unique_key = compute_offer_unique_key(offer.source, offer.external_id, offer.canonical_claim_url)
+
+        # 4. Database Upsert
         session = await get_session_direct()
         try:
             offer_dict = offer.to_dict()
@@ -562,4 +574,53 @@ class FreeGameService:
             }
         finally:
             await session.close()
+
+    async def repair_urls(self, source_filter: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Re-resolve existing store offers and update their canonical claim URL.
+        Prevents duplicate offer records and marks invalid URLs appropriately.
+        """
+        session = await get_session_direct()
+        try:
+            offers = await FreeGameOfferRepo.get_all_offers(session, source=source_filter)
+            total_checked = len(offers)
+            repaired_count = 0
+            invalid_count = 0
+
+            for db_offer in offers:
+                target_url = db_offer.canonical_claim_url or db_offer.claim_url
+                is_valid, reason, canonical = await validate_claim_url(target_url, source=db_offer.source)
+
+                if is_valid and canonical:
+                    if canonical != db_offer.claim_url or canonical != db_offer.canonical_claim_url:
+                        db_offer.canonical_claim_url = canonical
+                        db_offer.claim_url = canonical
+                        db_offer.claim_url_status = "VALID"
+                        db_offer.validated_at = datetime.utcnow()
+                        repaired_count += 1
+                    else:
+                        db_offer.claim_url_status = "VALID"
+                        db_offer.validated_at = datetime.utcnow()
+                else:
+                    db_offer.claim_url_status = "INVALID"
+                    invalid_count += 1
+                    logger.warning(
+                        "SKIPPED_OFFER_INVALID_CLAIM_URL in repair: offer #%d '%s' (%s)",
+                        db_offer.id, db_offer.title, reason
+                    )
+
+            await session.commit()
+            return {
+                "success": True,
+                "total_checked": total_checked,
+                "repaired": repaired_count,
+                "invalid": invalid_count,
+            }
+        except Exception as e:
+            await session.rollback()
+            logger.error("Failed to repair offer URLs: %s", e)
+            return {"success": False, "error": str(e), "total_checked": 0, "repaired": 0, "invalid": 0}
+        finally:
+            await session.close()
+
 

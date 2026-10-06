@@ -224,6 +224,26 @@ class FreeGamesCog(commands.Cog, name="FreeGames"):
                 embed.add_field(name="Permissions Detail", value=str(res["permissions"]), inline=False)
             await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ─── Slash: /freegames repair-urls ──────────────────────────────────────────
+
+    @freegames_group.command(name="repair-urls", description="Repair and canonicalize claim URLs in the database (Admin)")
+    @guild_only()
+    @admin_only()
+    async def repair_urls_slash(self, interaction: discord.Interaction):
+        """Re-resolve and canonicalize claim URLs for existing offers in the database."""
+        await interaction.response.defer(ephemeral=True)
+        res = await self.service.repair_urls()
+
+        embed = discord.Embed(
+            title="🔧 Free Games URL Repair",
+            description="Re-resolved stored offer claim URLs to official canonical URLs.",
+            color=0x57F287 if res.get("success") else 0xED4245,
+        )
+        embed.add_field(name="Total Checked", value=str(res.get("total_checked", 0)), inline=True)
+        embed.add_field(name="Repaired URLs", value=str(res.get("repaired", 0)), inline=True)
+        embed.add_field(name="Invalid URLs", value=str(res.get("invalid", 0)), inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     # ─── Prefix Command Equivalents: !freegames ────────────────────────────────
 
     @commands.group(name="freegames", invoke_without_command=True)
@@ -238,10 +258,27 @@ class FreeGamesCog(commands.Cog, name="FreeGames"):
                 "`!freegames latest` — View active free games\n"
                 "`!freegames sources` — Health of game feeds\n"
                 "`!freegames sync` — Trigger immediate scan (Admin)\n"
-                "`!freegames test` — Send a test notification (Admin)"
+                "`!freegames test` — Send a test notification (Admin)\n"
+                "`!freegames repair-urls` — Repair canonical claim URLs (Admin)"
             ),
             color=0x5865F2,
         )
+        embed.set_footer(text="PB HERO Free Games")
+        await ctx.send(embed=embed)
+
+    @freegames_prefix.command(name="repair-urls")
+    @commands.guild_only()
+    @commands.has_permissions(administrator=True)
+    async def repair_urls_prefix(self, ctx: commands.Context):
+        """Prefix: Repair stored claim URLs to canonical paths."""
+        res = await self.service.repair_urls()
+        embed = discord.Embed(
+            title="🔧 Free Games URL Repair",
+            color=0x57F287 if res.get("success") else 0xED4245,
+        )
+        embed.add_field(name="Total Checked", value=str(res.get("total_checked", 0)), inline=True)
+        embed.add_field(name="Repaired URLs", value=str(res.get("repaired", 0)), inline=True)
+        embed.add_field(name="Invalid URLs", value=str(res.get("invalid", 0)), inline=True)
         embed.set_footer(text="PB HERO Free Games")
         await ctx.send(embed=embed)
 

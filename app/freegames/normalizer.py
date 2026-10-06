@@ -31,6 +31,54 @@ TRACKING_PARAMS = {
 }
 
 
+def normalize_epic_claim_url(url: str) -> str:
+    """
+    Clean and canonicalize an Epic Games Store product claim URL.
+    Requirements:
+    - HTTPS only
+    - host must be store.epicgames.com or approved Epic official host
+    - preserve full canonical product path and required product identifier (e.g. /p/buried-stars-d7c88c)
+    - remove tracking parameters
+    - return normalized official URL
+    """
+    if not url or not isinstance(url, str):
+        return ""
+
+    raw_url = url.strip()
+    if not raw_url.startswith(("http://", "https://")):
+        raw_url = f"https://{raw_url}"
+
+    parsed = urlparse(raw_url)
+    scheme = "https"
+    netloc = (parsed.netloc or "").lower()
+
+    if "epicgames.com" in netloc:
+        netloc = "store.epicgames.com"
+    elif not netloc:
+        netloc = "store.epicgames.com"
+
+    path = parsed.path
+    # Normalize locale prefixes and product aliases to canonical /p/ path
+    path = re.sub(r"^/[a-zA-Z]{2}(?:-[a-zA-Z]{2})?/p/", "/p/", path)
+    path = re.sub(r"^/[a-zA-Z]{2}(?:-[a-zA-Z]{2})?/product/", "/p/", path)
+    path = re.sub(r"^/product/", "/p/", path)
+
+    # Clean tracking query parameters
+    clean_query = []
+    if parsed.query:
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=False)
+        for k, v in query_pairs:
+            if k.lower() not in TRACKING_PARAMS:
+                clean_query.append((k, v))
+
+    # Strip trailing slash from canonical product path (/p/slug/ -> /p/slug)
+    if path.startswith("/p/") and len(path) > 3:
+        path = path.rstrip("/")
+
+    new_query = urlencode(clean_query)
+    return urlunparse((scheme, netloc, path, "", new_query, ""))
+
+
 def normalize_claim_url(raw_url: str, source_hint: Optional[str] = None, source: Optional[str] = None) -> str:
     """
     Clean and canonicalize a store claim URL.
@@ -60,13 +108,9 @@ def normalize_claim_url(raw_url: str, source_hint: Optional[str] = None, source:
             if k.lower() not in TRACKING_PARAMS:
                 clean_query.append((k, v))
 
-    # Store-specific canonical normalization
-    # 1. Epic Games Store
-    if "epicgames.com" in netloc:
-        # Normalize /en-US/p/slug -> /p/slug
-        path = re.sub(r"^/[a-zA-Z]{2}(-[a-zA-Z]{2})?/p/", "/p/", path)
-        path = re.sub(r"^/[a-zA-Z]{2}(-[a-zA-Z]{2})?/product/", "/p/", path)
-        netloc = "store.epicgames.com"
+    # Check Epic Games Store first (by domain or source hint)
+    if hint == "epic" or "epicgames.com" in netloc:
+        return normalize_epic_claim_url(raw_url)
 
     # 2. Steam
     elif "steampowered.com" in netloc:

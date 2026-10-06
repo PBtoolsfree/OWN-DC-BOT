@@ -38,6 +38,9 @@ class FreeGameOffer:
     store_name: str
     platform: str
     claim_url: str
+    canonical_claim_url: Optional[str] = None
+    claim_url_status: str = "VALID"
+    validated_at: Optional[datetime] = None
     description: Optional[str] = None
     offer_type: str = OfferType.FREE_TO_KEEP.value
     original_price: Optional[float] = None
@@ -53,6 +56,8 @@ class FreeGameOffer:
     unique_key: Optional[str] = None
 
     def __post_init__(self):
+        if not self.canonical_claim_url:
+            self.canonical_claim_url = self.claim_url
         if not self.unique_key:
             self.unique_key = f"{self.source}:{self.external_id}"
 
@@ -71,6 +76,9 @@ class FreeGameOffer:
             "currency": self.currency,
             "discount_percent": self.discount_percent,
             "claim_url": self.claim_url,
+            "canonical_claim_url": self.canonical_claim_url or self.claim_url,
+            "claim_url_status": self.claim_url_status,
+            "validated_at": self.validated_at,
             "source_url": self.source_url,
             "thumbnail_url": self.thumbnail_url,
             "starts_at": self.starts_at,

@@ -795,6 +795,9 @@ class FreeGameOfferModel(Base):
     currency = Column(String(16), default="USD", nullable=False)
     discount_percent = Column(Integer, default=100, nullable=False)
     claim_url = Column(String(1024), nullable=False)
+    canonical_claim_url = Column(String(1024), nullable=True)
+    claim_url_status = Column(String(32), default="VALID", nullable=False)
+    validated_at = Column(DateTime, nullable=True)
     source_url = Column(String(1024), nullable=True)
     thumbnail_url = Column(String(1024), nullable=True)
     starts_at = Column(DateTime, nullable=True)
@@ -830,6 +833,9 @@ class FreeGameOfferModel(Base):
             "currency": self.currency,
             "discount_percent": self.discount_percent,
             "claim_url": self.claim_url,
+            "canonical_claim_url": self.canonical_claim_url or self.claim_url,
+            "claim_url_status": self.claim_url_status,
+            "validated_at": self.validated_at.isoformat() if self.validated_at else None,
             "source_url": self.source_url,
             "thumbnail_url": self.thumbnail_url,
             "starts_at": self.starts_at.isoformat() if self.starts_at else None,

@@ -60,11 +60,12 @@ def build_offer_embed(
         header = "🎁 FREE GAME ALERT"
         color = ACCENT_COLOR_NEW
 
+    target_url = getattr(offer, "canonical_claim_url", None) or offer.claim_url
     embed = discord.Embed(
         title=f"🎮 {offer.title}",
         description=None,
         color=color,
-        url=offer.claim_url,
+        url=target_url,
     )
     embed.set_author(name=header)
 
@@ -105,6 +106,9 @@ def build_claim_button_view(claim_url: str, source: Optional[str] = None) -> Opt
     """
     Construct direct claim URL button with strict safety validation.
     Section 29: Assert that label == "🎁 CLAIM GAME", style == ButtonStyle.link, url == claim_url.
+    Requirements:
+    - Never use raw scraped URL if canonical_claim_url is available
+    - Regression assertion: button.url == offer.canonical_claim_url
     """
     is_valid, reason = validate_claim_url_security(claim_url, source)
     if not is_valid:
@@ -135,6 +139,8 @@ def prepare_notification_payload(
     content = f"<@&{role_mention_id}>" if role_mention_id else None
     mentions = discord.AllowedMentions(roles=True, users=False, everyone=False)
 
+    canonical_url = getattr(offer, "canonical_claim_url", None) or offer.claim_url
+
     embed = build_offer_embed(
         offer,
         is_ending_soon=is_ending_soon,
@@ -144,5 +150,5 @@ def prepare_notification_payload(
         show_price=show_price,
         show_expiry=show_expiry,
     )
-    view = build_claim_button_view(offer.claim_url, offer.source)
+    view = build_claim_button_view(canonical_url, offer.source)
     return content, embed, view, mentions

@@ -2746,7 +2746,8 @@ class FreeGameOfferRepo:
             existing.last_seen_at = now
             # Update dynamic fields
             for key in ("title", "description", "original_price", "current_price", "discount_percent",
-                        "claim_url", "thumbnail_url", "starts_at", "ends_at", "is_free", "raw_metadata_json"):
+                        "claim_url", "canonical_claim_url", "claim_url_status", "validated_at",
+                        "thumbnail_url", "starts_at", "ends_at", "is_free", "raw_metadata_json"):
                 if key in offer_dict and offer_dict[key] is not None:
                     setattr(existing, key, offer_dict[key])
 
@@ -2776,6 +2777,9 @@ class FreeGameOfferRepo:
             currency=offer_dict.get("currency", "USD"),
             discount_percent=offer_dict.get("discount_percent", 100),
             claim_url=offer_dict["claim_url"],
+            canonical_claim_url=offer_dict.get("canonical_claim_url") or offer_dict["claim_url"],
+            claim_url_status=offer_dict.get("claim_url_status", "VALID"),
+            validated_at=offer_dict.get("validated_at") or now,
             source_url=offer_dict.get("source_url"),
             thumbnail_url=offer_dict.get("thumbnail_url"),
             starts_at=offer_dict.get("starts_at"),
@@ -2789,6 +2793,15 @@ class FreeGameOfferRepo:
         session.add(new_offer)
         await session.flush()
         return new_offer, True
+
+    @staticmethod
+    async def get_all_offers(session: AsyncSession, source: Optional[str] = None) -> List[FreeGameOfferModel]:
+        """Fetch all tracked offers optionally filtered by source."""
+        query = select(FreeGameOfferModel)
+        if source:
+            query = query.where(FreeGameOfferModel.source == source)
+        result = await session.execute(query.order_by(FreeGameOfferModel.id.asc()))
+        return list(result.scalars().all())
 
     @staticmethod
     async def get_active_offers(session: AsyncSession, limit: int = 50) -> List[FreeGameOfferModel]:

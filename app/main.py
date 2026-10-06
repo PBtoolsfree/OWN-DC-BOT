@@ -55,6 +55,20 @@ async def init_database(create_admin_user: bool = True) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+        def _ensure_free_game_columns(sync_conn):
+            from sqlalchemy import inspect, text
+            inspector = inspect(sync_conn)
+            if "free_game_offers" in inspector.get_table_names():
+                existing_cols = {c["name"] for c in inspector.get_columns("free_game_offers")}
+                if "canonical_claim_url" not in existing_cols:
+                    sync_conn.execute(text("ALTER TABLE free_game_offers ADD COLUMN canonical_claim_url VARCHAR(1024)"))
+                if "claim_url_status" not in existing_cols:
+                    sync_conn.execute(text("ALTER TABLE free_game_offers ADD COLUMN claim_url_status VARCHAR(32) DEFAULT 'VALID'"))
+                if "validated_at" not in existing_cols:
+                    sync_conn.execute(text("ALTER TABLE free_game_offers ADD COLUMN validated_at DATETIME"))
+
+        await conn.run_sync(_ensure_free_game_columns)
+
     # Initialize default policy profiles (15 text + 10 voice presets = 25 built-in presets)
     session = await get_session_direct()
     try:
