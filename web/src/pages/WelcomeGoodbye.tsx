@@ -1,10 +1,11 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { greetingsApi } from '../api/greetings';
 import {
   GreetingsResponse,
   GreetingChannelOption,
   GuildRoleOption,
   ServerGreetingSettings,
+  GreetingButton,
 } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { DiscordPreview } from '../components/DiscordPreview';
@@ -30,11 +31,14 @@ import {
   Link2,
   History,
   Tag,
+  Palette,
+  Image as ImageIcon,
+  Layers,
 } from 'lucide-react';
 
 const WELCOME_VARIABLES = [
   { key: '{username}', desc: 'Member username (e.g. JohnDoe)' },
-  { key: '{display_name}', desc: 'Server nickname/display name' },
+  { key: '{display_name}', desc: 'Server nickname / display name' },
   { key: '{user_mention}', desc: 'Discord mention @User' },
   { key: '{user_id}', desc: 'Unique Discord User ID' },
   { key: '{server_name}', desc: 'Discord Server Name' },
@@ -42,6 +46,11 @@ const WELCOME_VARIABLES = [
   { key: '{member_count}', desc: 'Total member count' },
   { key: '{account_created}', desc: 'Account creation date' },
   { key: '{joined_at}', desc: 'Join date & timestamp' },
+  { key: '{inviter}', desc: 'Inviter username or Server Vanity URL' },
+  { key: '{inviter_mention}', desc: 'Inviter @mention' },
+  { key: '{inviter_id}', desc: 'Inviter user ID' },
+  { key: '{invite_code}', desc: 'Used invite code' },
+  { key: '{invite_channel}', desc: 'Channel invite was created in' },
   { key: '{rules_url}', desc: 'Official rules link' },
   { key: '{invite_url}', desc: 'Permanent server invite' },
 ];
@@ -55,6 +64,75 @@ const GOODBYE_VARIABLES = [
   { key: '{member_count}', desc: 'Member count before departure' },
   { key: '{left_at}', desc: 'Departure timestamp' },
   { key: '{invite_url}', desc: 'Permanent server invite' },
+];
+
+const THEME_PRESETS: Record<string, {
+  name: string;
+  icon: string;
+  welcome_title: string;
+  welcome_description: string;
+  welcome_accent_color: string;
+  goodbye_title: string;
+  goodbye_description: string;
+  goodbye_accent_color: string;
+}> = {
+  default: {
+    name: 'Default Classic',
+    icon: '✨',
+    welcome_title: '✨ WELCOME TO {server_name}',
+    welcome_description: "Hey {user_mention} 👋\n\nWe're glad to have you here!\n\n👥 You are member #{member_count}\n\n🤝 Invited by: {inviter}\n🔗 Invite: {invite_code}\n\n📜 Please read the server rules.\n🎮 Explore the community and enjoy your stay.",
+    welcome_accent_color: '#5865F2',
+    goodbye_title: '💙 Goodbye {display_name}',
+    goodbye_description: "💙 {display_name} has left {server_name}.\n\nWe hope you enjoyed your time with us.\n\n👥 We are now {member_count} members.\n\nTake care and you're always welcome back.",
+    goodbye_accent_color: '#ED4245',
+  },
+  gaming: {
+    name: 'Gaming & Esports',
+    icon: '🎮',
+    welcome_title: '🎮 WELCOME TO {server_name}',
+    welcome_description: "🎮 Player {user_mention} has entered the arena!\n\n⚔️ Party Member #{member_count}\n🎯 Recruited by: {inviter}\n🔗 Portal Key: {invite_code}\n\n📜 Check our guidelines before queuing up.\n🕹️ Good luck and have fun!",
+    welcome_accent_color: '#10B981',
+    goodbye_title: '💀 PLAYER DISCONNECTED: {display_name}',
+    goodbye_description: '{display_name} has left the party.\n\n👥 Current squad: {member_count} players.\n\nRespawn anytime — GG!',
+    goodbye_accent_color: '#EF4444',
+  },
+  minimal: {
+    name: 'Minimal & Clean',
+    icon: '⚪',
+    welcome_title: 'Welcome to {server_name}',
+    welcome_description: 'Welcome {user_mention}.\n\nMember #{member_count} • Invited by {inviter}\n\nReview the rules and enjoy your stay.',
+    welcome_accent_color: '#71717A',
+    goodbye_title: 'Goodbye {display_name}',
+    goodbye_description: '{display_name} has left.\n\nCurrent members: {member_count}.',
+    goodbye_accent_color: '#71717A',
+  },
+  luxury: {
+    name: 'Luxury & Gold',
+    icon: '👑',
+    welcome_title: '✨ WELCOME TO {server_name}',
+    welcome_description: 'A distinguished welcome to {user_mention} 🥂\n\nIt is our privilege to welcome you as member #{member_count}.\n\n⚜️ Introduced by: {inviter}\n🗝️ Registry Code: {invite_code}\n\nPlease observe server etiquette and enjoy your refined stay.',
+    welcome_accent_color: '#D97706',
+    goodbye_title: '✨ FAREWELL, {display_name}',
+    goodbye_description: '{display_name} has departed from {server_name}.\n\nOur distinguished community now stands at {member_count}.\n\nOur doors remain open for your return.',
+    goodbye_accent_color: '#B45309',
+  },
+  neon: {
+    name: 'Neon Cyber',
+    icon: '⚡',
+    welcome_title: '⚡ SYSTEM ONLINE • {server_name}',
+    welcome_description: 'Neon uplink connected: {user_mention} ⚡\n\n🌐 Network Node #{member_count}\n📡 Uplinked by: {inviter}\n⚡ Frequency: {invite_code}\n\nAccess protocols accepted. Welcome to the grid!',
+    welcome_accent_color: '#EC4899',
+    goodbye_title: '⚡ NODE OFFLINE • {display_name}',
+    goodbye_description: 'Node disconnection logged for {display_name}.\n\nActive network size: {member_count} nodes.\n\nReconnection frequency ready.',
+    goodbye_accent_color: '#8B5CF6',
+  },
+};
+
+const DEFAULT_WELCOME_BUTTONS: GreetingButton[] = [
+  { id: 'rules', label: 'Read Rules', emoji: '📜', url: '{rules_url}', style: 'link', enabled: true },
+  { id: 'explore', label: 'Explore Server', emoji: '🎮', url: '{invite_url}', style: 'link', enabled: true },
+  { id: 'invite', label: 'Server Invite', emoji: '🔗', url: '{invite_url}', style: 'link', enabled: false },
+  { id: 'support', label: 'Support', emoji: '🆘', url: 'https://discord.gg/pbhero', style: 'link', enabled: false },
 ];
 
 export const WelcomeGoodbye: React.FC = () => {
@@ -74,6 +152,7 @@ export const WelcomeGoodbye: React.FC = () => {
 
   const [showResetWelcomeModal, setShowResetWelcomeModal] = useState(false);
   const [showResetGoodbyeModal, setShowResetGoodbyeModal] = useState(false);
+  const [pendingThemeKey, setPendingThemeKey] = useState<string | null>(null);
 
   const loadData = async () => {
     try {
@@ -112,8 +191,67 @@ export const WelcomeGoodbye: React.FC = () => {
     handleFieldChange({ [activeInput]: updated });
   };
 
+  const getWelcomeButtons = (): GreetingButton[] => {
+    if (!formData?.welcome_buttons_json) return DEFAULT_WELCOME_BUTTONS;
+    if (Array.isArray(formData.welcome_buttons_json)) return formData.welcome_buttons_json;
+    try {
+      return JSON.parse(formData.welcome_buttons_json as string);
+    } catch {
+      return DEFAULT_WELCOME_BUTTONS;
+    }
+  };
+
+  const handleUpdateButton = (index: number, updates: Partial<GreetingButton>) => {
+    const current = [...getWelcomeButtons()];
+    current[index] = { ...current[index], ...updates };
+    handleFieldChange({ welcome_buttons_json: current });
+  };
+
+  const applyThemePreset = (themeKey: string) => {
+    const preset = THEME_PRESETS[themeKey];
+    if (!preset) return;
+    if (activeTab === 'welcome') {
+      handleFieldChange({
+        welcome_theme: themeKey,
+        welcome_title: preset.welcome_title,
+        welcome_description: preset.welcome_description,
+        welcome_accent_color: preset.welcome_accent_color,
+      });
+    } else if (activeTab === 'goodbye') {
+      handleFieldChange({
+        goodbye_theme: themeKey,
+        goodbye_title: preset.goodbye_title,
+        goodbye_description: preset.goodbye_description,
+        goodbye_accent_color: preset.goodbye_accent_color,
+      });
+    }
+    setPendingThemeKey(null);
+    toast.success(`Applied ${preset.name} theme preset`);
+  };
+
   const handleSave = async () => {
     if (!formData) return;
+    if (
+      (formData.welcome_title && formData.welcome_title.length > 256) ||
+      (formData.goodbye_title && formData.goodbye_title.length > 256)
+    ) {
+      toast.error('Title exceeds maximum limit of 256 characters.');
+      return;
+    }
+    if (
+      (formData.welcome_description && formData.welcome_description.length > 4096) ||
+      (formData.goodbye_description && formData.goodbye_description.length > 4096)
+    ) {
+      toast.error('Description exceeds maximum limit of 4096 characters.');
+      return;
+    }
+    if (
+      (formData.welcome_footer && formData.welcome_footer.length > 2048) ||
+      (formData.goodbye_footer && formData.goodbye_footer.length > 2048)
+    ) {
+      toast.error('Footer exceeds maximum limit of 2048 characters.');
+      return;
+    }
     setSaving(true);
     try {
       const res = await greetingsApi.updateGreetings(formData);
@@ -175,6 +313,7 @@ export const WelcomeGoodbye: React.FC = () => {
       toast.error(err.response?.data?.detail || `Failed to reset ${systemType}`);
     }
   };
+
   if (loading || !formData || !data) {
     return (
       <div className="p-8 max-w-7xl mx-auto space-y-6">
@@ -197,7 +336,7 @@ export const WelcomeGoodbye: React.FC = () => {
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-indigo-400">
               <Server className="w-4 h-4" />
-              <span>Personal Guild Automation</span>
+              <span>Personal Guild Automation • Premium Onboarding 2.0</span>
             </div>
             <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight flex items-center gap-3">
               Server Greetings & Member Onboarding
@@ -261,6 +400,7 @@ export const WelcomeGoodbye: React.FC = () => {
           </div>
         </div>
       </div>
+
       {/* 2. Unsaved Changes Alert Bar */}
       {hasChanges && (
         <div className="sticky top-4 z-40 bg-indigo-950/90 backdrop-blur-md border border-indigo-700/80 p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-4 animate-bounce-subtle">
@@ -303,7 +443,9 @@ export const WelcomeGoodbye: React.FC = () => {
           const isActive = activeTab === tab.id;
           return (
             <button
-              key={tab.id} data-testid={`tab-${tab.id}`} type="button"
+              key={tab.id}
+              data-testid={`tab-${tab.id}`}
+              type="button"
               onClick={() => setActiveTab(tab.id as any)}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
                 isActive
@@ -333,7 +475,8 @@ export const WelcomeGoodbye: React.FC = () => {
                   <UserPlus className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-400">WELCOME SYSTEM</div><h2 className="text-lg font-bold text-white">Public Welcome Channel Message</h2>
+                  <div className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-400">WELCOME SYSTEM</div>
+                  <h2 className="text-lg font-bold text-white">Public Welcome Channel Message</h2>
                   <p className="text-xs text-gray-400">Sent automatically when a member joins the server.</p>
                 </div>
               </div>
@@ -350,6 +493,43 @@ export const WelcomeGoodbye: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-6">
+              {/* Theme Presets */}
+              <div className="space-y-2 p-4 bg-gray-900/50 rounded-2xl border border-gray-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    Premium Theme Presets
+                  </span>
+                  <span className="text-[11px] text-gray-500">Pick a preset to style presentation defaults</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {Object.entries(THEME_PRESETS).map(([key, preset]) => {
+                    const isSelected = (formData.welcome_theme || 'default') === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setPendingThemeKey(key)}
+                        className={`p-2.5 rounded-xl border text-left transition-all flex flex-col gap-1 ${
+                          isSelected
+                            ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm'
+                            : 'bg-gray-900 hover:bg-gray-800/80 border-gray-800 text-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <span className="text-base">{preset.icon}</span>
+                          <span
+                            className="w-3 h-3 rounded-full border border-gray-700"
+                            style={{ backgroundColor: preset.welcome_accent_color }}
+                          />
+                        </div>
+                        <span className="text-xs font-bold truncate">{preset.name.split(' ')[0]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Channel Selector */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
@@ -398,8 +578,8 @@ export const WelcomeGoodbye: React.FC = () => {
                 </div>
               )}
 
-              {/* Visual Toggles */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3 bg-gray-900/40 rounded-xl border border-gray-800 text-xs text-gray-300">
+              {/* Visual & Attribution Toggles */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 bg-gray-900/40 rounded-xl border border-gray-800 text-xs text-gray-300">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -445,46 +625,191 @@ export const WelcomeGoodbye: React.FC = () => {
                   />
                   Timestamp
                 </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_show_member_count ?? true}
+                    onChange={(e) => handleFieldChange({ welcome_show_member_count: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Member Count
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_show_inviter !== false}
+                    onChange={(e) => handleFieldChange({ welcome_show_inviter: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Show Inviter
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.welcome_show_invite_code !== false}
+                    onChange={(e) => handleFieldChange({ welcome_show_invite_code: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Show Invite Code
+                </label>
+              </div>
+
+              {/* Server Branding & Banner UI */}
+              <div className="space-y-4 p-4 bg-gray-900/40 rounded-2xl border border-gray-800">
+                <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Palette className="w-3.5 h-3.5 text-indigo-400" />
+                  Server Branding, Accent & Banner
+                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                      Accent Color
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={formData.welcome_accent_color || '#5865F2'}
+                        onChange={(e) => handleFieldChange({ welcome_accent_color: e.target.value })}
+                        className="w-10 h-10 rounded-xl bg-transparent border border-gray-700 cursor-pointer shrink-0"
+                      />
+                      <input
+                        type="text"
+                        value={formData.welcome_accent_color || '#5865F2'}
+                        onChange={(e) => handleFieldChange({ welcome_accent_color: e.target.value })}
+                        placeholder="#5865F2"
+                        className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white font-mono uppercase focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                      Banner Display Mode
+                    </label>
+                    <select
+                      value={formData.welcome_banner_mode || 'none'}
+                      onChange={(e) => handleFieldChange({ welcome_banner_mode: e.target.value as any })}
+                      className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="none">No Banner Image</option>
+                      <option value="server">Server Banner (from Discord)</option>
+                      <option value="custom">Custom Image / GIF URL</option>
+                    </select>
+                  </div>
+                </div>
+
+                {formData.welcome_banner_mode === 'custom' && (
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block flex items-center gap-1">
+                      <ImageIcon className="w-3.5 h-3.5 text-indigo-400" />
+                      Custom Image or GIF URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.welcome_banner_url ?? ''}
+                      onChange={(e) => handleFieldChange({ welcome_banner_url: e.target.value })}
+                      placeholder="https://example.com/welcome-banner.gif"
+                      className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                    />
+                    <p className="text-[10px] text-gray-500">Only secure HTTPS URLs are allowed. Broken images automatically fall back safely.</p>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                        Author Name
+                      </label>
+                      <span className={`text-[10px] font-mono ${(formData.welcome_author_text?.length || 0) > 256 ? 'text-rose-400 font-bold' : 'text-gray-500'}`}>
+                        {formData.welcome_author_text?.length || 0}/256
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={formData.welcome_author_text ?? ''}
+                      onFocus={() => setActiveInput('welcome_author_text')}
+                      onChange={(e) => handleFieldChange({ welcome_author_text: e.target.value })}
+                      placeholder={serverName}
+                      className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                      Author Icon URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.welcome_author_icon_url ?? ''}
+                      onChange={(e) => handleFieldChange({ welcome_author_icon_url: e.target.value })}
+                      placeholder="https://... (defaults to Server Icon)"
+                      className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Template Editor */}
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                    Message / Embed Title
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                      Message / Embed Title
+                    </label>
+                    <span className={`text-[10px] font-mono ${(formData.welcome_title?.length || 0) > 256 ? 'text-rose-400 font-bold' : 'text-gray-500'}`}>
+                      {formData.welcome_title?.length || 0}/256
+                    </span>
+                  </div>
                   <input
                     type="text"
                     value={formData.welcome_title ?? ''}
                     onFocus={() => setActiveInput('welcome_title')}
                     onChange={(e) => handleFieldChange({ welcome_title: e.target.value })}
-                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className={`w-full bg-gray-900 border rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none ${
+                      (formData.welcome_title?.length || 0) > 256 ? 'border-rose-500' : 'border-gray-700 focus:border-indigo-500'
+                    }`}
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                    Message Description
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                      Message Description
+                    </label>
+                    <span className={`text-[10px] font-mono ${(formData.welcome_description?.length || 0) > 4096 ? 'text-rose-400 font-bold' : 'text-gray-500'}`}>
+                      {formData.welcome_description?.length || 0}/4096
+                    </span>
+                  </div>
                   <textarea
-                    rows={5}
+                    rows={6}
                     value={formData.welcome_description ?? ''}
                     onFocus={() => setActiveInput('welcome_description')}
                     onChange={(e) => handleFieldChange({ welcome_description: e.target.value })}
-                    className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
+                    className={`w-full bg-gray-900 border rounded-xl p-3 text-sm text-white font-mono focus:outline-none ${
+                      (formData.welcome_description?.length || 0) > 4096 ? 'border-rose-500' : 'border-gray-700 focus:border-indigo-500'
+                    }`}
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                    Footer
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                      Footer
+                    </label>
+                    <span className={`text-[10px] font-mono ${(formData.welcome_footer?.length || 0) > 2048 ? 'text-rose-400 font-bold' : 'text-gray-500'}`}>
+                      {formData.welcome_footer?.length || 0}/2048
+                    </span>
+                  </div>
                   <input
                     type="text"
                     value={formData.welcome_footer ?? ''}
                     onFocus={() => setActiveInput('welcome_footer')}
                     onChange={(e) => handleFieldChange({ welcome_footer: e.target.value })}
-                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className={`w-full bg-gray-900 border rounded-xl px-4 py-2 text-sm text-white focus:outline-none ${
+                      (formData.welcome_footer?.length || 0) > 2048 ? 'border-rose-500' : 'border-gray-700 focus:border-indigo-500'
+                    }`}
                   />
                 </div>
 
@@ -507,6 +832,74 @@ export const WelcomeGoodbye: React.FC = () => {
                       </button>
                     ))}
                   </div>
+                </div>
+              </div>
+
+              {/* Welcome Buttons Configuration */}
+              <div className="space-y-3 p-4 bg-gray-900/40 rounded-2xl border border-gray-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                    Interactive Welcome Buttons (Action Row)
+                  </span>
+                  <span className="text-[11px] text-gray-500">Enable buttons to attach below welcome message</span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {getWelcomeButtons().map((btn, idx) => (
+                    <div
+                      key={btn.id || idx}
+                      className="p-3 bg-gray-950/60 rounded-xl border border-gray-800 flex flex-wrap items-center gap-3 text-xs"
+                    >
+                      <label className="flex items-center gap-2 cursor-pointer font-bold text-white shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(btn.enabled)}
+                          onChange={(e) => handleUpdateButton(idx, { enabled: e.target.checked })}
+                          className="rounded bg-gray-800 border-gray-700 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span>{idx + 1}.</span>
+                      </label>
+
+                      <div className="w-16 shrink-0">
+                        <input
+                          type="text"
+                          value={btn.emoji || ''}
+                          onChange={(e) => handleUpdateButton(idx, { emoji: e.target.value })}
+                          placeholder="Emoji"
+                          className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1 text-center text-xs text-white"
+                        />
+                      </div>
+
+                      <div className="w-32 shrink-0">
+                        <input
+                          type="text"
+                          value={btn.label || ''}
+                          onChange={(e) => handleUpdateButton(idx, { label: e.target.value })}
+                          placeholder="Label"
+                          className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-white"
+                        />
+                      </div>
+
+                      <div className="flex-1 min-w-[160px]">
+                        <input
+                          type="text"
+                          value={btn.url || ''}
+                          onChange={(e) => handleUpdateButton(idx, { url: e.target.value })}
+                          placeholder="https://... or {rules_url}"
+                          className={`w-full bg-gray-900 border rounded-lg px-2.5 py-1 text-xs text-white font-mono ${
+                            btn.url && !btn.url.startsWith('https://') && !btn.url.startsWith('{')
+                              ? 'border-amber-500 text-amber-200'
+                              : 'border-gray-700'
+                          }`}
+                        />
+                      </div>
+
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-400 font-mono">
+                        Link
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -557,7 +950,17 @@ export const WelcomeGoodbye: React.FC = () => {
               showServerIcon={formData.welcome_show_server_icon}
               showTimestamp={formData.welcome_show_timestamp}
               serverName={serverName}
-              embedColor="#5865F2"
+              embedColor={formData.welcome_accent_color || '#5865F2'}
+              bannerMode={formData.welcome_banner_mode || 'none'}
+              bannerUrl={formData.welcome_banner_url}
+              serverBannerUrl={data.server.server_banner}
+              serverIconUrl={data.server.server_icon}
+              authorText={formData.welcome_author_text}
+              authorIconUrl={formData.welcome_author_icon_url}
+              buttons={getWelcomeButtons()}
+              showInviter={formData.welcome_show_inviter !== false}
+              showInviteCode={formData.welcome_show_invite_code !== false}
+              memberCount={data.server.member_count}
             />
           </div>
         </div>
@@ -573,7 +976,8 @@ export const WelcomeGoodbye: React.FC = () => {
                   <UserMinus className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400">GOODBYE SYSTEM</div><h2 className="text-lg font-bold text-white">Public Goodbye / Departure Message</h2>
+                  <div className="text-[10px] font-extrabold uppercase tracking-widest text-rose-400">GOODBYE SYSTEM</div>
+                  <h2 className="text-lg font-bold text-white">Public Goodbye / Departure Message</h2>
                   <p className="text-xs text-gray-400">Sent automatically when a member departs the server.</p>
                 </div>
               </div>
@@ -590,6 +994,43 @@ export const WelcomeGoodbye: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-6">
+              {/* Theme Presets */}
+              <div className="space-y-2 p-4 bg-gray-900/50 rounded-2xl border border-gray-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-rose-400" />
+                    Goodbye Theme Presets
+                  </span>
+                  <span className="text-[11px] text-gray-500">Pick a preset to style departure messages</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {Object.entries(THEME_PRESETS).map(([key, preset]) => {
+                    const isSelected = (formData.goodbye_theme || 'default') === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setPendingThemeKey(key)}
+                        className={`p-2.5 rounded-xl border text-left transition-all flex flex-col gap-1 ${
+                          isSelected
+                            ? 'bg-rose-600/20 border-rose-500 text-white shadow-sm'
+                            : 'bg-gray-900 hover:bg-gray-800/80 border-gray-800 text-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between w-full">
+                          <span className="text-base">{preset.icon}</span>
+                          <span
+                            className="w-3 h-3 rounded-full border border-gray-700"
+                            style={{ backgroundColor: preset.goodbye_accent_color }}
+                          />
+                        </div>
+                        <span className="text-xs font-bold truncate">{preset.name.split(' ')[0]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Channel Selector */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
@@ -685,46 +1126,120 @@ export const WelcomeGoodbye: React.FC = () => {
                   />
                   Timestamp
                 </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.goodbye_show_member_count ?? true}
+                    onChange={(e) => handleFieldChange({ goodbye_show_member_count: e.target.checked })}
+                    className="rounded bg-gray-800 border-gray-700 text-rose-600 focus:ring-rose-500"
+                  />
+                  Member Count
+                </label>
+              </div>
+
+              {/* Departure Branding & Accent */}
+              <div className="space-y-4 p-4 bg-gray-900/40 rounded-2xl border border-gray-800">
+                <span className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Palette className="w-3.5 h-3.5 text-rose-400" />
+                  Departure Branding & Accent Color
+                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                      Accent Color
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={formData.goodbye_accent_color || '#ED4245'}
+                        onChange={(e) => handleFieldChange({ goodbye_accent_color: e.target.value })}
+                        className="w-10 h-10 rounded-xl bg-transparent border border-gray-700 cursor-pointer shrink-0"
+                      />
+                      <input
+                        type="text"
+                        value={formData.goodbye_accent_color || '#ED4245'}
+                        onChange={(e) => handleFieldChange({ goodbye_accent_color: e.target.value })}
+                        placeholder="#ED4245"
+                        className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white font-mono uppercase focus:outline-none focus:border-rose-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">
+                      Custom Departure Banner URL
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.goodbye_banner_url ?? ''}
+                      onChange={(e) => handleFieldChange({ goodbye_banner_url: e.target.value })}
+                      placeholder="https://... (optional)"
+                      className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Template Editor */}
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                    Message / Embed Title
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                      Message / Embed Title
+                    </label>
+                    <span className={`text-[10px] font-mono ${(formData.goodbye_title?.length || 0) > 256 ? 'text-rose-400 font-bold' : 'text-gray-500'}`}>
+                      {formData.goodbye_title?.length || 0}/256
+                    </span>
+                  </div>
                   <input
                     type="text"
                     value={formData.goodbye_title ?? ''}
                     onFocus={() => setActiveInput('goodbye_title')}
                     onChange={(e) => handleFieldChange({ goodbye_title: e.target.value })}
-                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-rose-500"
+                    className={`w-full bg-gray-900 border rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none ${
+                      (formData.goodbye_title?.length || 0) > 256 ? 'border-rose-500' : 'border-gray-700 focus:border-rose-500'
+                    }`}
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                    Message Description
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                      Message Description
+                    </label>
+                    <span className={`text-[10px] font-mono ${(formData.goodbye_description?.length || 0) > 4096 ? 'text-rose-400 font-bold' : 'text-gray-500'}`}>
+                      {formData.goodbye_description?.length || 0}/4096
+                    </span>
+                  </div>
                   <textarea
                     rows={5}
                     value={formData.goodbye_description ?? ''}
                     onFocus={() => setActiveInput('goodbye_description')}
                     onChange={(e) => handleFieldChange({ goodbye_description: e.target.value })}
-                    className="w-full bg-gray-900 border border-gray-700 rounded-xl p-3 text-sm text-white font-mono focus:outline-none focus:border-rose-500"
+                    className={`w-full bg-gray-900 border rounded-xl p-3 text-sm text-white font-mono focus:outline-none ${
+                      (formData.goodbye_description?.length || 0) > 4096 ? 'border-rose-500' : 'border-gray-700 focus:border-rose-500'
+                    }`}
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                    Footer
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                      Footer
+                    </label>
+                    <span className={`text-[10px] font-mono ${(formData.goodbye_footer?.length || 0) > 2048 ? 'text-rose-400 font-bold' : 'text-gray-500'}`}>
+                      {formData.goodbye_footer?.length || 0}/2048
+                    </span>
+                  </div>
                   <input
                     type="text"
                     value={formData.goodbye_footer ?? ''}
                     onFocus={() => setActiveInput('goodbye_footer')}
                     onChange={(e) => handleFieldChange({ goodbye_footer: e.target.value })}
-                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-rose-500"
+                    className={`w-full bg-gray-900 border rounded-xl px-4 py-2 text-sm text-white focus:outline-none ${
+                      (formData.goodbye_footer?.length || 0) > 2048 ? 'border-rose-500' : 'border-gray-700 focus:border-rose-500'
+                    }`}
                   />
                 </div>
 
@@ -797,7 +1312,13 @@ export const WelcomeGoodbye: React.FC = () => {
               showServerIcon={formData.goodbye_show_server_icon}
               showTimestamp={formData.goodbye_show_timestamp}
               serverName={serverName}
-              embedColor="#ED4245"
+              embedColor={formData.goodbye_accent_color || '#ED4245'}
+              bannerUrl={formData.goodbye_banner_url}
+              bannerMode={formData.goodbye_banner_url ? 'custom' : 'none'}
+              serverIconUrl={data.server.server_icon}
+              authorText={formData.goodbye_author_text}
+              authorIconUrl={formData.goodbye_author_icon_url}
+              memberCount={data.server.member_count}
             />
           </div>
         </div>
@@ -868,9 +1389,21 @@ export const WelcomeGoodbye: React.FC = () => {
         message="Are you sure you want to reset the public goodbye template to defaults? Any custom title, message, or footer will be restored."
         confirmText="Reset to Default"
       />
+
+      <ConfirmModal
+        isOpen={Boolean(pendingThemeKey)}
+        onCancel={() => setPendingThemeKey(null)}
+        onConfirm={() => {
+          if (pendingThemeKey) applyThemePreset(pendingThemeKey);
+        }}
+        title={`Apply "${THEME_PRESETS[pendingThemeKey || 'default']?.name || 'Theme'}" Preset?`}
+        message="This will update your message title, description, and accent color to match this theme preset. Your other settings will remain intact."
+        confirmText="Apply Preset"
+      />
     </div>
   );
 };
+
 
 export default WelcomeGoodbye;
 

@@ -406,6 +406,26 @@ export interface NotificationTemplate {
 
 
 
+export interface GreetingButton {
+  id: string;
+  label: string;
+  emoji?: string | null;
+  url: string;
+  enabled: boolean;
+  style?: 'link' | 'primary' | 'secondary' | 'success' | 'danger';
+}
+
+export interface GreetingThemePreset {
+  id: string;
+  name: string;
+  welcome_title: string;
+  welcome_description: string;
+  welcome_accent_color: string;
+  goodbye_title: string;
+  goodbye_description: string;
+  goodbye_accent_color: string;
+}
+
 export interface ServerGreetingSettings {
   id: number;
   guild_id: string;
@@ -420,6 +440,16 @@ export interface ServerGreetingSettings {
   welcome_show_member_count: boolean;
   welcome_show_timestamp: boolean;
   welcome_use_embed: boolean;
+  welcome_banner_url?: string | null;
+  welcome_banner_mode?: 'none' | 'server' | 'custom' | null;
+  welcome_accent_color?: string | null;
+  welcome_buttons_json?: string | GreetingButton[] | null;
+  welcome_theme?: string | null;
+  welcome_show_inviter?: boolean;
+  welcome_show_invite_code?: boolean;
+  welcome_author_text?: string | null;
+  welcome_author_icon_url?: string | null;
+
   goodbye_enabled: boolean;
   goodbye_channel_id: string | null;
   goodbye_title: string | null;
@@ -431,6 +461,13 @@ export interface ServerGreetingSettings {
   goodbye_show_member_count: boolean;
   goodbye_show_timestamp: boolean;
   goodbye_use_embed: boolean;
+  goodbye_banner_url?: string | null;
+  goodbye_banner_mode?: 'none' | 'server' | 'custom' | null;
+  goodbye_accent_color?: string | null;
+  goodbye_buttons_json?: string | GreetingButton[] | null;
+  goodbye_theme?: string | null;
+  goodbye_author_text?: string | null;
+  goodbye_author_icon_url?: string | null;
   allow_mass_mentions: boolean;
 
   // Rules Delivery
@@ -455,6 +492,12 @@ export interface ServerGreetingSettings {
   welcome_dm_show_avatar?: boolean;
   welcome_dm_show_server_icon?: boolean;
   welcome_dm_show_timestamp?: boolean;
+  welcome_dm_banner_url?: string | null;
+  welcome_dm_banner_mode?: 'none' | 'server' | 'custom' | null;
+  welcome_dm_accent_color?: string | null;
+  welcome_dm_buttons_json?: string | GreetingButton[] | null;
+  welcome_dm_author_text?: string | null;
+  welcome_dm_author_icon_url?: string | null;
 
   // Goodbye DM
   goodbye_dm_enabled?: boolean;
@@ -465,6 +508,12 @@ export interface ServerGreetingSettings {
   goodbye_dm_show_avatar?: boolean;
   goodbye_dm_show_server_icon?: boolean;
   goodbye_dm_show_timestamp?: boolean;
+  goodbye_dm_banner_url?: string | null;
+  goodbye_dm_banner_mode?: 'none' | 'server' | 'custom' | null;
+  goodbye_dm_accent_color?: string | null;
+  goodbye_dm_buttons_json?: string | GreetingButton[] | null;
+  goodbye_dm_author_text?: string | null;
+  goodbye_dm_author_icon_url?: string | null;
 
   created_at?: string | null;
   updated_at?: string | null;
@@ -514,7 +563,7 @@ export interface GreetingRecentActivity {
   user_id: string;
   channel_id: string | null;
   channel_name: string;
-  status: 'delivered' | 'failed';
+  status: 'delivered' | 'failed' | 'DM unavailable';
   error_message?: string | null;
   is_test?: boolean;
 }
@@ -540,8 +589,10 @@ export interface GreetingsResponse {
     server_name: string;
     member_count: number;
     server_icon: string | null;
+    server_banner?: string | null;
     bot_online: boolean;
   };
+  themes?: Record<string, GreetingThemePreset>;
   welcome_channel_status: GreetingChannelTelemetry;
   goodbye_channel_status: GreetingChannelTelemetry;
   rules_channel_status?: {

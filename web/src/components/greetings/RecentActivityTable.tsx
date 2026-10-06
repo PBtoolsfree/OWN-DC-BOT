@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { GreetingRecentActivity } from '../../types';
 import { History, CheckCircle, XCircle, Beaker, Filter } from 'lucide-react';
 
@@ -127,6 +127,10 @@ export const RecentActivityTable: React.FC<RecentActivityTableProps> = ({ activi
                     {item.status === 'delivered' ? (
                       <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold">
                         <CheckCircle className="w-3.5 h-3.5" /> Delivered
+                      </span>
+                    ) : item.status === 'DM unavailable' ? (
+                      <span className="inline-flex items-center gap-1 text-amber-400 font-semibold">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span> DM unavailable
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-rose-400 font-semibold">

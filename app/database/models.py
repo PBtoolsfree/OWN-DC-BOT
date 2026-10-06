@@ -583,6 +583,38 @@ class ServerGreetingSettings(Base):
     goodbye_dm_show_server_icon = Column(Boolean, default=True, nullable=False)
     goodbye_dm_show_timestamp = Column(Boolean, default=True, nullable=False)
 
+    # Premium Onboarding 2.0 - Branding, Banners, Accent Colors, Buttons & Themes
+    welcome_banner_url = Column(String(1024), nullable=True)
+    welcome_banner_mode = Column(String(32), default="none", nullable=False)
+    welcome_accent_color = Column(String(16), default="#5865F2", nullable=False)
+    welcome_buttons_json = Column(Text, nullable=True)
+    welcome_theme = Column(String(32), default="default", nullable=False)
+    welcome_show_inviter = Column(Boolean, default=True, nullable=False)
+    welcome_show_invite_code = Column(Boolean, default=True, nullable=False)
+    welcome_author_text = Column(String(256), nullable=True)
+    welcome_author_icon_url = Column(String(1024), nullable=True)
+
+    goodbye_banner_url = Column(String(1024), nullable=True)
+    goodbye_banner_mode = Column(String(32), default="none", nullable=False)
+    goodbye_accent_color = Column(String(16), default="#ED4245", nullable=False)
+    goodbye_buttons_json = Column(Text, nullable=True)
+    goodbye_theme = Column(String(32), default="default", nullable=False)
+    goodbye_author_text = Column(String(256), nullable=True)
+    goodbye_author_icon_url = Column(String(1024), nullable=True)
+
+    welcome_dm_banner_url = Column(String(1024), nullable=True)
+    welcome_dm_banner_mode = Column(String(32), default="none", nullable=False)
+    welcome_dm_accent_color = Column(String(16), default="#57F287", nullable=False)
+    welcome_dm_buttons_json = Column(Text, nullable=True)
+    welcome_dm_author_text = Column(String(256), nullable=True)
+    welcome_dm_author_icon_url = Column(String(1024), nullable=True)
+
+    goodbye_dm_banner_url = Column(String(1024), nullable=True)
+    goodbye_dm_banner_mode = Column(String(32), default="none", nullable=False)
+    goodbye_dm_accent_color = Column(String(16), default="#FEE75C", nullable=False)
+    goodbye_dm_author_text = Column(String(256), nullable=True)
+    goodbye_dm_author_icon_url = Column(String(1024), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

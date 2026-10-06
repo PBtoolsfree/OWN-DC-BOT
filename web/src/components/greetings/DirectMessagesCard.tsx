@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { ServerGreetingSettings } from '../../types';
 import { Mail, MessageSquare, Play, RotateCcw, ShieldCheck, Tag } from 'lucide-react';
 import { ConfirmModal } from '../ConfirmModal';
@@ -19,6 +19,7 @@ const WELCOME_DM_VARS = [
   '{user_mention}',
   '{server_name}',
   '{member_count}',
+  '{inviter}',
   '{rules_url}',
   '{invite_url}',
 ];

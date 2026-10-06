@@ -63,7 +63,22 @@ async def assign_auto_role(member: discord.Member, role_id: int) -> Tuple[bool, 
         logger.warning("Cannot assign role: %s", msg)
         return False, msg
 
-    if me.top_role <= role:
+    is_higher = False
+    try:
+        bot_pos = getattr(me.top_role, "position", None)
+        role_pos = getattr(role, "position", None)
+        if isinstance(bot_pos, int) and isinstance(role_pos, int):
+            is_higher = bot_pos <= role_pos
+        else:
+            res = me.top_role <= role
+            if not isinstance(res, bool):
+                is_higher = False
+            else:
+                is_higher = res
+    except Exception:
+        is_higher = False
+
+    if is_higher:
         msg = f"Role '{role.name}' is higher than or equal to PB HERO's highest role"
         logger.warning("Role hierarchy violation: %s", msg)
         return False, msg

@@ -88,7 +88,11 @@ from app.greetings.templates import (
     GOODBYE_DM_VARIABLES,
     WELCOME_DM_VARIABLES,
     RULES_VARIABLES,
+    THEME_PRESETS,
     validate_variables,
+    validate_buttons,
+    validate_discord_limits,
+    is_safe_url,
     build_rules_url,
 )
 
@@ -3104,6 +3108,15 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
         "welcome_show_member_count": row.welcome_show_member_count,
         "welcome_show_timestamp": row.welcome_show_timestamp,
         "welcome_use_embed": row.welcome_use_embed,
+        "welcome_banner_url": row.welcome_banner_url,
+        "welcome_banner_mode": getattr(row, "welcome_banner_mode", "none") or "none",
+        "welcome_accent_color": getattr(row, "welcome_accent_color", "#5865F2") or "#5865F2",
+        "welcome_buttons_json": row.welcome_buttons_json,
+        "welcome_theme": getattr(row, "welcome_theme", "default") or "default",
+        "welcome_show_inviter": getattr(row, "welcome_show_inviter", True),
+        "welcome_show_invite_code": getattr(row, "welcome_show_invite_code", True),
+        "welcome_author_text": row.welcome_author_text,
+        "welcome_author_icon_url": row.welcome_author_icon_url,
         "goodbye_enabled": row.goodbye_enabled,
         "goodbye_channel_id": str(row.goodbye_channel_id) if row.goodbye_channel_id else None,
         "goodbye_title": row.goodbye_title,
@@ -3115,6 +3128,13 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
         "goodbye_show_member_count": row.goodbye_show_member_count,
         "goodbye_show_timestamp": row.goodbye_show_timestamp,
         "goodbye_use_embed": row.goodbye_use_embed,
+        "goodbye_banner_url": row.goodbye_banner_url,
+        "goodbye_banner_mode": getattr(row, "goodbye_banner_mode", "none") or "none",
+        "goodbye_accent_color": getattr(row, "goodbye_accent_color", "#ED4245") or "#ED4245",
+        "goodbye_buttons_json": row.goodbye_buttons_json,
+        "goodbye_theme": getattr(row, "goodbye_theme", "default") or "default",
+        "goodbye_author_text": row.goodbye_author_text,
+        "goodbye_author_icon_url": row.goodbye_author_icon_url,
         "allow_mass_mentions": row.allow_mass_mentions,
         "rules_delivery_enabled": row.rules_delivery_enabled,
         "rules_source": row.rules_source,
@@ -3133,6 +3153,12 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
         "welcome_dm_show_avatar": row.welcome_dm_show_avatar,
         "welcome_dm_show_server_icon": row.welcome_dm_show_server_icon,
         "welcome_dm_show_timestamp": row.welcome_dm_show_timestamp,
+        "welcome_dm_banner_url": row.welcome_dm_banner_url,
+        "welcome_dm_banner_mode": getattr(row, "welcome_dm_banner_mode", "none") or "none",
+        "welcome_dm_accent_color": getattr(row, "welcome_dm_accent_color", "#57F287") or "#57F287",
+        "welcome_dm_buttons_json": row.welcome_dm_buttons_json,
+        "welcome_dm_author_text": row.welcome_dm_author_text,
+        "welcome_dm_author_icon_url": row.welcome_dm_author_icon_url,
         "goodbye_dm_enabled": row.goodbye_dm_enabled,
         "goodbye_dm_title": row.goodbye_dm_title,
         "goodbye_dm_description": row.goodbye_dm_description,
@@ -3141,6 +3167,11 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
         "goodbye_dm_show_avatar": row.goodbye_dm_show_avatar,
         "goodbye_dm_show_server_icon": row.goodbye_dm_show_server_icon,
         "goodbye_dm_show_timestamp": row.goodbye_dm_show_timestamp,
+        "goodbye_dm_banner_url": row.goodbye_dm_banner_url,
+        "goodbye_dm_banner_mode": getattr(row, "goodbye_dm_banner_mode", "none") or "none",
+        "goodbye_dm_accent_color": getattr(row, "goodbye_dm_accent_color", "#FEE75C") or "#FEE75C",
+        "goodbye_dm_author_text": row.goodbye_dm_author_text,
+        "goodbye_dm_author_icon_url": row.goodbye_dm_author_icon_url,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -3281,6 +3312,7 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
         "server_name": guild.name if guild else "PB HERO SERVER",
         "member_count": guild.member_count if guild else 0,
         "server_icon": guild.icon.url if (guild and guild.icon) else None,
+        "server_banner": guild.banner.url if (guild and getattr(guild, "banner", None)) else None,
         "bot_online": bool(bot and bot.is_ready()),
     }
 
@@ -3288,6 +3320,7 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
         "settings": _serialize_greeting_settings(config),
         "invite": _serialize_invite_settings(invite_row),
         "server": server_info,
+        "themes": THEME_PRESETS,
         "welcome_channel_status": welcome_status,
         "goodbye_channel_status": goodbye_status,
         "rules_channel_status": rules_status,
@@ -3296,9 +3329,16 @@ async def get_greeting_settings(username: str = Depends(require_auth)):
     }
 
 
+@router.get("/greetings/themes")
+async def list_greeting_themes(username: str = Depends(require_auth)):
+    """List available Premium Onboarding themes."""
+    return {"themes": THEME_PRESETS}
+
+
 @router.put("/greetings")
 async def update_greeting_settings(request: Request, username: str = Depends(require_auth)):
     """Update greeting settings with variable validation and channel check."""
+    import re
     try:
         data = await request.json()
     except Exception:
@@ -3340,7 +3380,56 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
                         detail=f"Unsupported variable in {field}: " + ", ".join(f"{{{v}}}" for v in inv),
                     )
 
-        # Mass mentions safety check
+        # 2. Discord character length limit validation
+        lim_errors = validate_discord_limits(data)
+        if lim_errors:
+            raise HTTPException(status_code=400, detail="; ".join(lim_errors))
+
+        # 3. URL safety validation
+        url_fields = [
+            "welcome_banner_url", "goodbye_banner_url", "welcome_dm_banner_url", "goodbye_dm_banner_url",
+            "welcome_author_icon_url", "goodbye_author_icon_url", "welcome_dm_author_icon_url", "goodbye_dm_author_icon_url"
+        ]
+        for uf in url_fields:
+            if uf in data and data[uf]:
+                u_str = str(data[uf]).strip()
+                if u_str and not is_safe_url(u_str):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid or unsafe URL for {uf}. Only HTTPS and safe Discord URLs are permitted."
+                    )
+
+        # 4. Button validation
+        btn_fields = [
+            "welcome_buttons_json", "goodbye_buttons_json", "welcome_dm_buttons_json", "goodbye_dm_buttons_json"
+        ]
+        for bf in btn_fields:
+            if bf in data and data[bf] is not None:
+                valid_btns, btn_err, _ = validate_buttons(data[bf])
+                if not valid_btns:
+                    raise HTTPException(status_code=400, detail=f"Invalid buttons in {bf}: {btn_err}")
+
+        # 5. Accent color validation
+        hex_re = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+        color_fields = [
+            "welcome_accent_color", "goodbye_accent_color", "welcome_dm_accent_color", "goodbye_dm_accent_color"
+        ]
+        for cf in color_fields:
+            if cf in data and data[cf]:
+                c_val = str(data[cf]).strip()
+                if not hex_re.match(c_val):
+                    raise HTTPException(status_code=400, detail=f"Invalid hex color '{c_val}' in {cf}. Must be #RGB or #RRGGBB.")
+
+        # 6. Banner mode and theme validation
+        for mf in ["welcome_banner_mode", "goodbye_banner_mode", "welcome_dm_banner_mode", "goodbye_dm_banner_mode"]:
+            if mf in data and data[mf] not in ("none", "server", "custom", None):
+                raise HTTPException(status_code=400, detail=f"Invalid banner mode for {mf}. Must be 'none', 'server', or 'custom'.")
+
+        for tf in ["welcome_theme", "goodbye_theme"]:
+            if tf in data and data[tf] not in THEME_PRESETS and data[tf] is not None:
+                raise HTTPException(status_code=400, detail=f"Invalid theme preset '{data[tf]}' for {tf}.")
+
+        # 7. Mass mentions safety check
         allow_mass = data.get("allow_mass_mentions", existing.allow_mass_mentions)
         if not allow_mass:
             for field, _ in val_checks:
@@ -3356,21 +3445,33 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
             "welcome_enabled", "welcome_channel_id", "welcome_title", "welcome_description",
             "welcome_footer", "welcome_mention_user", "welcome_show_avatar", "welcome_show_server_icon",
             "welcome_show_member_count", "welcome_show_timestamp", "welcome_use_embed",
+            "welcome_banner_url", "welcome_banner_mode", "welcome_accent_color", "welcome_buttons_json",
+            "welcome_theme", "welcome_show_inviter", "welcome_show_invite_code", "welcome_author_text", "welcome_author_icon_url",
             "goodbye_enabled", "goodbye_channel_id", "goodbye_title", "goodbye_description",
             "goodbye_footer", "goodbye_mention_user", "goodbye_show_avatar", "goodbye_show_server_icon",
             "goodbye_show_member_count", "goodbye_show_timestamp", "goodbye_use_embed",
+            "goodbye_banner_url", "goodbye_banner_mode", "goodbye_accent_color", "goodbye_buttons_json",
+            "goodbye_theme", "goodbye_author_text", "goodbye_author_icon_url",
             "allow_mass_mentions", "rules_delivery_enabled", "rules_source", "rules_channel_id",
             "rules_title", "rules_description", "rules_footer", "rules_button_text",
             "auto_role_enabled", "auto_role_id",
             "welcome_dm_enabled", "welcome_dm_title", "welcome_dm_description", "welcome_dm_footer",
             "welcome_dm_use_embed", "welcome_dm_show_avatar", "welcome_dm_show_server_icon", "welcome_dm_show_timestamp",
+            "welcome_dm_banner_url", "welcome_dm_banner_mode", "welcome_dm_accent_color", "welcome_dm_buttons_json",
+            "welcome_dm_author_text", "welcome_dm_author_icon_url",
             "goodbye_dm_enabled", "goodbye_dm_title", "goodbye_dm_description", "goodbye_dm_footer",
-            "goodbye_dm_use_embed", "goodbye_dm_show_avatar", "goodbye_dm_show_server_icon", "goodbye_dm_show_timestamp"
+            "goodbye_dm_use_embed", "goodbye_dm_show_avatar", "goodbye_dm_show_server_icon", "goodbye_dm_show_timestamp",
+            "goodbye_dm_banner_url", "goodbye_dm_banner_mode", "goodbye_dm_accent_color", "goodbye_dm_buttons_json",
+            "goodbye_dm_author_text", "goodbye_dm_author_icon_url",
         ):
             if key in data:
                 val = data[key]
                 if key in ("welcome_channel_id", "goodbye_channel_id", "rules_channel_id", "auto_role_id"):
                     val = int(val) if val else None
+                elif key in ("welcome_buttons_json", "goodbye_buttons_json", "welcome_dm_buttons_json", "goodbye_dm_buttons_json"):
+                    if val is not None and not isinstance(val, str):
+                        import json
+                        val = json.dumps(val)
                 updates[key] = val
 
         updated = await ServerGreetingSettingsRepo.update(session, guild_id, **updates)

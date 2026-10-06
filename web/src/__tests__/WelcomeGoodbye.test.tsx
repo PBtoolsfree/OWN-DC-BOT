@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import WelcomeGoodbye from '../pages/WelcomeGoodbye';
 import { greetingsApi } from '../api/greetings';
@@ -414,6 +414,86 @@ describe('Welcome & Goodbye Page - Part 21 Required 16 UI Tests', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Database error occurred');
     });
+  });
+
+  it('17. Clicking variable pill inserts variable into focused field', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    fireEvent.focus(titleInput);
+
+    const inviterBtn = screen.getByRole('button', { name: '{inviter}' });
+    fireEvent.click(inviterBtn);
+
+    expect(screen.getByDisplayValue('👋 Welcome to {server_name}!{inviter}')).toBeInTheDocument();
+  });
+
+  it('18. Theme presets render and applying a preset opens confirmation modal', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    expect(screen.getByText('Premium Theme Presets')).toBeInTheDocument();
+    const gamingPresetBtn = screen.getByRole('button', { name: /Gaming/i });
+    fireEvent.click(gamingPresetBtn);
+
+    expect(await screen.findByText(/Apply "Gaming & Esports" Preset\?/i)).toBeInTheDocument();
+    const confirmBtn = screen.getByRole('button', { name: /Apply Preset/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('🎮 WELCOME TO {server_name}')).toBeInTheDocument();
+    });
+  });
+
+  it('19. Interactive welcome buttons can be configured and toggled', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    expect(screen.getByText('Interactive Welcome Buttons (Action Row)')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Read Rules')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Explore Server')).toBeInTheDocument();
+
+    const rulesInput = screen.getByDisplayValue('Read Rules');
+    fireEvent.change(rulesInput, { target: { value: 'Server Guidelines' } });
+    expect(screen.getByDisplayValue('Server Guidelines')).toBeInTheDocument();
+  });
+
+  it('20. Banner display mode switches to custom and displays URL input', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    expect(screen.getByText('Server Branding, Accent & Banner')).toBeInTheDocument();
+    const bannerSelect = screen.getByDisplayValue('No Banner Image');
+    fireEvent.change(bannerSelect, { target: { value: 'custom' } });
+
+    expect(await screen.findByPlaceholderText('https://example.com/welcome-banner.gif')).toBeInTheDocument();
+  });
+
+  it('21. Character limit validation rejects oversized title with toast warning', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    const oversizedTitle = 'A'.repeat(300);
+    fireEvent.change(titleInput, { target: { value: oversizedTitle } });
+
+    const saveBtn = screen.getByRole('button', { name: /Save Welcome/i });
+    fireEvent.click(saveBtn);
+
+    expect(toast.error).toHaveBeenCalledWith('Title exceeds maximum limit of 256 characters.');
+    expect(greetingsApi.updateGreetings).not.toHaveBeenCalled();
+  });
+
+  it('22. Server author branding updates and reflects in discord preview', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const authorInput = screen.getByPlaceholderText('PB HERO SERVER');
+    fireEvent.change(authorInput, { target: { value: 'Official PB Gaming Hub' } });
+
+    expect(screen.getByDisplayValue('Official PB Gaming Hub')).toBeInTheDocument();
+    expect(screen.getByText('Official PB Gaming Hub')).toBeInTheDocument();
   });
 });
 

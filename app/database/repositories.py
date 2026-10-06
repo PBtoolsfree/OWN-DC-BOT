@@ -1703,27 +1703,68 @@ class WarningEscalationRepo:
 # ??? Server Greeting Settings ??????????????????????????????????????????????????
 
 class ServerGreetingSettingsRepo:
-    """Repository for server welcome and goodbye automation settings."""
+    """Repository for server welcome and goodbye automation settings (Premium Onboarding 2.0)."""
 
-    DEFAULT_WELCOME_TITLE = "?? Welcome to {server_name}!"
-    DEFAULT_WELCOME_DESCRIPTION = "Welcome {user_mention} to **{server_name}**! ??\n\nYou are member **#{member_count}**.\n\nPlease check the rules and enjoy your stay!"
+    DEFAULT_WELCOME_TITLE = "✨ WELCOME TO {server_name}"
+    DEFAULT_WELCOME_DESCRIPTION = (
+        "Hey {user_mention} 👋\n\n"
+        "We're glad to have you here!\n\n"
+        "👥 You are member #{member_count}\n\n"
+        "🤝 Invited by: {inviter}\n"
+        "🔗 Invite: {invite_code}\n\n"
+        "📜 Please read the server rules.\n"
+        "🎮 Explore the community and enjoy your stay."
+    )
     DEFAULT_WELCOME_FOOTER = "PB HERO SERVER"
 
-    DEFAULT_GOODBYE_TITLE = "?? Goodbye {display_name}"
-    DEFAULT_GOODBYE_DESCRIPTION = "**{display_name}** has left **{server_name}**.\n\nWe had **{member_count} members** before the departure."
+    DEFAULT_GOODBYE_TITLE = "💙 {display_name} has left {server_name}"
+    DEFAULT_GOODBYE_DESCRIPTION = (
+        "We hope you enjoyed your time with us.\n\n"
+        "👥 We are now {member_count} members.\n\n"
+        "Take care and you're always welcome back."
+    )
     DEFAULT_GOODBYE_FOOTER = "PB HERO SERVER"
 
-    DEFAULT_WELCOME_DM_TITLE = "?? Welcome to {server_name}!"
-    DEFAULT_WELCOME_DM_DESCRIPTION = "Hi {display_name}! ??\n\nThanks for joining our Discord server.\n\n?? Please read the server rules:\n{rules_url}\n\n?? Server Invite:\n{invite_url}\n\nEnjoy the community!"
+    DEFAULT_WELCOME_DM_TITLE = "👋 Welcome to {server_name}, {display_name}!"
+    DEFAULT_WELCOME_DM_DESCRIPTION = (
+        "Thanks for joining our Discord community ❤️\n\n"
+        "👥 You are member #{member_count}\n\n"
+        "🤝 Invited by: {inviter}\n\n"
+        "Before getting started:\n\n"
+        "📜 Rules:\n"
+        "{rules_url}\n\n"
+        "🔗 Permanent Server Invite:\n"
+        "{invite_url}\n\n"
+        "Enjoy your stay and have fun!"
+    )
     DEFAULT_WELCOME_DM_FOOTER = "PB HERO SERVER"
 
-    DEFAULT_GOODBYE_DM_TITLE = "?? Goodbye {display_name}"
-    DEFAULT_GOODBYE_DM_DESCRIPTION = "You have left {server_name}.\n\nWe\'re sorry to see you go. ??\n\nIf you ever want to come back:\n?? Rejoin Server:\n{invite_url}\n\nTake care!"
+    DEFAULT_GOODBYE_DM_TITLE = "💙 GOODBYE, {display_name}"
+    DEFAULT_GOODBYE_DM_DESCRIPTION = (
+        "You have left {server_name}.\n\n"
+        "We appreciate the time you spent with us.\n\n"
+        "🔗 Rejoin Server:\n"
+        "{invite_url}\n\n"
+        "You're always welcome back. ❤️"
+    )
     DEFAULT_GOODBYE_DM_FOOTER = "PB HERO SERVER"
 
-    DEFAULT_RULES_TITLE = "?? {server_name} RULES"
-    DEFAULT_RULES_DESCRIPTION = "1. Respect all members.\n2. No spam or unsolicited promotions.\n3. No offensive or harmful content.\n4. Follow channel guidelines and moderator instructions.\n\nPlease read the full rules before chatting!"
+    DEFAULT_RULES_TITLE = "📜 {server_name} RULES"
+    DEFAULT_RULES_DESCRIPTION = (
+        "1. Respect all members.\n"
+        "2. No spam or unsolicited promotions.\n"
+        "3. No offensive or harmful content.\n"
+        "4. Follow channel guidelines and moderator instructions.\n\n"
+        "Please read the full rules before chatting!"
+    )
     DEFAULT_RULES_FOOTER = "PB HERO SERVER"
+
+    DEFAULT_BUTTONS_JSON = json.dumps([
+        {"id": "rules", "label": "Read Rules", "emoji": "📜", "url": "{rules_url}", "enabled": True},
+        {"id": "explore", "label": "Explore Server", "emoji": "🎮", "url": "{invite_url}", "enabled": False},
+        {"id": "invite", "label": "Server Invite", "emoji": "🔗", "url": "{invite_url}", "enabled": True},
+        {"id": "support", "label": "Support", "emoji": "🆘", "url": "https://discord.gg/pbhero", "enabled": False},
+    ])
 
     @staticmethod
     async def get(session: AsyncSession, guild_id: int) -> Optional[ServerGreetingSettings]:
@@ -1749,6 +1790,15 @@ class ServerGreetingSettingsRepo:
                 welcome_show_member_count=True,
                 welcome_show_timestamp=True,
                 welcome_use_embed=True,
+                welcome_banner_url=None,
+                welcome_banner_mode="none",
+                welcome_accent_color="#5865F2",
+                welcome_buttons_json=ServerGreetingSettingsRepo.DEFAULT_BUTTONS_JSON,
+                welcome_theme="default",
+                welcome_show_inviter=True,
+                welcome_show_invite_code=True,
+                welcome_author_text=None,
+                welcome_author_icon_url=None,
                 goodbye_enabled=False,
                 goodbye_channel_id=None,
                 goodbye_title=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_TITLE,
@@ -1760,6 +1810,13 @@ class ServerGreetingSettingsRepo:
                 goodbye_show_member_count=True,
                 goodbye_show_timestamp=True,
                 goodbye_use_embed=True,
+                goodbye_banner_url=None,
+                goodbye_banner_mode="none",
+                goodbye_accent_color="#ED4245",
+                goodbye_buttons_json=None,
+                goodbye_theme="default",
+                goodbye_author_text=None,
+                goodbye_author_icon_url=None,
                 allow_mass_mentions=False,
                 rules_delivery_enabled=False,
                 rules_source="rules_channel",
@@ -1778,6 +1835,12 @@ class ServerGreetingSettingsRepo:
                 welcome_dm_show_avatar=True,
                 welcome_dm_show_server_icon=True,
                 welcome_dm_show_timestamp=True,
+                welcome_dm_banner_url=None,
+                welcome_dm_banner_mode="none",
+                welcome_dm_accent_color="#57F287",
+                welcome_dm_buttons_json=None,
+                welcome_dm_author_text=None,
+                welcome_dm_author_icon_url=None,
                 goodbye_dm_enabled=False,
                 goodbye_dm_title=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_TITLE,
                 goodbye_dm_description=ServerGreetingSettingsRepo.DEFAULT_GOODBYE_DM_DESCRIPTION,
@@ -1786,6 +1849,11 @@ class ServerGreetingSettingsRepo:
                 goodbye_dm_show_avatar=True,
                 goodbye_dm_show_server_icon=True,
                 goodbye_dm_show_timestamp=True,
+                goodbye_dm_banner_url=None,
+                goodbye_dm_banner_mode="none",
+                goodbye_dm_accent_color="#FEE75C",
+                goodbye_dm_author_text=None,
+                goodbye_dm_author_icon_url=None,
             )
             session.add(settings_row)
             await session.flush()
@@ -1813,6 +1881,15 @@ class ServerGreetingSettingsRepo:
         settings_row.welcome_show_member_count = True
         settings_row.welcome_show_timestamp = True
         settings_row.welcome_use_embed = True
+        settings_row.welcome_banner_url = None
+        settings_row.welcome_banner_mode = "none"
+        settings_row.welcome_accent_color = "#5865F2"
+        settings_row.welcome_buttons_json = ServerGreetingSettingsRepo.DEFAULT_BUTTONS_JSON
+        settings_row.welcome_theme = "default"
+        settings_row.welcome_show_inviter = True
+        settings_row.welcome_show_invite_code = True
+        settings_row.welcome_author_text = None
+        settings_row.welcome_author_icon_url = None
         settings_row.updated_at = datetime.utcnow()
         await session.flush()
         return settings_row
@@ -1829,6 +1906,13 @@ class ServerGreetingSettingsRepo:
         settings_row.goodbye_show_member_count = True
         settings_row.goodbye_show_timestamp = True
         settings_row.goodbye_use_embed = True
+        settings_row.goodbye_banner_url = None
+        settings_row.goodbye_banner_mode = "none"
+        settings_row.goodbye_accent_color = "#ED4245"
+        settings_row.goodbye_buttons_json = None
+        settings_row.goodbye_theme = "default"
+        settings_row.goodbye_author_text = None
+        settings_row.goodbye_author_icon_url = None
         settings_row.updated_at = datetime.utcnow()
         await session.flush()
         return settings_row
@@ -1843,6 +1927,12 @@ class ServerGreetingSettingsRepo:
         settings_row.welcome_dm_show_avatar = True
         settings_row.welcome_dm_show_server_icon = True
         settings_row.welcome_dm_show_timestamp = True
+        settings_row.welcome_dm_banner_url = None
+        settings_row.welcome_dm_banner_mode = "none"
+        settings_row.welcome_dm_accent_color = "#57F287"
+        settings_row.welcome_dm_buttons_json = None
+        settings_row.welcome_dm_author_text = None
+        settings_row.welcome_dm_author_icon_url = None
         settings_row.updated_at = datetime.utcnow()
         await session.flush()
         return settings_row
@@ -1857,6 +1947,11 @@ class ServerGreetingSettingsRepo:
         settings_row.goodbye_dm_show_avatar = True
         settings_row.goodbye_dm_show_server_icon = True
         settings_row.goodbye_dm_show_timestamp = True
+        settings_row.goodbye_dm_banner_url = None
+        settings_row.goodbye_dm_banner_mode = "none"
+        settings_row.goodbye_dm_accent_color = "#FEE75C"
+        settings_row.goodbye_dm_author_text = None
+        settings_row.goodbye_dm_author_icon_url = None
         settings_row.updated_at = datetime.utcnow()
         await session.flush()
         return settings_row
@@ -2184,6 +2279,13 @@ class InviteJoinRepo:
         session.add(join)
         await session.flush()
         return join
+
+    @staticmethod
+    async def count_by_guild(session: AsyncSession, guild_id: int) -> int:
+        """Count total invite joins recorded for a guild."""
+        stmt = select(func.count(InviteJoin.id)).where(InviteJoin.guild_id == guild_id)
+        res = await session.execute(stmt)
+        return res.scalar_one() or 0
 
     @staticmethod
     async def record_leave(session: AsyncSession, guild_id: int, member_id: int) -> None:

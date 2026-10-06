@@ -1,4 +1,4 @@
-﻿"""
+"""
 Comprehensive test suite for Server Welcome & Goodbye Automation.
 
 Tests all 22 required backend test specifications:
@@ -39,15 +39,25 @@ from app.dashboard.app import create_dashboard_app
 from app.dashboard.auth import hash_password
 from app.database.engine import get_engine, get_session_direct, init_engine
 from app.database.models import Base, ServerGreetingSettings
-from app.database.repositories import AdminUserRepo, ServerGreetingSettingsRepo
+from app.database.repositories import (
+    AdminUserRepo,
+    AuditLogRepo,
+    InviteJoinRepo,
+    ServerGreetingSettingsRepo,
+    ServerInviteSettingsRepo,
+)
 from app.greetings.service import GreetingService, get_greeting_service
 from app.greetings.templates import (
     DEFAULT_GOODBYE_TITLE,
     DEFAULT_WELCOME_TITLE,
     GOODBYE_VARIABLES,
     WELCOME_VARIABLES,
+    THEME_PRESETS,
     render_template,
     validate_variables,
+    validate_buttons,
+    validate_discord_limits,
+    is_safe_url,
 )
 
 GUILD_ID = 123456789012345678
@@ -141,7 +151,16 @@ def make_mock_channel(channel_id=1122334455, name="welcome", guild=None, can_sen
     return ch
 
 
-# ??? Test Cases ???????????????????????????????????????????????????????????????
+def make_mock_bot():
+    mock_bot = MagicMock()
+    mock_bot.is_ready.return_value = True
+    guild = make_mock_guild()
+    mock_bot.guild = guild
+    mock_bot.get_guild.return_value = guild
+    return mock_bot
+
+
+# ─── Test Cases ───────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_1_greeting_settings_create():
@@ -646,6 +665,559 @@ async def test_23_reset_systems_individually(app, auth_cookies):
         s = res.json()["settings"]
         assert s["welcome_title"] == DEFAULT_WELCOME_TITLE
         assert s["goodbye_title"] == "Custom Goodbye"  # Untouched!
+
+
+# ==============================================================================
+# Premium Onboarding 2.0 Specification Tests (1 to 22)
+# ==============================================================================
+
+@pytest.mark.asyncio
+async def test_backend_01_premium_welcome_rendering():
+    """1. Premium welcome rendering: embeds, accent color, banner, author, and buttons."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=11111, name="GamerHero")
+
+    session = await get_session_direct()
+    try:
+        config = await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_use_embed=True,
+            welcome_accent_color="#FF5733",
+            welcome_banner_url="https://example.com/banner.png",
+            welcome_banner_mode="custom",
+            welcome_author_text="Welcome to PB Hero",
+            welcome_author_icon_url="https://example.com/icon.png",
+            welcome_buttons_json='[{"id":"rules","label":"Read Rules","url":"https://discord.com/channels/1/2","enabled":true}]',
+        )
+        content, embed, allowed = service.render_welcome_message(
+            config,
+            member,
+            attribution={"inviter_name": "ProInviter", "invite_code": "HERO99"},
+        )
+        assert embed is not None
+        assert embed.color.value == 0xFF5733
+        assert embed.image.url == "https://example.com/banner.png"
+        assert embed.author.name == "Welcome to PB Hero"
+        assert embed.author.icon_url == "https://example.com/icon.png"
+
+        view = service.build_buttons_view(config.welcome_buttons_json, {"rules_url": "https://discord.com/channels/1/2"})
+        assert view is not None
+        assert len(view.children) == 1
+        assert view.children[0].label == "Read Rules"
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_backend_02_premium_goodbye_rendering():
+    """2. Premium goodbye rendering: embed, custom accent color, footer, member count."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=22222, name="DepartedMember")
+
+    session = await get_session_direct()
+    try:
+        config = await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_use_embed=True,
+            goodbye_accent_color="#ED4245",
+            goodbye_footer="PB HERO SERVER",
+            goodbye_show_member_count=True,
+        )
+        content, embed, allowed = service.render_goodbye_message(config, member)
+        assert embed is not None
+        assert embed.color.value == 0xED4245
+        assert "DepartedMember" in embed.description
+        assert embed.footer.text == "PB HERO SERVER"
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_backend_03_welcome_dm_rendering():
+    """3. Welcome DM rendering: rich embed, dynamic rules & invite variables, buttons."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=33333, name="Newcomer")
+
+    session = await get_session_direct()
+    try:
+        config = await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_dm_use_embed=True,
+            welcome_dm_title="👋 Welcome to {server_name}, {display_name}!",
+            welcome_dm_description="Rules: {rules_url}\nInvite: {invite_url}",
+            welcome_dm_accent_color="#57F287",
+        )
+        links = {"rules_url": "https://discord.com/channels/1/2", "invite_url": "https://discord.gg/pbhero"}
+        content, embed, allowed = service.render_welcome_dm(config, member, links)
+        assert embed is not None
+        assert "Newcomer" in embed.title
+        assert "https://discord.com/channels/1/2" in embed.description
+        assert "https://discord.gg/pbhero" in embed.description
+        assert embed.color.value == 0x57F287
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_backend_04_goodbye_dm_rendering():
+    """4. Goodbye DM rendering: rejoin invite URL, no private moderation data."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=44444, name="PastUser")
+
+    session = await get_session_direct()
+    try:
+        config = await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_dm_use_embed=True,
+            goodbye_dm_description="Rejoin server: {invite_url}",
+        )
+        links = {"invite_url": "https://discord.gg/rejoin"}
+        content, embed, allowed = service.render_goodbye_dm(config, member, links)
+        assert embed is not None
+        assert "https://discord.gg/rejoin" in embed.description
+        # Verify no moderation fields or private internal data leaked
+        assert "ban" not in embed.description.lower()
+        assert "kick" not in embed.description.lower()
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_backend_05_invite_attribution_rendering():
+    """5. Invite attribution rendering: real inviter, mention, code, total_invites, rank."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=55555, name="ReferredHero")
+
+    attr = {
+        "inviter_name": "GuildLeader",
+        "inviter_id": "777888",
+        "inviter_mention": "<@777888>",
+        "invite_code": "PROVIP",
+        "invite_channel": "#welcome",
+        "total_invites": 42,
+        "rank": 3,
+    }
+    ctx = service._build_welcome_context(None, member, attribution=attr)
+    assert ctx["inviter"] == "GuildLeader"
+    assert ctx["inviter_mention"] == "<@777888>"
+    assert ctx["inviter_id"] == "777888"
+    assert ctx["invite_code"] == "PROVIP"
+    assert ctx["total_invites"] == "42"
+    assert ctx["rank"] == "3"
+
+
+@pytest.mark.asyncio
+async def test_backend_06_unknown_inviter():
+    """6. Unknown inviter: display Unknown without inventing or guessing."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=66666, name="MysteryUser")
+
+    # None attribution
+    ctx = service._build_welcome_context(None, member, attribution=None)
+    assert ctx["inviter"] == "Unknown"
+    assert ctx["inviter_mention"] == "Unknown"
+    assert ctx["invite_code"] == "Unknown"
+    assert ctx["total_invites"] == "0"
+    assert ctx["rank"] == "N/A"
+
+    # Empty dict
+    ctx_empty = service._build_welcome_context(None, member, attribution={})
+    assert ctx_empty["inviter"] == "Unknown"
+
+
+@pytest.mark.asyncio
+async def test_backend_07_vanity_inviter():
+    """7. Vanity inviter: display 'Server Vanity URL'."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=77777, name="VanityUser")
+
+    attr = {"is_vanity": True, "inviter_name": "Server Vanity URL", "invite_code": "pbhero"}
+    ctx = service._build_welcome_context(None, member, attribution=attr)
+    assert ctx["inviter"] == "Server Vanity URL"
+    assert ctx["invite_code"] == "pbhero"
+
+
+@pytest.mark.asyncio
+async def test_backend_08_member_count():
+    """8. Member count: accurate real guild member count."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    guild.member_count = 2048
+    member = make_mock_member(guild=guild, user_id=88888, name="CountMember")
+
+    ctx = service._build_welcome_context(None, member, attribution=None)
+    assert ctx["member_count"] == "2048"
+
+
+@pytest.mark.asyncio
+async def test_backend_09_variable_substitution():
+    """9. Variable substitution: all supported variables populate correctly."""
+    template = (
+        "{username}|{display_name}|{user_mention}|{user_id}|"
+        "{server_name}|{server_id}|{member_count}|{account_created}|"
+        "{joined_at}|{inviter}|{inviter_mention}|{inviter_id}|"
+        "{invite_code}|{invite_channel}|{rules_url}|{invite_url}"
+    )
+    context = {
+        "username": "tester",
+        "display_name": "Tester",
+        "user_mention": "<@123>",
+        "user_id": "123",
+        "server_name": "Hero Guild",
+        "server_id": "456",
+        "member_count": "50",
+        "account_created": "2024-01-01",
+        "joined_at": "2024-02-01",
+        "inviter": "Boss",
+        "inviter_mention": "<@789>",
+        "inviter_id": "789",
+        "invite_code": "CODE",
+        "invite_channel": "#lounge",
+        "rules_url": "https://discord.com/rules",
+        "invite_url": "https://discord.gg/code",
+    }
+    rendered = render_template(template, context)
+    assert "{" not in rendered
+    assert "}" not in rendered
+    assert "tester|Tester|<@123>|123|Hero Guild" in rendered
+
+
+def test_backend_10_button_validation():
+    """10. Button validation: limits, valid fields, action row constraints."""
+    # Valid buttons
+    valid_btns = [
+        {"id": "btn1", "label": "Read Rules", "url": "https://discord.com/rules", "enabled": True},
+        {"id": "btn2", "label": "Explore", "emoji": "🎮", "url": "https://discord.gg/server", "enabled": True},
+    ]
+    ok, err, cleaned = validate_buttons(valid_btns)
+    assert ok is True
+    assert err is None
+    assert len(cleaned) == 2
+
+    # Reject > 5 buttons
+    too_many = [{"id": f"b{i}", "label": f"L{i}", "url": "https://example.com"} for i in range(6)]
+    ok, err, _ = validate_buttons(too_many)
+    assert ok is False
+    assert "maximum of 5 buttons" in err
+
+    # Reject button without label and emoji
+    no_content = [{"id": "b1", "url": "https://example.com"}]
+    ok, err, _ = validate_buttons(no_content)
+    assert ok is False
+    assert "must have a label or emoji" in err
+
+    # Reject invalid JSON
+    ok, err, _ = validate_buttons("invalid_json{[")
+    assert ok is False
+
+
+def test_backend_11_https_url_validation():
+    """11. HTTPS URL validation: allow only HTTPS and safe placeholders."""
+    assert is_safe_url("https://discord.com/channels/123/456") is True
+    assert is_safe_url("https://example.com/image.png") is True
+    assert is_safe_url("{rules_url}") is True
+    assert is_safe_url("{invite_url}") is True
+
+    # Unsafe schemes
+    assert is_safe_url("javascript:alert(1)") is False
+    assert is_safe_url("data:text/html;base64,PHNjcmlwdD4=") is False
+    assert is_safe_url("file:///etc/passwd") is False
+    assert is_safe_url("vbscript:msgbox(1)") is False
+    assert is_safe_url("http://insecure.example.com") is False
+    assert is_safe_url("") is False
+    assert is_safe_url(None) is False
+
+
+@pytest.mark.asyncio
+async def test_backend_12_image_fallback():
+    """12. Image fallback: broken image falls back to embed without image."""
+    service = GreetingService()
+    mock_channel = AsyncMock()
+
+    # First send with image fails, fallback send without image succeeds
+    call_count = 0
+    async def mock_send(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        embed = kwargs.get("embed")
+        if call_count == 1 and embed and getattr(embed, "image", None) and getattr(embed.image, "url", None):
+            raise discord.HTTPException(MagicMock(status=400), "Invalid image asset")
+        return MagicMock(spec=discord.Message)
+
+    mock_channel.send = AsyncMock(side_effect=mock_send)
+
+    embed = discord.Embed(title="Welcome!", description="Hello")
+    embed.set_image(url="https://broken.invalid/img.png")
+
+    sent = await service.send_greeting(mock_channel, content="Hey", embed=embed)
+    assert call_count == 2  # Attempted with image, then succeeded on fallback without image
+
+
+@pytest.mark.asyncio
+async def test_backend_13_dm_unavailable():
+    """13. DM unavailable: record status and do not interrupt leave or join."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=12345, name="DMsClosedUser")
+    member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "Cannot send messages to user"))
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session, GUILD_ID, welcome_enabled=False, welcome_dm_enabled=True
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    # handle_member_join catches Forbidden safely and records DM unavailable
+    await service.handle_member_join(member)
+
+    activity = service.get_recent_activity(5)
+    dm_events = [a for a in activity if a.get("status") == "DM unavailable"]
+    assert len(dm_events) > 0
+
+
+@pytest.mark.asyncio
+async def test_backend_14_public_welcome_failure_isolation():
+    """14. Public welcome failure isolation: does not prevent Auto Role."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    member = make_mock_member(guild=guild, user_id=99901)
+    member.add_roles = AsyncMock()
+
+    role = MagicMock(spec=discord.Role)
+    role.id = 888111
+    guild.get_role.return_value = role
+
+    with patch.object(service, "send_greeting", AsyncMock(side_effect=RuntimeError("Discord API Error"))):
+        session = await get_session_direct()
+        try:
+            await ServerGreetingSettingsRepo.update(
+                session,
+                GUILD_ID,
+                welcome_enabled=True,
+                welcome_channel_id=123,
+                welcome_dm_enabled=False,
+                auto_role_enabled=True,
+                auto_role_id=888111,
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        await service.handle_member_join(member)
+        member.add_roles.assert_awaited_once_with(role, reason="Auto Role on Member Join")
+
+
+@pytest.mark.asyncio
+async def test_backend_15_goodbye_failure_isolation():
+    """15. Goodbye failure isolation: DM failure does not interrupt leave event."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    member = make_mock_member(guild=guild, user_id=99902)
+    member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "DMs closed"))
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    # Should not raise exception, public goodbye still delivers
+    await service.handle_member_leave(member)
+    assert channel.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_backend_16_auto_role_independence():
+    """16. Auto-role independence: succeeds even if greetings are disabled."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=99903)
+    member.add_roles = AsyncMock()
+
+    role = MagicMock(spec=discord.Role)
+    role.id = 777222
+    guild.get_role.return_value = role
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_enabled=False,
+            welcome_dm_enabled=False,
+            auto_role_enabled=True,
+            auto_role_id=777222,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    await service.handle_member_join(member)
+    member.add_roles.assert_awaited_once_with(role, reason="Auto Role on Member Join")
+
+
+@pytest.mark.asyncio
+async def test_backend_17_test_mode_does_not_modify_db():
+    """17. Test mode does not modify DB: no fake invite joins, no altered member counts."""
+    mock_bot = make_mock_bot()
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=111, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.guild = guild
+    service = GreetingService(bot=mock_bot)
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(session, GUILD_ID, welcome_channel_id=111)
+        await session.commit()
+        initial_joins = await InviteJoinRepo.count_by_guild(session, GUILD_ID)
+    finally:
+        await session.close()
+
+    result = await service.send_test_message("welcome")
+    assert result["status"] == "ok"
+
+    session = await get_session_direct()
+    try:
+        after_joins = await InviteJoinRepo.count_by_guild(session, GUILD_ID)
+        assert after_joins == initial_joins  # Untouched!
+    finally:
+        await session.close()
+
+
+def test_backend_18_theme_presets():
+    """18. Theme presets: verify default, gaming, minimal, luxury, neon exist and have required keys."""
+    expected_themes = ["default", "gaming", "minimal", "luxury", "neon"]
+    for theme_id in expected_themes:
+        assert theme_id in THEME_PRESETS
+        preset = THEME_PRESETS[theme_id]
+        assert "welcome_title" in preset
+        assert "welcome_description" in preset
+        assert "welcome_accent_color" in preset
+        assert "goodbye_title" in preset
+        assert "goodbye_description" in preset
+
+
+@pytest.mark.asyncio
+async def test_backend_19_configuration_persistence(app, auth_cookies):
+    """19. Configuration persistence: all Premium Onboarding 2.0 fields persist cleanly."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        update_data = {
+            "welcome_theme": "gaming",
+            "welcome_accent_color": "#10B981",
+            "welcome_banner_mode": "custom",
+            "welcome_banner_url": "https://example.com/banner.png",
+            "welcome_author_text": "PB Hero Gaming",
+            "welcome_show_inviter": True,
+            "welcome_show_invite_code": True,
+            "welcome_buttons_json": [
+                {"id": "rules", "label": "Rules", "url": "https://example.com/rules", "enabled": True}
+            ],
+            "goodbye_theme": "luxury",
+            "goodbye_accent_color": "#F59E0B",
+        }
+        res = await client.put("/api/v1/greetings", cookies=auth_cookies, json=update_data)
+        assert res.status_code == 200
+
+        # Retrieve and verify persistence
+        get_res = await client.get("/api/v1/greetings", cookies=auth_cookies)
+        assert get_res.status_code == 200
+        settings = get_res.json()["settings"]
+        assert settings["welcome_theme"] == "gaming"
+        assert settings["welcome_accent_color"] == "#10B981"
+        assert settings["welcome_banner_mode"] == "custom"
+        assert settings["welcome_banner_url"] == "https://example.com/banner.png"
+        assert settings["welcome_author_text"] == "PB Hero Gaming"
+        assert settings["goodbye_theme"] == "luxury"
+        assert settings["goodbye_accent_color"] == "#F59E0B"
+
+
+@pytest.mark.asyncio
+async def test_backend_20_backward_compatibility():
+    """20. Backward compatibility: existing legacy templates and variables remain valid."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=99904, name="LegacyUser")
+
+    legacy_template = "Welcome {username} to {server_name}! You are member #{member_count}."
+    context = service._build_welcome_context(None, member, attribution=None)
+    rendered = render_template(legacy_template, context)
+    assert "Welcome LegacyUser to PB HERO SERVER! You are member #142." in rendered
+
+
+@pytest.mark.asyncio
+async def test_backend_21_invite_tracking_integration():
+    """21. Invite tracking integration: join attribution integrates seamlessly."""
+    service = GreetingService()
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=99905, name="TrackedJoin")
+
+    attr = {
+        "invite_code": "TRACK123",
+        "inviter_name": "TrackerMaster",
+        "inviter_id": "999888",
+        "total_invites": 15,
+        "rank": 2,
+    }
+    context = service._build_welcome_context(None, member, attribution=attr)
+    assert context["invite_code"] == "TRACK123"
+    assert context["inviter"] == "TrackerMaster"
+    assert context["total_invites"] == "15"
+    assert context["rank"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_backend_22_audit_logging(app, auth_cookies):
+    """22. Audit logging: configuration changes record audit log entries."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_title": "Audited Welcome Title"},
+        )
+        assert res.status_code == 200
+
+    session = await get_session_direct()
+    try:
+        logs = await AuditLogRepo.get_recent(session, 10)
+        actions = [log.action for log in logs]
+        assert "update_greeting_settings" in actions
+    finally:
+        await session.close()
+
 
 
 

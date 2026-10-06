@@ -20,6 +20,7 @@ from app.config import get_settings
 from app.database.engine import get_session_direct
 from app.database.models import ServerGreetingSettings
 from app.database.repositories import (
+    InviteJoinRepo,
     ServerGreetingSettingsRepo,
     ServerInviteSettingsRepo,
 )
@@ -46,7 +47,9 @@ from app.greetings.templates import (
     DEFAULT_WELCOME_FOOTER,
     DEFAULT_WELCOME_TITLE,
     build_rules_url,
+    is_safe_url,
     render_template,
+    validate_buttons,
 )
 
 logger = logging.getLogger("pbhero.greetings")
@@ -288,17 +291,101 @@ class GreetingService:
             )
         return ok
     # ========================================================
-    # Rendering Helpers
+    # Rendering & Component Helpers (Premium Onboarding 2.0)
     # ========================================================
 
-    def render_welcome_message(
+    @staticmethod
+    def parse_accent_color(color_hex: Optional[str], default: int = 0x5865F2) -> int:
+        if not color_hex:
+            return default
+        clean = str(color_hex).strip().lstrip("#")
+        try:
+            return int(clean, 16)
+        except Exception:
+            return default
+
+    @staticmethod
+    def apply_banner(
+        embed: discord.Embed,
+        mode: Optional[str],
+        banner_url: Optional[str],
+        guild: Optional[discord.Guild],
+    ) -> None:
+        try:
+            if mode == "server" and guild and getattr(guild, "banner", None) and guild.banner:
+                embed.set_image(url=guild.banner.url)
+            elif mode == "custom" and banner_url and is_safe_url(banner_url):
+                embed.set_image(url=banner_url)
+            elif (not mode or mode == "none") and banner_url and is_safe_url(banner_url):
+                embed.set_image(url=banner_url)
+        except Exception as e:
+            logger.warning("Failed to attach banner image to embed: %s", e)
+
+    @staticmethod
+    def apply_author(
+        embed: discord.Embed,
+        author_text: Optional[str],
+        author_icon_url: Optional[str],
+        context: Dict[str, Any],
+        guild: Optional[discord.Guild],
+    ) -> None:
+        if author_text:
+            try:
+                rendered = render_template(author_text, context)
+                icon_url = None
+                if author_icon_url and is_safe_url(author_icon_url):
+                    icon_url = author_icon_url
+                elif guild and getattr(guild, "icon", None) and guild.icon:
+                    icon_url = guild.icon.url
+                embed.set_author(name=rendered, icon_url=icon_url)
+            except Exception as e:
+                logger.warning("Failed to set author on embed: %s", e)
+
+    @staticmethod
+    def build_buttons_view(
+        buttons_json: Optional[str],
+        context: Dict[str, Any],
+    ) -> Optional[discord.ui.View]:
+        if not buttons_json:
+            return None
+        try:
+            ok, _, buttons = validate_buttons(buttons_json)
+            if not ok or not buttons:
+                return None
+            enabled_buttons = [b for b in buttons if b.get("enabled", True)]
+            if not enabled_buttons:
+                return None
+            view = discord.ui.View(timeout=None)
+            for b in enabled_buttons[:5]:
+                raw_url = b.get("url") or ""
+                rendered_url = render_template(raw_url, context)
+                if not is_safe_url(rendered_url) or not rendered_url.startswith("https://"):
+                    continue
+                label = b.get("label") or "Link"
+                emoji = b.get("emoji")
+                btn = discord.ui.Button(
+                    style=discord.ButtonStyle.link,
+                    label=label,
+                    url=rendered_url,
+                    emoji=emoji if emoji else None,
+                )
+                view.add_item(btn)
+            return view if len(view.children) > 0 else None
+        except Exception as e:
+            logger.warning("Failed to build Discord button view: %s", e)
+            return None
+
+    def _build_welcome_context(
         self,
         config: ServerGreetingSettings,
         member: discord.Member,
         invite_url: Optional[str] = None,
         rules_url: Optional[str] = None,
+        attribution: Optional[Any] = None,
+        total_invites: Optional[Any] = None,
+        rank: Optional[str] = None,
         is_test: bool = False,
-    ) -> Tuple[Optional[str], Optional[discord.Embed], discord.AllowedMentions]:
+    ) -> Dict[str, Any]:
         guild = member.guild
         created_str = (
             member.created_at.strftime("%Y-%m-%d")
@@ -311,7 +398,59 @@ class GreetingService:
             else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         )
 
-        context = {
+        inviter_name = "Unknown"
+        inviter_mention = "Unknown"
+        inviter_id_str = ""
+        invite_code_str = "Unknown"
+        invite_channel_str = "Unknown"
+
+        if attribution:
+            if isinstance(attribution, dict):
+                src = attribution.get("source_type", "NORMAL_INVITE" if "inviter_name" in attribution and not attribution.get("is_vanity") else ("VANITY_URL" if attribution.get("is_vanity") else "UNKNOWN"))
+                inv_name = attribution.get("inviter_name")
+                inv_id = attribution.get("inviter_id")
+                inv_mention = attribution.get("inviter_mention")
+                inv_code = attribution.get("invite_code")
+                ch_id = attribution.get("channel_id")
+                ch_name = attribution.get("invite_channel", attribution.get("channel_name"))
+                if total_invites is None and "total_invites" in attribution:
+                    total_invites = attribution["total_invites"]
+                if rank is None and "rank" in attribution:
+                    rank = attribution["rank"]
+            else:
+                src = getattr(attribution, "source_type", "UNKNOWN")
+                inv_name = getattr(attribution, "inviter_name", None)
+                inv_id = getattr(attribution, "inviter_id", None)
+                inv_mention = getattr(attribution, "inviter_mention", None)
+                inv_code = getattr(attribution, "invite_code", None)
+                ch_id = getattr(attribution, "channel_id", None)
+                ch_name = getattr(attribution, "channel_name", None)
+
+            if src == "NORMAL_INVITE":
+                inviter_name = inv_name or "Unknown"
+                inviter_mention = inv_mention or (f"<@{inv_id}>" if inv_id else inviter_name)
+                inviter_id_str = str(inv_id) if inv_id else ""
+                invite_code_str = inv_code or "Unknown"
+                invite_channel_str = f"<#{ch_id}>" if ch_id else (f"#{ch_name}" if ch_name else "Unknown")
+            elif src == "VANITY_URL":
+                inviter_name = "Server Vanity URL"
+                inviter_mention = "Server Vanity URL"
+                inviter_id_str = ""
+                invite_code_str = inv_code or "Server Vanity URL"
+                invite_channel_str = "Server Vanity URL"
+            else:
+                inviter_name = "Unknown"
+                inviter_mention = "Unknown"
+                inviter_id_str = ""
+                invite_code_str = "Unknown"
+                invite_channel_str = "Unknown"
+
+        tot_invites_str = str(total_invites if total_invites is not None else ("0" if inviter_name == "Unknown" else "N/A"))
+        rank_str = str(rank if rank is not None else "N/A")
+
+        rules_ch_id = getattr(config, "rules_channel_id", None) if config else None
+
+        return {
             "username": member.name,
             "display_name": member.display_name,
             "user_mention": member.mention if not is_test else f"@{member.name}",
@@ -322,8 +461,38 @@ class GreetingService:
             "account_created": created_str,
             "joined_at": joined_str,
             "invite_url": invite_url,
-            "rules_url": rules_url or build_rules_url(guild.id, config.rules_channel_id),
+            "rules_url": rules_url or build_rules_url(guild.id, rules_ch_id),
+            "inviter": inviter_name,
+            "inviter_mention": inviter_mention,
+            "inviter_id": inviter_id_str,
+            "invite_code": invite_code_str,
+            "invite_channel": invite_channel_str,
+            "total_invites": tot_invites_str,
+            "rank": rank_str,
         }
+
+    def render_welcome_message(
+        self,
+        config: ServerGreetingSettings,
+        member: discord.Member,
+        invite_url: Optional[str] = None,
+        rules_url: Optional[str] = None,
+        attribution: Optional[Any] = None,
+        total_invites: Optional[Any] = None,
+        rank: Optional[str] = None,
+        is_test: bool = False,
+    ) -> Tuple[Optional[str], Optional[discord.Embed], discord.AllowedMentions]:
+        guild = member.guild
+        context = self._build_welcome_context(
+            config,
+            member,
+            invite_url=invite_url,
+            rules_url=rules_url,
+            attribution=attribution,
+            total_invites=total_invites,
+            rank=rank,
+            is_test=is_test,
+        )
 
         title_raw = config.welcome_title or DEFAULT_WELCOME_TITLE
         desc_raw = config.welcome_description or DEFAULT_WELCOME_DESCRIPTION
@@ -355,7 +524,17 @@ class GreetingService:
                 parts.append(f"_{footer}_")
             return "\n\n".join(parts), None, allowed_mentions
 
-        embed = discord.Embed(title=title, description=desc, color=0x5865F2)
+        accent_color = self.parse_accent_color(getattr(config, "welcome_accent_color", None), 0x5865F2)
+        embed = discord.Embed(title=title, description=desc, color=accent_color)
+
+        self.apply_author(
+            embed,
+            getattr(config, "welcome_author_text", None),
+            getattr(config, "welcome_author_icon_url", None),
+            context,
+            guild,
+        )
+
         if config.welcome_show_timestamp:
             embed.timestamp = datetime.now(timezone.utc)
         if config.welcome_show_avatar and getattr(member, "display_avatar", None):
@@ -363,6 +542,13 @@ class GreetingService:
         if footer:
             icon_url = guild.icon.url if (config.welcome_show_server_icon and guild.icon) else None
             embed.set_footer(text=footer, icon_url=icon_url)
+
+        self.apply_banner(
+            embed,
+            getattr(config, "welcome_banner_mode", "none"),
+            getattr(config, "welcome_banner_url", None),
+            guild,
+        )
 
         content = member.mention if (config.welcome_mention_user and not is_test) else None
         return content, embed, allowed_mentions
@@ -373,27 +559,22 @@ class GreetingService:
         member: discord.Member,
         invite_url: Optional[str] = None,
         rules_url: Optional[str] = None,
+        attribution: Optional[Any] = None,
+        total_invites: Optional[Any] = None,
+        rank: Optional[str] = None,
         is_test: bool = False,
     ) -> Tuple[Optional[str], Optional[discord.Embed], discord.AllowedMentions]:
         guild = member.guild
-        joined_str = (
-            member.joined_at.strftime("%Y-%m-%d %H:%M:%S")
-            if getattr(member, "joined_at", None)
-            else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        context = self._build_welcome_context(
+            config,
+            member,
+            invite_url=invite_url,
+            rules_url=rules_url,
+            attribution=attribution,
+            total_invites=total_invites,
+            rank=rank,
+            is_test=is_test,
         )
-
-        context = {
-            "username": member.name,
-            "display_name": member.display_name,
-            "user_mention": member.mention if not is_test else f"@{member.name}",
-            "user_id": str(member.id),
-            "server_name": guild.name,
-            "server_id": str(guild.id),
-            "member_count": str(guild.member_count or 1),
-            "joined_at": joined_str,
-            "invite_url": invite_url,
-            "rules_url": rules_url or build_rules_url(guild.id, config.rules_channel_id),
-        }
 
         title_raw = config.welcome_dm_title or DEFAULT_WELCOME_DM_TITLE
         desc_raw = config.welcome_dm_description or DEFAULT_WELCOME_DM_DESCRIPTION
@@ -413,7 +594,17 @@ class GreetingService:
             parts = [p for p in (f"**{title}**" if title else "", desc, f"_{footer}_" if footer else "") if p]
             return "\n\n".join(parts), None, allowed_mentions
 
-        embed = discord.Embed(title=title, description=desc, color=0x57F287)
+        accent_color = self.parse_accent_color(getattr(config, "welcome_dm_accent_color", None), 0x57F287)
+        embed = discord.Embed(title=title, description=desc, color=accent_color)
+
+        self.apply_author(
+            embed,
+            getattr(config, "welcome_dm_author_text", None),
+            getattr(config, "welcome_dm_author_icon_url", None),
+            context,
+            guild,
+        )
+
         if config.welcome_dm_show_timestamp:
             embed.timestamp = datetime.now(timezone.utc)
         if config.welcome_dm_show_avatar and getattr(member, "display_avatar", None):
@@ -421,6 +612,13 @@ class GreetingService:
         if footer:
             icon_url = guild.icon.url if (config.welcome_dm_show_server_icon and guild.icon) else None
             embed.set_footer(text=footer, icon_url=icon_url)
+
+        self.apply_banner(
+            embed,
+            getattr(config, "welcome_dm_banner_mode", "none"),
+            getattr(config, "welcome_dm_banner_url", None),
+            guild,
+        )
 
         return None, embed, allowed_mentions
 
@@ -437,6 +635,7 @@ class GreetingService:
         context = {
             "username": member.name,
             "display_name": member.display_name,
+            "user_mention": f"@{member.name}",
             "user_id": str(member.id),
             "server_name": guild.name,
             "server_id": str(guild.id),
@@ -475,7 +674,17 @@ class GreetingService:
                 parts.append(f"_{footer}_")
             return "\n\n".join(parts), None, allowed_mentions
 
-        embed = discord.Embed(title=title, description=desc, color=0xED4245)
+        accent_color = self.parse_accent_color(getattr(config, "goodbye_accent_color", None), 0xED4245)
+        embed = discord.Embed(title=title, description=desc, color=accent_color)
+
+        self.apply_author(
+            embed,
+            getattr(config, "goodbye_author_text", None),
+            getattr(config, "goodbye_author_icon_url", None),
+            context,
+            guild,
+        )
+
         if config.goodbye_show_timestamp:
             embed.timestamp = datetime.now(timezone.utc)
         if config.goodbye_show_avatar and getattr(member, "display_avatar", None):
@@ -483,6 +692,13 @@ class GreetingService:
         if footer:
             icon_url = guild.icon.url if (config.goodbye_show_server_icon and guild.icon) else None
             embed.set_footer(text=footer, icon_url=icon_url)
+
+        self.apply_banner(
+            embed,
+            getattr(config, "goodbye_banner_mode", "none"),
+            getattr(config, "goodbye_banner_url", None),
+            guild,
+        )
 
         content = f"<@{member.id}>" if (config.goodbye_mention_user and not is_test) else None
         return content, embed, allowed_mentions
@@ -500,6 +716,7 @@ class GreetingService:
         context = {
             "username": member.name,
             "display_name": member.display_name,
+            "user_mention": f"@{member.name}",
             "user_id": str(member.id),
             "server_name": guild.name,
             "server_id": str(guild.id),
@@ -526,7 +743,17 @@ class GreetingService:
             parts = [p for p in (f"**{title}**" if title else "", desc, f"_{footer}_" if footer else "") if p]
             return "\n\n".join(parts), None, allowed_mentions
 
-        embed = discord.Embed(title=title, description=desc, color=0xFEE75C)
+        accent_color = self.parse_accent_color(getattr(config, "goodbye_dm_accent_color", None), 0xFEE75C)
+        embed = discord.Embed(title=title, description=desc, color=accent_color)
+
+        self.apply_author(
+            embed,
+            getattr(config, "goodbye_dm_author_text", None),
+            getattr(config, "goodbye_dm_author_icon_url", None),
+            context,
+            guild,
+        )
+
         if config.goodbye_dm_show_timestamp:
             embed.timestamp = datetime.now(timezone.utc)
         if config.goodbye_dm_show_avatar and getattr(member, "display_avatar", None):
@@ -534,6 +761,13 @@ class GreetingService:
         if footer:
             icon_url = guild.icon.url if (config.goodbye_dm_show_server_icon and guild.icon) else None
             embed.set_footer(text=footer, icon_url=icon_url)
+
+        self.apply_banner(
+            embed,
+            getattr(config, "goodbye_dm_banner_mode", "none"),
+            getattr(config, "goodbye_dm_banner_url", None),
+            guild,
+        )
 
         return None, embed, allowed_mentions
 
@@ -584,6 +818,7 @@ class GreetingService:
             embed.set_footer(text=footer)
 
         return None, embed, discord.AllowedMentions.none()
+
     # ========================================================
     # Safe Dispatch Mechanisms
     # ========================================================
@@ -591,24 +826,94 @@ class GreetingService:
     async def send_greeting(
         self,
         channel: discord.abc.GuildChannel,
-        content: Optional[str],
-        embed: Optional[discord.Embed],
-        allowed_mentions: discord.AllowedMentions,
+        content: Optional[str] = None,
+        embed: Optional[discord.Embed] = None,
+        allowed_mentions: Optional[discord.AllowedMentions] = None,
+        view: Optional[discord.ui.View] = None,
     ) -> None:
         if not hasattr(channel, "send"):
             raise ValueError(f"Channel {getattr(channel, 'name', channel)} cannot receive messages")
-        await channel.send(content=content, embed=embed, allowed_mentions=allowed_mentions)
+
+        if allowed_mentions is None:
+            allowed_mentions = discord.AllowedMentions.none()
+
+        kwargs = {"content": content, "embed": embed, "allowed_mentions": allowed_mentions}
+        if view is not None:
+            kwargs["view"] = view
+
+        try:
+            await channel.send(**kwargs)
+        except Exception as e:
+            logger.warning("Primary greeting send failed, attempting resilient fallback: %s", e)
+            # Fallback 1: Try without buttons view
+            if view is not None:
+                kwargs.pop("view", None)
+                try:
+                    await channel.send(**kwargs)
+                    return
+                except Exception as e2:
+                    logger.warning("Greeting send without view failed: %s", e2)
+
+            # Fallback 2: Try without remote banner image in case Discord CDN rejected URL
+            if embed and getattr(embed, "image", None):
+                clean_embed = embed.copy()
+                clean_embed.set_image(url=None)
+                kwargs["embed"] = clean_embed
+                try:
+                    await channel.send(**kwargs)
+                    return
+                except Exception as e3:
+                    logger.warning("Greeting send without banner failed: %s", e3)
+
+            # Re-raise original error if fallbacks also failed
+            raise e
 
     async def send_dm_safe(
         self,
         user: discord.abc.User,
-        content: Optional[str],
-        embed: Optional[discord.Embed],
-        allowed_mentions: discord.AllowedMentions,
+        content: Optional[str] = None,
+        embed: Optional[discord.Embed] = None,
+        allowed_mentions: Optional[discord.AllowedMentions] = None,
+        view: Optional[discord.ui.View] = None,
     ) -> None:
         if not hasattr(user, "send"):
             raise ValueError(f"Target user {user} cannot receive direct messages")
-        await user.send(content=content, embed=embed, allowed_mentions=allowed_mentions)
+
+        if allowed_mentions is None:
+            allowed_mentions = discord.AllowedMentions.none()
+
+        kwargs = {"content": content, "embed": embed, "allowed_mentions": allowed_mentions}
+        if view is not None:
+            kwargs["view"] = view
+
+        try:
+            await user.send(**kwargs)
+        except discord.Forbidden:
+            raise
+        except Exception as e:
+            logger.warning("Primary DM send failed, attempting resilient fallback: %s", e)
+            if view is not None:
+                kwargs.pop("view", None)
+                try:
+                    await user.send(**kwargs)
+                    return
+                except discord.Forbidden:
+                    raise
+                except Exception:
+                    pass
+
+            if embed and getattr(embed, "image", None):
+                clean_embed = embed.copy()
+                clean_embed.set_image(url=None)
+                kwargs["embed"] = clean_embed
+                try:
+                    await user.send(**kwargs)
+                    return
+                except discord.Forbidden:
+                    raise
+                except Exception:
+                    pass
+            raise e
 
     # ========================================================
     # Event Handlers (Join & Leave)
@@ -638,10 +943,25 @@ class GreetingService:
 
         # 0. Invite Attribution Pipeline
         attribution = None
+        total_invites = None
+        rank_str = None
         try:
             from app.invites.tracker import get_invite_tracker
             tracker = get_invite_tracker(self.bot)
             attribution = await tracker.attribute_member_join(member)
+
+            if attribution and attribution.source_type == "NORMAL_INVITE" and attribution.inviter_id:
+                session_inv = await get_session_direct()
+                try:
+                    stats = await InviteJoinRepo.get_user_stats(session_inv, member.guild.id, attribution.inviter_id)
+                    total_invites = stats.get("total_joins", stats.get("total_invites", 0))
+                    rank = await InviteJoinRepo.get_user_rank(session_inv, member.guild.id, attribution.inviter_id)
+                    rank_str = f"#{rank}" if rank is not None else "N/A"
+                except Exception as e:
+                    logger.warning("Failed to retrieve inviter stats/rank: %s", e)
+                finally:
+                    await session_inv.close()
+
             if attribution and attribution.source_type != "UNKNOWN":
                 self.record_activity(
                     event_type="INVITE_ATTRIBUTED",
@@ -671,9 +991,25 @@ class GreetingService:
             if is_valid and channel:
                 try:
                     content, embed, mentions = self.render_welcome_message(
-                        config, member, invite_url=invite_url, rules_url=rules_url
+                        config,
+                        member,
+                        invite_url=invite_url,
+                        rules_url=rules_url,
+                        attribution=attribution,
+                        total_invites=total_invites,
+                        rank=rank_str,
                     )
-                    await self.send_greeting(channel, content, embed, mentions)
+                    context_vars = self._build_welcome_context(
+                        config,
+                        member,
+                        invite_url=invite_url,
+                        rules_url=rules_url,
+                        attribution=attribution,
+                        total_invites=total_invites,
+                        rank=rank_str,
+                    )
+                    view = self.build_buttons_view(getattr(config, "welcome_buttons_json", None), context_vars)
+                    await self.send_greeting(channel, content, embed, mentions, view=view)
                     self.record_activity(
                         event_type="WELCOME_SENT",
                         username=str(member),
@@ -710,9 +1046,25 @@ class GreetingService:
         if config.welcome_dm_enabled:
             try:
                 content, embed, mentions = self.render_welcome_dm(
-                    config, member, invite_url=invite_url, rules_url=rules_url
+                    config,
+                    member,
+                    invite_url=invite_url,
+                    rules_url=rules_url,
+                    attribution=attribution,
+                    total_invites=total_invites,
+                    rank=rank_str,
                 )
-                await self.send_dm_safe(member, content, embed, mentions)
+                context_vars = self._build_welcome_context(
+                    config,
+                    member,
+                    invite_url=invite_url,
+                    rules_url=rules_url,
+                    attribution=attribution,
+                    total_invites=total_invites,
+                    rank=rank_str,
+                )
+                view = self.build_buttons_view(getattr(config, "welcome_dm_buttons_json", None), context_vars)
+                await self.send_dm_safe(member, content, embed, mentions, view=view)
                 self.record_activity(
                     event_type="WELCOME_DM_SENT",
                     username=str(member),
@@ -730,7 +1082,7 @@ class GreetingService:
                     user_id=str(member.id),
                     channel_id=None,
                     channel_name="Direct Message",
-                    status="failed",
+                    status="DM unavailable",
                     error_message="DM unavailable",
                 )
             except Exception as e:
@@ -806,7 +1158,17 @@ class GreetingService:
                     content, embed, mentions = self.render_goodbye_message(
                         config, member, invite_url=invite_url
                     )
-                    await self.send_greeting(channel, content, embed, mentions)
+                    context_vars = {
+                        "username": member.name,
+                        "display_name": member.display_name,
+                        "user_id": str(member.id),
+                        "server_name": member.guild.name,
+                        "server_id": str(member.guild.id),
+                        "member_count": str(member.guild.member_count or 1),
+                        "invite_url": invite_url,
+                    }
+                    view = self.build_buttons_view(getattr(config, "goodbye_buttons_json", None), context_vars)
+                    await self.send_greeting(channel, content, embed, mentions, view=view)
                     self.record_activity(
                         event_type="GOODBYE_SENT",
                         username=str(member),
@@ -845,7 +1207,18 @@ class GreetingService:
                 content, embed, mentions = self.render_goodbye_dm(
                     config, member, invite_url=invite_url
                 )
-                await self.send_dm_safe(member, content, embed, mentions)
+                rejoin_view = None
+                if invite_url and is_safe_url(invite_url):
+                    rejoin_view = discord.ui.View(timeout=None)
+                    rejoin_view.add_item(
+                        discord.ui.Button(
+                            style=discord.ButtonStyle.link,
+                            label="Rejoin Server",
+                            url=invite_url,
+                            emoji="🔗",
+                        )
+                    )
+                await self.send_dm_safe(member, content, embed, mentions, view=rejoin_view)
                 self.record_activity(
                     event_type="GOODBYE_DM_SENT",
                     username=str(member),
@@ -863,7 +1236,7 @@ class GreetingService:
                     user_id=str(member.id),
                     channel_id=None,
                     channel_name="Direct Message",
-                    status="failed",
+                    status="DM unavailable",
                     error_message="DM unavailable",
                 )
             except Exception as e:
@@ -879,7 +1252,7 @@ class GreetingService:
                 )
 
     # ========================================================
-    # Test Dispatch
+    # Test Dispatch (Premium Onboarding 2.0)
     # ========================================================
 
     async def send_test_message(self, greeting_type: str) -> Dict[str, Any]:
@@ -922,7 +1295,16 @@ class GreetingService:
             async def send(self, *args, **kwargs):
                 return True
 
+        class DummyAttribution:
+            source_type = "NORMAL_INVITE"
+            inviter_id = 999888777
+            inviter_name = "TestInviter"
+            invite_code = "TEST-INVITE-2026"
+            channel_id = 111222333
+            channel_name = "welcome"
+
         dummy = DummyMember(guild)
+        dummy_attribution = DummyAttribution()
 
         if greeting_type == "welcome":
             if not config.welcome_channel_id:
@@ -937,9 +1319,27 @@ class GreetingService:
                 raise PermissionError(telemetry.get("warning") or "Missing required permissions.")
 
             content, embed, mentions = self.render_welcome_message(
-                config, dummy, invite_url=invite_url, rules_url=rules_url, is_test=True
+                config,
+                dummy,
+                invite_url=invite_url,
+                rules_url=rules_url,
+                attribution=dummy_attribution,
+                total_invites=15,
+                rank="#3",
+                is_test=True,
             )
-            await self.send_greeting(channel, content, embed, mentions)
+            context_vars = self._build_welcome_context(
+                config,
+                dummy,
+                invite_url=invite_url,
+                rules_url=rules_url,
+                attribution=dummy_attribution,
+                total_invites=15,
+                rank="#3",
+                is_test=True,
+            )
+            view = self.build_buttons_view(getattr(config, "welcome_buttons_json", None), context_vars)
+            await self.send_greeting(channel, content, embed, mentions, view=view)
             entry = self.record_activity(
                 event_type="WELCOME_SENT",
                 username="TestUser (Test)",
@@ -972,7 +1372,17 @@ class GreetingService:
             content, embed, mentions = self.render_goodbye_message(
                 config, dummy, invite_url=invite_url, is_test=True
             )
-            await self.send_greeting(channel, content, embed, mentions)
+            context_vars = {
+                "username": dummy.name,
+                "display_name": dummy.display_name,
+                "user_id": str(dummy.id),
+                "server_name": guild.name,
+                "server_id": str(guild.id),
+                "member_count": str(guild.member_count or 1),
+                "invite_url": invite_url,
+            }
+            view = self.build_buttons_view(getattr(config, "goodbye_buttons_json", None), context_vars)
+            await self.send_greeting(channel, content, embed, mentions, view=view)
             entry = self.record_activity(
                 event_type="GOODBYE_SENT",
                 username="TestUser (Test)",
@@ -992,7 +1402,14 @@ class GreetingService:
 
         elif greeting_type in ("welcome-dm", "welcome_dm"):
             content, embed, mentions = self.render_welcome_dm(
-                config, dummy, invite_url=invite_url, rules_url=rules_url, is_test=True
+                config,
+                dummy,
+                invite_url=invite_url,
+                rules_url=rules_url,
+                attribution=dummy_attribution,
+                total_invites=15,
+                rank="#3",
+                is_test=True,
             )
             entry = self.record_activity(
                 event_type="WELCOME_DM_SENT",
