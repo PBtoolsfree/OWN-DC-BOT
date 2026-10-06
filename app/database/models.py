@@ -6,6 +6,7 @@ Single-server architecture: all records belong to the one configured Guild.
 
 import enum
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 from sqlalchemy import (
     BigInteger,
