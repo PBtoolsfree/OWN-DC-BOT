@@ -1828,6 +1828,7 @@ class ServerGreetingSettingsRepo:
                 auto_role_enabled=False,
                 auto_role_id=None,
                 welcome_dm_enabled=False,
+                welcome_dm_include_rules=True,
                 welcome_dm_title=ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_TITLE,
                 welcome_dm_description=ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_DESCRIPTION,
                 welcome_dm_footer=ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_FOOTER,
@@ -1920,6 +1921,7 @@ class ServerGreetingSettingsRepo:
     @staticmethod
     async def reset_welcome_dm(session: AsyncSession, guild_id: int) -> ServerGreetingSettings:
         settings_row = await ServerGreetingSettingsRepo.get_or_create(session, guild_id)
+        settings_row.welcome_dm_include_rules = True
         settings_row.welcome_dm_title = ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_TITLE
         settings_row.welcome_dm_description = ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_DESCRIPTION
         settings_row.welcome_dm_footer = ServerGreetingSettingsRepo.DEFAULT_WELCOME_DM_FOOTER

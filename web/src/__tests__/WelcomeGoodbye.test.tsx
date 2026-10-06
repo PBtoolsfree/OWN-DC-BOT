@@ -69,6 +69,7 @@ const mockGreetingsData: GreetingsResponse = {
     auto_role_enabled: false,
     auto_role_id: '444',
     welcome_dm_enabled: false,
+    welcome_dm_include_rules: true,
     welcome_dm_title: '👋 Welcome to {server_name}!',
     welcome_dm_description: 'Hi {display_name}! ❤️ Thanks for joining.',
     welcome_dm_footer: 'PB HERO SERVER',

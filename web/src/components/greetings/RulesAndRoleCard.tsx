@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { ServerGreetingSettings, GreetingChannelOption, GuildRoleOption } from '../../types';
 import { BookOpen, Shield, RotateCcw, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { ConfirmModal } from '../ConfirmModal';
@@ -58,6 +58,27 @@ export const RulesAndRoleCard: React.FC<RulesAndRoleCardProps> = ({
         </div>
 
         <div className="p-6 space-y-5 flex-1">
+          {/* Rules Delivery Ownership notice / toggle */}
+          <div className="bg-gray-900/60 p-3.5 rounded-xl border border-gray-800 text-xs space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-gray-200">Include rules in Welcome DM</span>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={settings.welcome_dm_include_rules ?? true}
+                  onChange={(e) => onChange({ welcome_dm_include_rules: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-fuchsia-600"></div>
+              </label>
+            </div>
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              {settings.welcome_dm_include_rules ?? true
+                ? "ON: Rules appear inside Welcome DM ({rules_url}). Standalone Rules message is skipped to prevent duplicate delivery."
+                : "OFF: Rules link is excluded from Welcome DM. Standalone Rules message will be sent if Rules Delivery is enabled."}
+            </p>
+          </div>
+
           {/* Rules Source Selector */}
           <div className="space-y-2">
             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider block">

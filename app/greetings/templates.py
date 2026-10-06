@@ -125,6 +125,14 @@ DEFAULT_WELCOME_DM_DESCRIPTION = (
     "{invite_url}\n\n"
     "Enjoy your stay and have fun!"
 )
+DEFAULT_WELCOME_DM_DESCRIPTION_NO_RULES = (
+    "Thanks for joining our Discord community ❤️\n\n"
+    "👥 You are member #{member_count}\n\n"
+    "🤝 Invited by: {inviter}\n\n"
+    "🔗 Permanent Server Invite:\n"
+    "{invite_url}\n\n"
+    "Enjoy your stay and have fun!"
+)
 DEFAULT_WELCOME_DM_FOOTER = "PB HERO SERVER"
 
 DEFAULT_GOODBYE_DM_TITLE = "💙 GOODBYE, {display_name}"

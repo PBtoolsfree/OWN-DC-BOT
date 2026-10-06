@@ -42,6 +42,7 @@ from app.greetings.templates import (
     DEFAULT_RULES_TITLE,
     DEFAULT_WELCOME_DESCRIPTION,
     DEFAULT_WELCOME_DM_DESCRIPTION,
+    DEFAULT_WELCOME_DM_DESCRIPTION_NO_RULES,
     DEFAULT_WELCOME_DM_FOOTER,
     DEFAULT_WELCOME_DM_TITLE,
     DEFAULT_WELCOME_FOOTER,
@@ -59,9 +60,15 @@ settings = get_settings()
 class GreetingService:
     """Service managing welcome, goodbye, rules delivery, DMs, roles, and invites."""
 
+    _shared_recent_events: Dict[str, float] = {}
+
+    @classmethod
+    def clear_recent_events(cls) -> None:
+        cls._shared_recent_events.clear()
+
     def __init__(self, bot: Optional[commands.Bot] = None):
         self.bot = bot
-        self._recent_events: Dict[str, float] = {}
+        self._recent_events: Dict[str, float] = GreetingService._shared_recent_events
         self._activities: List[Dict[str, Any]] = []
         self._stats_today: Dict[str, Any] = {
             "date": datetime.now(timezone.utc).date().isoformat(),
@@ -349,6 +356,7 @@ class GreetingService:
     def build_buttons_view(
         buttons_json: Optional[str],
         context: Dict[str, Any],
+        exclude_rules: bool = False,
     ) -> Optional[discord.ui.View]:
         if not buttons_json:
             return None
@@ -357,6 +365,11 @@ class GreetingService:
             if not ok or not buttons:
                 return None
             enabled_buttons = [b for b in buttons if b.get("enabled", True)]
+            if exclude_rules:
+                enabled_buttons = [
+                    b for b in enabled_buttons
+                    if b.get("id") != "rules" and "{rules_url}" not in (b.get("url") or "")
+                ]
             if not enabled_buttons:
                 return None
             view = discord.ui.View(timeout=None)
@@ -569,19 +582,33 @@ class GreetingService:
         is_test: bool = False,
     ) -> Tuple[Optional[str], Optional[discord.Embed], discord.AllowedMentions]:
         guild = member.guild
+        include_rules = bool(getattr(config, "welcome_dm_include_rules", True))
+        effective_rules_url = (rules_url or "") if include_rules else ""
+
         context = self._build_welcome_context(
             config,
             member,
             invite_url=invite_url,
-            rules_url=rules_url,
+            rules_url=effective_rules_url,
             attribution=attribution,
             total_invites=total_invites,
             rank=rank,
             is_test=is_test,
         )
+        if not include_rules:
+            context["rules_url"] = ""
 
         title_raw = config.welcome_dm_title or DEFAULT_WELCOME_DM_TITLE
-        desc_raw = config.welcome_dm_description or DEFAULT_WELCOME_DM_DESCRIPTION
+        desc_raw = config.welcome_dm_description
+        if not desc_raw:
+            desc_raw = DEFAULT_WELCOME_DM_DESCRIPTION if include_rules else DEFAULT_WELCOME_DM_DESCRIPTION_NO_RULES
+        elif not include_rules and desc_raw.strip() == DEFAULT_WELCOME_DM_DESCRIPTION.strip():
+            desc_raw = DEFAULT_WELCOME_DM_DESCRIPTION_NO_RULES
+        elif not include_rules:
+            desc_raw = desc_raw.replace("📜 Rules:\n{rules_url}\n\n", "")
+            desc_raw = desc_raw.replace("📜 Rules:\n{rules_url}", "")
+            desc_raw = desc_raw.replace("Before getting started:\n\n\n\n", "Before getting started:\n\n")
+
         footer_raw = config.welcome_dm_footer or DEFAULT_WELCOME_DM_FOOTER
 
         if is_test:
@@ -976,6 +1003,34 @@ class GreetingService:
     # Event Handlers (Join & Leave)
     # ========================================================
 
+    async def handle_raw_member_join(self, payload: Any) -> None:
+        """Handle raw member join gateway event or uncached member join."""
+        guild_id = getattr(payload, "guild_id", None)
+        if guild_id is None:
+            g = getattr(payload, "guild", None)
+            guild_id = getattr(g, "id", None) if g else settings.DISCORD_GUILD_ID
+
+        user = getattr(payload, "user", None) or getattr(payload, "member", None)
+        user_id = getattr(user, "id", None) or getattr(payload, "user_id", None)
+
+        if not user_id or guild_id != settings.DISCORD_GUILD_ID:
+            return
+
+        if self._is_duplicate_event("welcome", guild_id, user_id):
+            logger.warning("Duplicate raw join event ignored for %s in %s", user_id, guild_id)
+            return
+
+        member = getattr(payload, "member", None)
+        if not member and self.bot:
+            guild = self.bot.get_guild(guild_id)
+            if guild:
+                member = guild.get_member(user_id)
+
+        if member:
+            await self._process_member_join(member)
+        else:
+            logger.info("Raw member join received for user %s (not currently cached)", user_id)
+
     async def handle_member_join(self, member: discord.Member) -> None:
         if not member.guild or member.guild.id != settings.DISCORD_GUILD_ID:
             return
@@ -984,6 +1039,9 @@ class GreetingService:
             logger.warning("Duplicate join event ignored for %s in %s", member, member.guild.id)
             return
 
+        await self._process_member_join(member)
+
+    async def _process_member_join(self, member: discord.Member) -> None:
         session = await get_session_direct()
         try:
             config = await ServerGreetingSettingsRepo.get_or_create(session, member.guild.id)
@@ -1100,13 +1158,15 @@ class GreetingService:
                 )
 
         # 3. Welcome Direct Message (DM)
+        include_rules_in_dm = bool(getattr(config, "welcome_dm_include_rules", True))
         if config.welcome_dm_enabled:
             try:
+                dm_rules_url = rules_url if include_rules_in_dm else ""
                 content, embed, mentions = self.render_welcome_dm(
                     config,
                     member,
                     invite_url=invite_url,
-                    rules_url=rules_url,
+                    rules_url=dm_rules_url,
                     attribution=attribution,
                     total_invites=total_invites,
                     rank=rank_str,
@@ -1115,12 +1175,18 @@ class GreetingService:
                     config,
                     member,
                     invite_url=invite_url,
-                    rules_url=rules_url,
+                    rules_url=dm_rules_url,
                     attribution=attribution,
                     total_invites=total_invites,
                     rank=rank_str,
                 )
-                view = self.build_buttons_view(getattr(config, "welcome_dm_buttons_json", None), context_vars)
+                if not include_rules_in_dm:
+                    context_vars["rules_url"] = ""
+                view = self.build_buttons_view(
+                    getattr(config, "welcome_dm_buttons_json", None),
+                    context_vars,
+                    exclude_rules=not include_rules_in_dm,
+                )
                 await self.send_dm_safe(member, content, embed, mentions, view=view)
                 self.record_activity(
                     event_type="WELCOME_DM_SENT",
@@ -1130,7 +1196,7 @@ class GreetingService:
                     channel_name="Direct Message",
                     status="delivered",
                 )
-                logger.info("Welcome DM sent to %s", member)
+                logger.info("Welcome DM sent to %s (include_rules=%s)", member, include_rules_in_dm)
             except discord.Forbidden:
                 logger.info("Welcome DM failed for %s: DM unavailable", member)
                 self.record_activity(
@@ -1155,7 +1221,16 @@ class GreetingService:
                 )
 
         # 4. Rules Delivery
-        if config.rules_delivery_enabled:
+        # Deterministic single-ownership:
+        # Rules must be delivered only ONCE.
+        # - ON + Welcome DM enabled -> rules appear in Welcome DM, standalone Rules Delivery must be skipped.
+        # - OFF + Rules Delivery enabled -> standalone Rules message may be sent.
+        # - Both systems disabled -> no rules sent.
+        should_send_standalone_rules = (
+            config.rules_delivery_enabled
+            and not (config.welcome_dm_enabled and include_rules_in_dm)
+        )
+        if should_send_standalone_rules:
             try:
                 content, embed, mentions = self.render_rules_message(
                     config, member, rules_url=rules_url, invite_url=invite_url
@@ -1174,6 +1249,8 @@ class GreetingService:
                 logger.info("Rules DM unavailable for %s", member)
             except Exception as e:
                 logger.warning("Rules delivery error for %s: %s", member, e)
+        elif config.rules_delivery_enabled and config.welcome_dm_enabled and include_rules_in_dm:
+            logger.info("Standalone rules delivery skipped for %s: rules already included in Welcome DM", member)
 
     async def handle_raw_member_leave(self, payload: discord.RawMemberRemoveEvent) -> None:
         """Handle on_raw_member_remove gateway event (fallback for uncached departures)."""
@@ -1611,11 +1688,13 @@ class GreetingService:
 
             recipient = target_user or dummy
 
+            include_rules_in_dm = bool(getattr(config, "welcome_dm_include_rules", True))
+            dm_rules_url = rules_url if include_rules_in_dm else ""
             content, embed, mentions = self.render_welcome_dm(
                 config,
                 recipient,
                 invite_url=invite_url,
-                rules_url=rules_url,
+                rules_url=dm_rules_url,
                 attribution=dummy_attribution,
                 total_invites=15,
                 rank="#3",
@@ -1631,10 +1710,14 @@ class GreetingService:
                     "user_id": str(getattr(recipient, "id", "")),
                     "server_name": guild.name if guild else "Server",
                     "server_id": str(guild.id if guild else ""),
-                    "rules_url": rules_url,
+                    "rules_url": dm_rules_url,
                     "invite_url": invite_url,
                 }
-                dm_view = self.build_buttons_view(config.welcome_dm_buttons_json, context_vars)
+                dm_view = self.build_buttons_view(
+                    config.welcome_dm_buttons_json,
+                    context_vars,
+                    exclude_rules=not include_rules_in_dm,
+                )
 
             if target_user and hasattr(target_user, "send"):
                 try:

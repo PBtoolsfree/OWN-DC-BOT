@@ -5,6 +5,7 @@ Listens for member joins and leaves and delegates to GreetingService.
 """
 
 import logging
+from typing import Any
 import discord
 from discord.ext import commands
 from app.greetings.service import get_greeting_service
@@ -26,6 +27,14 @@ class GreetingsCog(commands.Cog, name="Greetings"):
             await self.service.handle_member_join(member)
         except Exception as e:
             logger.error("Error handling on_member_join for %s: %s", member, e, exc_info=True)
+
+    @commands.Cog.listener()
+    async def on_raw_member_join(self, payload: Any):
+        """Called when a raw member join gateway event is dispatched."""
+        try:
+            await self.service.handle_raw_member_join(payload)
+        except Exception as e:
+            logger.error("Error handling on_raw_member_join for %s: %s", payload, e, exc_info=True)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):

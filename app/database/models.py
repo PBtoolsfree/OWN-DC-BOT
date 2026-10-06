@@ -565,6 +565,7 @@ class ServerGreetingSettings(Base):
 
     # Welcome DM
     welcome_dm_enabled = Column(Boolean, default=False, nullable=False)
+    welcome_dm_include_rules = Column(Boolean, default=True, nullable=False)
     welcome_dm_title = Column(String(256), nullable=True)
     welcome_dm_description = Column(Text, nullable=True)
     welcome_dm_footer = Column(String(256), nullable=True)

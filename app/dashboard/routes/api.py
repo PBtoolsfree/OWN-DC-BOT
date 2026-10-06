@@ -3146,6 +3146,7 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
         "auto_role_enabled": row.auto_role_enabled,
         "auto_role_id": str(row.auto_role_id) if row.auto_role_id else None,
         "welcome_dm_enabled": row.welcome_dm_enabled,
+        "welcome_dm_include_rules": getattr(row, "welcome_dm_include_rules", True),
         "welcome_dm_title": row.welcome_dm_title,
         "welcome_dm_description": row.welcome_dm_description,
         "welcome_dm_footer": row.welcome_dm_footer,
@@ -3421,6 +3422,10 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
         "autoRoleEnabled": "auto_role_enabled",
         "autoRoleId": "auto_role_id",
         "welcomeDmEnabled": "welcome_dm_enabled",
+        "welcomeDmIncludeRules": "welcome_dm_include_rules",
+        "welcome_dm_include_rules": "welcome_dm_include_rules",
+        "includeRulesInWelcomeDm": "welcome_dm_include_rules",
+        "include_rules_in_welcome_dm": "welcome_dm_include_rules",
         "welcomeDmTitle": "welcome_dm_title",
         "welcomeDmDescription": "welcome_dm_description",
         "welcomeDmFooter": "welcome_dm_footer",
@@ -3563,7 +3568,7 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
             "allow_mass_mentions", "rules_delivery_enabled", "rules_source", "rules_channel_id",
             "rules_title", "rules_description", "rules_footer", "rules_button_text",
             "auto_role_enabled", "auto_role_id",
-            "welcome_dm_enabled", "welcome_dm_title", "welcome_dm_description", "welcome_dm_footer",
+            "welcome_dm_enabled", "welcome_dm_include_rules", "welcome_dm_title", "welcome_dm_description", "welcome_dm_footer",
             "welcome_dm_use_embed", "welcome_dm_show_avatar", "welcome_dm_show_server_icon", "welcome_dm_show_timestamp",
             "welcome_dm_banner_url", "welcome_dm_banner_mode", "welcome_dm_accent_color", "welcome_dm_buttons_json",
             "welcome_dm_author_text", "welcome_dm_author_icon_url",
@@ -3681,6 +3686,8 @@ async def get_rules_settings(username: str = Depends(require_auth)):
         "rules_footer": config.rules_footer,
         "rules_button_text": config.rules_button_text,
         "rules_url": rules_url,
+        "welcome_dm_enabled": config.welcome_dm_enabled,
+        "welcome_dm_include_rules": getattr(config, "welcome_dm_include_rules", True),
     }
 
 
@@ -3709,7 +3716,11 @@ async def update_rules_settings(request: Request, username: str = Depends(requir
     session = await get_session_direct()
     try:
         updates = {}
-        for key in ("rules_delivery_enabled", "rules_source", "rules_channel_id", "rules_title", "rules_description", "rules_footer", "rules_button_text"):
+        for key in (
+            "rules_delivery_enabled", "rules_source", "rules_channel_id",
+            "rules_title", "rules_description", "rules_footer", "rules_button_text",
+            "welcome_dm_include_rules",
+        ):
             if key in data:
                 val = data[key]
                 if key == "rules_channel_id":

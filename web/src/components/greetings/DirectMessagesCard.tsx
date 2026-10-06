@@ -117,6 +117,15 @@ export const DirectMessagesCard: React.FC<DirectMessagesCardProps> = ({
                 />
                 Server Icon
               </label>
+              <label className="flex items-center gap-2 cursor-pointer" title="Include rules in Welcome DM and skip duplicate standalone rules delivery">
+                <input
+                  type="checkbox"
+                  checked={settings.welcome_dm_include_rules ?? true}
+                  onChange={(e) => onChange({ welcome_dm_include_rules: e.target.checked })}
+                  className="rounded bg-gray-800 border-gray-700 text-emerald-600 focus:ring-emerald-500"
+                />
+                Include rules in Welcome DM
+              </label>
             </div>
 
             <div className="space-y-1.5">

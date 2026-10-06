@@ -1617,6 +1617,14 @@ class MockRawMemberRemovePayload:
         self.user = user
 
 
+class MockRawMemberJoinPayload:
+    def __init__(self, guild_id: int, user_id: int, member: Any = None):
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.user = member
+        self.member = member
+
+
 @pytest.mark.asyncio
 async def test_goodbye_dm_pipeline_raw_remove_success():
     """Verify raw member remove gateway event triggers DM delivery and public message."""
@@ -2095,6 +2103,219 @@ async def test_cog_on_member_remove_followed_by_on_raw_member_remove_deduplicati
     # Only 1 DM attempt and 1 public message sent across both invocations
     assert member.send.call_count == 1
     assert channel.send.call_count == 1
+
+
+# ==============================================================================
+# Rules Delivery Ownership & Deduplication Regression Tests
+# ==============================================================================
+
+@pytest.mark.asyncio
+async def test_regression_welcome_dm_plus_rules_enabled_one_delivery():
+    """1. Welcome DM + Rules enabled = one rules delivery (inside Welcome DM, standalone skipped)."""
+    GreetingService.clear_recent_events()
+    mock_bot = make_mock_bot()
+    service = GreetingService(mock_bot)
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=1010101)
+    member.send = AsyncMock()
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_dm_enabled=True,
+            welcome_dm_include_rules=True,
+            rules_delivery_enabled=True,
+            rules_channel_id=999888,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    await service.handle_member_join(member)
+
+    # Exactly 1 DM sent
+    assert member.send.call_count == 1
+    kwargs = member.send.call_args.kwargs
+    embed = kwargs.get("embed")
+    assert embed is not None
+    assert "https://discord.com/channels/" in embed.description or "{rules_url}" not in embed.description
+
+    activity_types = [a["event_type"] for a in service.get_recent_activity()]
+    assert "WELCOME_DM_SENT" in activity_types
+    assert "RULES_SENT" not in activity_types
+
+
+@pytest.mark.asyncio
+async def test_regression_welcome_dm_rules_disabled_plus_rules_delivery_enabled_one_standalone():
+    """2. Welcome DM rules disabled + Rules Delivery enabled = one standalone rules delivery."""
+    GreetingService.clear_recent_events()
+    mock_bot = make_mock_bot()
+    service = GreetingService(mock_bot)
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=1010102)
+    member.send = AsyncMock()
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_dm_enabled=True,
+            welcome_dm_include_rules=False,
+            rules_delivery_enabled=True,
+            rules_channel_id=999888,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    await service.handle_member_join(member)
+
+    # Exactly 2 DMs sent: 1 Welcome DM without rules, 1 Standalone Rules DM
+    assert member.send.call_count == 2
+    activity_types = [a["event_type"] for a in service.get_recent_activity()]
+    assert "WELCOME_DM_SENT" in activity_types
+    assert "RULES_SENT" in activity_types
+
+
+@pytest.mark.asyncio
+async def test_regression_both_enabled_no_duplicate_rules():
+    """3. Both enabled = no duplicate rules (rules delivered only once)."""
+    GreetingService.clear_recent_events()
+    mock_bot = make_mock_bot()
+    service = GreetingService(mock_bot)
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=1010103)
+    member.send = AsyncMock()
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_dm_enabled=True,
+            welcome_dm_include_rules=True,
+            rules_delivery_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    await service.handle_member_join(member)
+
+    # Must be exactly 1 DM, zero duplicate rules
+    assert member.send.call_count == 1
+    recent = service.get_recent_activity()
+    rules_events = [a for a in recent if a["event_type"] == "RULES_SENT"]
+    assert len(rules_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_regression_both_disabled_zero_rules():
+    """4. Both disabled = zero rules sent."""
+    GreetingService.clear_recent_events()
+    mock_bot = make_mock_bot()
+    service = GreetingService(mock_bot)
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=1010104)
+    member.send = AsyncMock()
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_dm_enabled=False,
+            welcome_dm_include_rules=False,
+            rules_delivery_enabled=False,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    await service.handle_member_join(member)
+
+    assert member.send.call_count == 0
+    recent = service.get_recent_activity()
+    dm_events = [a for a in recent if "DM" in a["event_type"] or "RULES" in a["event_type"]]
+    assert len(dm_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_regression_reconnect_restart_does_not_duplicate():
+    """5. Reconnect/restart does not duplicate member join execution."""
+    GreetingService.clear_recent_events()
+    mock_bot = make_mock_bot()
+    service1 = GreetingService(mock_bot)
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=1010105)
+    member.send = AsyncMock()
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_dm_enabled=True,
+            welcome_dm_include_rules=True,
+            rules_delivery_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    # Initial join before reconnect
+    await service1.handle_member_join(member)
+    assert member.send.call_count == 1
+
+    # Simulate bot reconnect / new GreetingService instance created
+    service2 = GreetingService(mock_bot)
+    await service2.handle_member_join(member)
+
+    # Still exactly 1 send call across re-instantiation / reconnect
+    assert member.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_regression_raw_member_join_and_member_join_does_not_duplicate():
+    """6. raw_member_join and member_join does not duplicate."""
+    GreetingService.clear_recent_events()
+    from app.bot.cogs.greetings import GreetingsCog
+
+    mock_bot = make_mock_bot()
+    cog = GreetingsCog(mock_bot)
+    guild = make_mock_guild()
+    member = make_mock_member(guild=guild, user_id=1010106)
+    member.send = AsyncMock()
+    guild.get_member = MagicMock(return_value=member)
+    mock_bot.get_guild.return_value = guild
+    mock_bot.guild = guild
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            welcome_dm_enabled=True,
+            welcome_dm_include_rules=True,
+            rules_delivery_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    payload = MockRawMemberJoinPayload(guild_id=GUILD_ID, user_id=1010106, member=member)
+
+    # 1. Fire on_member_join
+    await cog.on_member_join(member)
+    assert member.send.call_count == 1
+
+    # 2. Fire on_raw_member_join right after (e.g. gateway re-dispatch)
+    await cog.on_raw_member_join(payload)
+    assert member.send.call_count == 1
+
 
 
 

@@ -485,6 +485,7 @@ export interface ServerGreetingSettings {
 
   // Welcome DM
   welcome_dm_enabled?: boolean;
+  welcome_dm_include_rules?: boolean;
   welcome_dm_title?: string | null;
   welcome_dm_description?: string | null;
   welcome_dm_footer?: string | null;
