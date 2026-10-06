@@ -2856,6 +2856,22 @@ class FreeGameOfferRepo:
             await session.flush()
 
     @staticmethod
+    async def count_total(session: AsyncSession) -> int:
+        result = await session.execute(select(func.count(FreeGameOfferModel.id)))
+        return result.scalar() or 0
+
+    @staticmethod
+    async def count_active(session: AsyncSession) -> int:
+        now = datetime.utcnow()
+        result = await session.execute(
+            select(func.count(FreeGameOfferModel.id)).where(
+                FreeGameOfferModel.status == "ACTIVE",
+                or_(FreeGameOfferModel.ends_at.is_(None), FreeGameOfferModel.ends_at > now),
+            )
+        )
+        return result.scalar() or 0
+
+    @staticmethod
     async def mark_expired(session: AsyncSession, offer_id: int) -> None:
         result = await session.execute(
             select(FreeGameOfferModel).where(FreeGameOfferModel.id == offer_id)
@@ -2966,5 +2982,15 @@ class FreeGameNotificationRepo:
         stmt = stmt.where(FreeGameNotificationModel.status == "delivered")
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def count_delivered(session: AsyncSession) -> int:
+        """Count total delivered notifications."""
+        result = await session.execute(
+            select(func.count(FreeGameNotificationModel.id)).where(
+                FreeGameNotificationModel.status == "delivered"
+            )
+        )
+        return result.scalar() or 0
 
 

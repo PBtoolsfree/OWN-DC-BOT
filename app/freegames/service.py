@@ -514,3 +514,52 @@ class FreeGameService:
             "active_offers_count": len(active_offers),
             "sources": source_stats,
         }
+
+    async def get_sources_health(self) -> List[Dict[str, Any]]:
+        """Retrieve health and operational metrics for all registered sources."""
+        session = await get_session_direct()
+        try:
+            db_sources = await FreeGameSourceRepo.get_all(session)
+            db_map = {s.source_name: s for s in db_sources}
+            res = []
+            for src in get_all_sources():
+                entry = {
+                    "source_name": src.name,
+                    "category": src.category,
+                    "status": "HEALTHY",
+                    "offer_count": 0,
+                    "response_latency_ms": None,
+                    "last_checked_at": None,
+                    "consecutive_failures": 0,
+                }
+                if src.name in db_map:
+                    s_row = db_map[src.name]
+                    entry.update(s_row.to_dict())
+                res.append(entry)
+            return res
+        finally:
+            await session.close()
+
+    async def get_active_offers(self, limit: int = 50) -> List[Any]:
+        """Retrieve active free game offers."""
+        session = await get_session_direct()
+        try:
+            return await FreeGameOfferRepo.get_active_offers(session, limit=limit)
+        finally:
+            await session.close()
+
+    async def get_stats(self, guild_id: Optional[int] = None) -> Dict[str, Any]:
+        """Aggregate statistics for Free Games Tracker."""
+        session = await get_session_direct()
+        try:
+            total_offers = await FreeGameOfferRepo.count_total(session)
+            active_offers = await FreeGameOfferRepo.count_active(session)
+            total_notifs = await FreeGameNotificationRepo.count_delivered(session)
+            return {
+                "total_offers": total_offers,
+                "active_offers": active_offers,
+                "total_notifications": total_notifs,
+            }
+        finally:
+            await session.close()
+
