@@ -117,7 +117,7 @@ class PBHeroBot(commands.Bot):
     async def on_connect(self) -> None:
         """Gateway connected handler."""
         latency_val = (self.latency * 1000) if (self.latency is not None and self.latency == self.latency) else 0.0
-        logger.info("Gateway connected to Discord (heartbeat latency: %.1f ms)", latency_val)
+        logger.info("[INFO] Discord gateway reconnecting / connected (heartbeat latency: %.1f ms)", latency_val)
 
     async def on_ready(self) -> None:
         """Called when the bot is connected and ready."""
@@ -190,15 +190,25 @@ class PBHeroBot(commands.Bot):
         """Gateway disconnect handler."""
         from app.runtime_state import BotState, set_bot_state
         close_code = getattr(getattr(self, "ws", None), "close_code", None)
-        logger.warning("Discord bot disconnected from gateway | websocket close/error code: %s", close_code)
+        logger.warning("[WARNING] Discord gateway disconnected | websocket close/error code: %s", close_code)
         if not self.is_closed():
             set_bot_state(BotState.STARTING)
 
     async def on_resumed(self) -> None:
         """Gateway session resume handler."""
         from app.runtime_state import BotState, set_bot_state
-        logger.info("Gateway reconnect success (Discord bot session resumed)")
+        logger.info("[INFO] Discord gateway resumed (session re-established)")
         set_bot_state(BotState.READY)
+        try:
+            await self.change_presence(
+                activity=discord.Activity(
+                    type=discord.ActivityType.watching,
+                    name="PB HERO Server"
+                ),
+                status=discord.Status.online,
+            )
+        except Exception as e:
+            logger.warning("Failed to refresh presence on resume: %s", e)
 
     async def on_message(self, message: discord.Message) -> None:
         """Process messages for policy enforcement."""

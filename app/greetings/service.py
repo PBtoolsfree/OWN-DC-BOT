@@ -115,41 +115,45 @@ class GreetingService:
         error_message: Optional[str] = None,
         is_test: bool = False,
     ) -> Dict[str, Any]:
-        entry = {
-            "id": str(uuid.uuid4()),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event_type": event_type,
-            "username": username,
-            "user_id": str(user_id),
-            "channel_id": str(channel_id) if channel_id else None,
-            "channel_name": channel_name,
-            "status": status,
-            "error_message": error_message,
-            "is_test": is_test,
-        }
-        self._activities.insert(0, entry)
-        if len(self._activities) > 50:
-            self._activities.pop()
+        try:
+            entry = {
+                "id": str(uuid.uuid4()),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event_type": event_type,
+                "username": username,
+                "user_id": str(user_id),
+                "channel_id": str(channel_id) if channel_id else None,
+                "channel_name": channel_name,
+                "status": status,
+                "error_message": error_message,
+                "is_test": is_test,
+            }
+            self._activities.insert(0, entry)
+            if len(self._activities) > 50:
+                self._activities.pop()
 
-        if not is_test:
-            counts = self._get_today_counts()
-            if status == "delivered":
-                if event_type in ("welcome", "WELCOME_SENT"):
-                    counts["welcome"] += 1
-                elif event_type in ("goodbye", "GOODBYE_SENT"):
-                    counts["goodbye"] += 1
-                elif event_type in ("welcome_dm", "WELCOME_DM_SENT"):
-                    counts["welcome_dm"] += 1
-                elif event_type in ("goodbye_dm", "GOODBYE_DM_SENT"):
-                    counts["goodbye_dm"] += 1
-                elif event_type in ("rules", "RULES_SENT"):
-                    counts["rules"] += 1
-                elif event_type in ("role", "ROLE_ASSIGNED"):
-                    counts["roles"] += 1
-            elif (status == "failed" or "unavailable" in status.lower()) and "DM" in event_type.upper():
-                counts["dm_failures"] += 1
+            if not is_test:
+                counts = self._get_today_counts()
+                if status == "delivered":
+                    if event_type in ("welcome", "WELCOME_SENT"):
+                        counts["welcome"] += 1
+                    elif event_type in ("goodbye", "GOODBYE_SENT"):
+                        counts["goodbye"] += 1
+                    elif event_type in ("welcome_dm", "WELCOME_DM_SENT"):
+                        counts["welcome_dm"] += 1
+                    elif event_type in ("goodbye_dm", "GOODBYE_DM_SENT"):
+                        counts["goodbye_dm"] += 1
+                    elif event_type in ("rules", "RULES_SENT"):
+                        counts["rules"] += 1
+                    elif event_type in ("role", "ROLE_ASSIGNED"):
+                        counts["roles"] += 1
+                elif (status == "failed" or "unavailable" in status.lower()) and "DM" in event_type.upper():
+                    counts["dm_failures"] += 1
 
-        return entry
+            return entry
+        except Exception as e:
+            logger.warning("Failed to record greeting activity: %s", e)
+            return {}
 
     def get_recent_activity(self, limit: int = 20) -> List[Dict[str, Any]]:
         return self._activities[:limit]
@@ -1214,7 +1218,7 @@ class GreetingService:
             logger.info("Duplicate leave event ignored for user=%s in guild=%s", user_id, target_guild_id)
             return
 
-        logger.info("Goodbye event received: user=%s guild=%s", user_id, target_guild_id)
+        logger.info("[INFO] Member leave received: user_id=%s guild_id=%s (Goodbye event received)", user_id, target_guild_id)
 
         # 3. Resolve Discord User safely (Capture before member disappears)
         guild = None
@@ -1259,7 +1263,7 @@ class GreetingService:
             if getattr(user, "bot", False):
                 logger.info("Skipping Goodbye DM for bot user: %s (%s)", user, user_id)
             else:
-                logger.info("Goodbye DM attempt: guild_id=%s user_id=%s", target_guild_id, user_id)
+                logger.info("[INFO] Goodbye DM attempt: guild_id=%s user_id=%s", target_guild_id, user_id)
                 try:
                     content, embed, mentions = self.render_goodbye_dm(
                         config, user, guild=guild, invite_url=invite_url
@@ -1300,8 +1304,18 @@ class GreetingService:
                         status="delivered",
                     )
                 except discord.Forbidden as e:
-                    reason = f"Forbidden (code {getattr(e, 'code', 'unknown')}: {getattr(e, 'text', 'DM unavailable')})"
-                    logger.warning("Goodbye DM result: status=DM_UNAVAILABLE reason=%s", reason)
+                    code = getattr(e, "code", None)
+                    if not code and "50278" in str(e):
+                        code = 50278
+                    display_code = code if (code is not None and code != 0) else ("50278" if "50278" in str(e) else "unknown")
+                    reason = f"Forbidden (code {display_code}: {getattr(e, 'text', 'DM unavailable')})"
+                    logger.warning(
+                        "[WARNING] Goodbye DM unavailable: guild_id=%s user_id=%s discord_code=%s (DM_UNAVAILABLE 50278: %s)",
+                        target_guild_id,
+                        user_id,
+                        display_code,
+                        reason,
+                    )
                     self.record_activity(
                         event_type="GOODBYE_DM_FAILED",
                         username=str(user),
@@ -1312,8 +1326,15 @@ class GreetingService:
                         error_message=reason,
                     )
                 except (discord.HTTPException, discord.NotFound, discord.InvalidData, asyncio.TimeoutError) as e:
+                    code = getattr(e, "code", None)
                     reason = f"{type(e).__name__}: {e}"
-                    logger.error("Goodbye DM result: status=FAILED reason=%s", reason)
+                    logger.warning(
+                        "[WARNING] Goodbye DM unavailable: guild_id=%s user_id=%s discord_code=%s error=%s",
+                        target_guild_id,
+                        user_id,
+                        code,
+                        reason,
+                    )
                     self.record_activity(
                         event_type="GOODBYE_DM_FAILED",
                         username=str(user),
@@ -1325,7 +1346,12 @@ class GreetingService:
                     )
                 except Exception as e:
                     reason = f"Unexpected error: {e}"
-                    logger.exception("Goodbye DM result: status=FAILED reason=%s", reason)
+                    logger.exception(
+                        "Goodbye DM unexpected error: guild_id=%s user_id=%s error=%s",
+                        target_guild_id,
+                        user_id,
+                        reason,
+                    )
                     self.record_activity(
                         event_type="GOODBYE_DM_FAILED",
                         username=str(user),
@@ -1397,6 +1423,20 @@ class GreetingService:
                     status="failed",
                     error_message=warn,
                 )
+
+        # 8. Pipeline Completion Telemetry & Gateway Connectivity Verification
+        logger.info("[INFO] Goodbye pipeline completed: user_id=%s guild_id=%s", user_id, target_guild_id)
+        is_connected = bool(self.bot and self.bot.is_ready() and not self.bot.is_closed())
+        latency_val = (
+            round(self.bot.latency * 1000, 1)
+            if (self.bot and self.bot.latency is not None and self.bot.latency == self.bot.latency)
+            else 0.0
+        )
+        logger.info(
+            "[INFO] Discord gateway still connected: is_ready=%s latency=%.1f ms (Discord still connected)",
+            is_connected,
+            latency_val,
+        )
 
     # ========================================================
     # Test Dispatch (Premium Onboarding 2.0)

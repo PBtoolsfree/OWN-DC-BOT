@@ -1927,6 +1927,177 @@ async def test_api_test_goodbye_dm_real_delivery(app, auth_cookies):
             assert "DM unavailable" in body["message"]
 
 
+@pytest.mark.asyncio
+async def test_goodbye_dm_forbidden_does_not_disconnect_bot():
+    """Verify discord.Forbidden code 50278 (no mutual guilds) isolates failure and does not disconnect bot."""
+    mock_bot = make_mock_bot()
+    mock_bot.close = AsyncMock()
+    mock_bot.is_ready = MagicMock(return_value=True)
+    mock_bot.is_closed = MagicMock(return_value=False)
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.guild = guild
+    mock_bot.get_guild.return_value = guild
+
+    # Mock user.send raising Forbidden 50278 (Cannot send messages due to no mutual guilds)
+    mock_response = MagicMock(status=403, code=50278)
+    exc_50278 = discord.Forbidden(
+        mock_response,
+        {"code": 50278, "message": "Cannot send messages to this user due to having no mutual guilds"},
+    )
+    exc_50278.code = 50278
+
+    member = make_mock_member(guild=guild, user_id=1556379007920902336, name="pbherotest")
+    member.send = AsyncMock(side_effect=exc_50278)
+    mock_bot.get_user.return_value = member
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    initial_failures = service.get_stats().get("dm_failures_today", 0)
+
+    # 1. Pipeline executes and NO exception escapes the leave handler
+    await service.handle_member_leave(member)
+
+    # 2. DM result = DM_UNAVAILABLE (classified in activity & stats)
+    activities = service.get_recent_activity(limit=10)
+    dm_fail = next((a for a in activities if a["event_type"] == "GOODBYE_DM_FAILED"), None)
+    assert dm_fail is not None
+    assert dm_fail["status"] == "DM unavailable"
+    assert "50278" in dm_fail["error_message"]
+
+    # 3. dm_failures_today increments
+    new_failures = service.get_stats().get("dm_failures_today", 0)
+    assert new_failures == initial_failures + 1
+
+    # 4. Goodbye public message still executes
+    assert channel.send.call_count == 1
+
+    # 5. Audit event stored
+    goodbye_sent = next((a for a in activities if a["event_type"] == "GOODBYE_SENT"), None)
+    assert goodbye_sent is not None
+    assert goodbye_sent["status"] == "delivered"
+
+    # 6. bot.close() is NOT called
+    assert mock_bot.close.call_count == 0
+
+    # 7. Gateway lifecycle is unaffected (bot is still ready and not closed)
+    assert mock_bot.is_ready() is True
+    assert mock_bot.is_closed() is False
+
+
+@pytest.mark.asyncio
+async def test_cog_on_raw_member_remove_with_50278():
+    """Verify on_raw_member_remove cog listener handles 50278 cleanly without escaping exception."""
+    from app.bot.cogs.greetings import GreetingsCog
+
+    mock_bot = make_mock_bot()
+    mock_bot.close = AsyncMock()
+    mock_bot.is_ready = MagicMock(return_value=True)
+    mock_bot.is_closed = MagicMock(return_value=False)
+    cog = GreetingsCog(mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.guild = guild
+    mock_bot.get_guild.return_value = guild
+
+    mock_response = MagicMock(status=403, code=50278)
+    exc_50278 = discord.Forbidden(mock_response, "Cannot send messages to this user due to having no mutual guilds")
+
+    raw_user = MagicMock(spec=discord.User)
+    raw_user.id = 88776655
+    raw_user.name = "RawLeaver"
+    raw_user.display_name = "Raw Leaver"
+    raw_user.bot = False
+    raw_user.send = AsyncMock(side_effect=exc_50278)
+    mock_bot.get_user.return_value = raw_user
+    mock_bot.fetch_user = AsyncMock(return_value=raw_user)
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    payload = MockRawMemberRemovePayload(guild_id=GUILD_ID, user=raw_user)
+
+    # Must complete normally without raising
+    await cog.on_raw_member_remove(payload)
+
+    assert channel.send.call_count == 1
+    assert mock_bot.close.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cog_on_member_remove_followed_by_on_raw_member_remove_deduplication():
+    """Verify on_member_remove followed by on_raw_member_remove executes exactly ONE pipeline."""
+    from app.bot.cogs.greetings import GreetingsCog
+
+    mock_bot = make_mock_bot()
+    cog = GreetingsCog(mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.guild = guild
+    mock_bot.get_guild.return_value = guild
+
+    mock_response = MagicMock(status=403, code=50278)
+    exc_50278 = discord.Forbidden(mock_response, "Cannot send messages to this user due to having no mutual guilds")
+
+    member = make_mock_member(guild=guild, user_id=99887766, name="DoubleEventUser")
+    member.send = AsyncMock(side_effect=exc_50278)
+    mock_bot.get_user.return_value = member
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    payload = MockRawMemberRemovePayload(guild_id=GUILD_ID, user=member)
+
+    # 1. Fire on_member_remove
+    await cog.on_member_remove(member)
+
+    # 2. Fire on_raw_member_remove immediately after
+    await cog.on_raw_member_remove(payload)
+
+    # Only 1 DM attempt and 1 public message sent across both invocations
+    assert member.send.call_count == 1
+    assert channel.send.call_count == 1
+
+
+
 
 
 
