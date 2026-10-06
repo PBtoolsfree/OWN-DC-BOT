@@ -52,6 +52,7 @@ def upgrade() -> None:
             ("goodbye_dm_banner_url", sa.Column("goodbye_dm_banner_url", sa.String(1024), nullable=True)),
             ("goodbye_dm_banner_mode", sa.Column("goodbye_dm_banner_mode", sa.String(32), server_default="none", nullable=False)),
             ("goodbye_dm_accent_color", sa.Column("goodbye_dm_accent_color", sa.String(16), server_default="#FEE75C", nullable=False)),
+            ("goodbye_dm_buttons_json", sa.Column("goodbye_dm_buttons_json", sa.Text(), nullable=True)),
             ("goodbye_dm_author_text", sa.Column("goodbye_dm_author_text", sa.String(256), nullable=True)),
             ("goodbye_dm_author_icon_url", sa.Column("goodbye_dm_author_icon_url", sa.String(1024), nullable=True)),
         ]
@@ -77,7 +78,7 @@ def downgrade() -> None:
             "welcome_dm_banner_url", "welcome_dm_banner_mode", "welcome_dm_accent_color",
             "welcome_dm_buttons_json", "welcome_dm_author_text", "welcome_dm_author_icon_url",
             "goodbye_dm_banner_url", "goodbye_dm_banner_mode", "goodbye_dm_accent_color",
-            "goodbye_dm_author_text", "goodbye_dm_author_icon_url",
+            "goodbye_dm_buttons_json", "goodbye_dm_author_text", "goodbye_dm_author_icon_url",
         ]
         for col_name in columns_to_drop:
             if col_name in existing_cols:

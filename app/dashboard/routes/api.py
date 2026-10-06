@@ -3170,6 +3170,7 @@ def _serialize_greeting_settings(row: ServerGreetingSettings) -> Dict[str, Any]:
         "goodbye_dm_banner_url": row.goodbye_dm_banner_url,
         "goodbye_dm_banner_mode": getattr(row, "goodbye_dm_banner_mode", "none") or "none",
         "goodbye_dm_accent_color": getattr(row, "goodbye_dm_accent_color", "#FEE75C") or "#FEE75C",
+        "goodbye_dm_buttons_json": getattr(row, "goodbye_dm_buttons_json", None),
         "goodbye_dm_author_text": row.goodbye_dm_author_text,
         "goodbye_dm_author_icon_url": row.goodbye_dm_author_icon_url,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -3344,6 +3345,106 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
+    # Normalize aliases and camelCase keys
+    alias_map = {
+        "theme": "welcome_theme",
+        "welcomeTheme": "welcome_theme",
+        "goodbyeTheme": "goodbye_theme",
+        "accent_color": "welcome_accent_color",
+        "accentColor": "welcome_accent_color",
+        "welcomeAccentColor": "welcome_accent_color",
+        "goodbyeAccentColor": "goodbye_accent_color",
+        "welcomeDmAccentColor": "welcome_dm_accent_color",
+        "goodbyeDmAccentColor": "goodbye_dm_accent_color",
+        "banner_url": "welcome_banner_url",
+        "bannerUrl": "welcome_banner_url",
+        "welcomeBannerUrl": "welcome_banner_url",
+        "goodbyeBannerUrl": "goodbye_banner_url",
+        "welcomeDmBannerUrl": "welcome_dm_banner_url",
+        "goodbyeDmBannerUrl": "goodbye_dm_banner_url",
+        "banner_mode": "welcome_banner_mode",
+        "bannerMode": "welcome_banner_mode",
+        "welcomeBannerMode": "welcome_banner_mode",
+        "goodbyeBannerMode": "goodbye_banner_mode",
+        "welcomeDmBannerMode": "welcome_dm_banner_mode",
+        "goodbyeDmBannerMode": "goodbye_dm_banner_mode",
+        "buttons": "welcome_buttons_json",
+        "buttons_json": "welcome_buttons_json",
+        "welcomeButtons": "welcome_buttons_json",
+        "welcomeButtonsJson": "welcome_buttons_json",
+        "goodbyeButtons": "goodbye_buttons_json",
+        "goodbyeButtonsJson": "goodbye_buttons_json",
+        "welcomeDmButtons": "welcome_dm_buttons_json",
+        "welcomeDmButtonsJson": "welcome_dm_buttons_json",
+        "goodbyeDmButtons": "goodbye_dm_buttons_json",
+        "goodbyeDmButtonsJson": "goodbye_dm_buttons_json",
+        "title": "welcome_title",
+        "title_template": "welcome_title",
+        "welcomeTitle": "welcome_title",
+        "description": "welcome_description",
+        "description_template": "welcome_description",
+        "welcomeDescription": "welcome_description",
+        "welcomeFooter": "welcome_footer",
+        "goodbyeTitle": "goodbye_title",
+        "goodbyeDescription": "goodbye_description",
+        "goodbyeFooter": "goodbye_footer",
+        "welcomeEnabled": "welcome_enabled",
+        "welcomeChannelId": "welcome_channel_id",
+        "welcomeMentionUser": "welcome_mention_user",
+        "welcomeShowAvatar": "welcome_show_avatar",
+        "welcomeShowServerIcon": "welcome_show_server_icon",
+        "welcomeShowMemberCount": "welcome_show_member_count",
+        "welcomeShowTimestamp": "welcome_show_timestamp",
+        "welcomeUseEmbed": "welcome_use_embed",
+        "welcomeShowInviter": "welcome_show_inviter",
+        "welcomeShowInviteCode": "welcome_show_invite_code",
+        "welcomeAuthorText": "welcome_author_text",
+        "welcomeAuthorIconUrl": "welcome_author_icon_url",
+        "goodbyeEnabled": "goodbye_enabled",
+        "goodbyeChannelId": "goodbye_channel_id",
+        "goodbyeMentionUser": "goodbye_mention_user",
+        "goodbyeShowAvatar": "goodbye_show_avatar",
+        "goodbyeShowServerIcon": "goodbye_show_server_icon",
+        "goodbyeShowMemberCount": "goodbye_show_member_count",
+        "goodbyeShowTimestamp": "goodbye_show_timestamp",
+        "goodbyeUseEmbed": "goodbye_use_embed",
+        "goodbyeAuthorText": "goodbye_author_text",
+        "goodbyeAuthorIconUrl": "goodbye_author_icon_url",
+        "allowMassMentions": "allow_mass_mentions",
+        "rulesDeliveryEnabled": "rules_delivery_enabled",
+        "rulesSource": "rules_source",
+        "rulesChannelId": "rules_channel_id",
+        "rulesTitle": "rules_title",
+        "rulesDescription": "rules_description",
+        "rulesFooter": "rules_footer",
+        "rulesButtonText": "rules_button_text",
+        "autoRoleEnabled": "auto_role_enabled",
+        "autoRoleId": "auto_role_id",
+        "welcomeDmEnabled": "welcome_dm_enabled",
+        "welcomeDmTitle": "welcome_dm_title",
+        "welcomeDmDescription": "welcome_dm_description",
+        "welcomeDmFooter": "welcome_dm_footer",
+        "welcomeDmUseEmbed": "welcome_dm_use_embed",
+        "welcomeDmShowAvatar": "welcome_dm_show_avatar",
+        "welcomeDmShowServerIcon": "welcome_dm_show_server_icon",
+        "welcomeDmShowTimestamp": "welcome_dm_show_timestamp",
+        "welcomeDmAuthorText": "welcome_dm_author_text",
+        "welcomeDmAuthorIconUrl": "welcome_dm_author_icon_url",
+        "goodbyeDmEnabled": "goodbye_dm_enabled",
+        "goodbyeDmTitle": "goodbye_dm_title",
+        "goodbyeDmDescription": "goodbye_dm_description",
+        "goodbyeDmFooter": "goodbye_dm_footer",
+        "goodbyeDmUseEmbed": "goodbye_dm_use_embed",
+        "goodbyeDmShowAvatar": "goodbye_dm_show_avatar",
+        "goodbyeDmShowServerIcon": "goodbye_dm_show_server_icon",
+        "goodbyeDmShowTimestamp": "goodbye_dm_show_timestamp",
+        "goodbyeDmAuthorText": "goodbye_dm_author_text",
+        "goodbyeDmAuthorIconUrl": "goodbye_dm_author_icon_url",
+    }
+    for alias_key, target_key in alias_map.items():
+        if alias_key in data and target_key not in data:
+            data[target_key] = data[alias_key]
+
     from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
     guild = bot.guild if (bot and bot.is_ready()) else None
@@ -3383,7 +3484,7 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
         # 2. Discord character length limit validation
         lim_errors = validate_discord_limits(data)
         if lim_errors:
-            raise HTTPException(status_code=400, detail="; ".join(lim_errors))
+            raise HTTPException(status_code=422, detail="; ".join(lim_errors))
 
         # 3. URL safety validation
         url_fields = [
@@ -3395,7 +3496,7 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
                 u_str = str(data[uf]).strip()
                 if u_str and not is_safe_url(u_str):
                     raise HTTPException(
-                        status_code=400,
+                        status_code=422,
                         detail=f"Invalid or unsafe URL for {uf}. Only HTTPS and safe Discord URLs are permitted."
                     )
 
@@ -3405,9 +3506,10 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
         ]
         for bf in btn_fields:
             if bf in data and data[bf] is not None:
-                valid_btns, btn_err, _ = validate_buttons(data[bf])
+                valid_btns, btn_err, cleaned_btns = validate_buttons(data[bf])
                 if not valid_btns:
-                    raise HTTPException(status_code=400, detail=f"Invalid buttons in {bf}: {btn_err}")
+                    raise HTTPException(status_code=422, detail=f"Invalid buttons in {bf}: {btn_err}")
+                data[bf] = cleaned_btns
 
         # 5. Accent color validation
         hex_re = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
@@ -3417,17 +3519,23 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
         for cf in color_fields:
             if cf in data and data[cf]:
                 c_val = str(data[cf]).strip()
+                if not c_val.startswith("#") and re.match(r"^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", c_val):
+                    c_val = f"#{c_val}"
+                    data[cf] = c_val
                 if not hex_re.match(c_val):
-                    raise HTTPException(status_code=400, detail=f"Invalid hex color '{c_val}' in {cf}. Must be #RGB or #RRGGBB.")
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Invalid hex color '{c_val}' in {cf}. Must be #RGB or #RRGGBB."
+                    )
 
         # 6. Banner mode and theme validation
         for mf in ["welcome_banner_mode", "goodbye_banner_mode", "welcome_dm_banner_mode", "goodbye_dm_banner_mode"]:
             if mf in data and data[mf] not in ("none", "server", "custom", None):
-                raise HTTPException(status_code=400, detail=f"Invalid banner mode for {mf}. Must be 'none', 'server', or 'custom'.")
+                raise HTTPException(status_code=422, detail=f"Invalid banner mode for {mf}. Must be 'none', 'server', or 'custom'.")
 
         for tf in ["welcome_theme", "goodbye_theme"]:
             if tf in data and data[tf] not in THEME_PRESETS and data[tf] is not None:
-                raise HTTPException(status_code=400, detail=f"Invalid theme preset '{data[tf]}' for {tf}.")
+                raise HTTPException(status_code=422, detail=f"Invalid theme preset '{data[tf]}' for {tf}.")
 
         # 7. Mass mentions safety check
         allow_mass = data.get("allow_mass_mentions", existing.allow_mass_mentions)
@@ -3467,7 +3575,10 @@ async def update_greeting_settings(request: Request, username: str = Depends(req
             if key in data:
                 val = data[key]
                 if key in ("welcome_channel_id", "goodbye_channel_id", "rules_channel_id", "auto_role_id"):
-                    val = int(val) if val else None
+                    try:
+                        val = int(val) if val else None
+                    except (ValueError, TypeError):
+                        raise HTTPException(status_code=422, detail=f"Invalid ID '{val}' for {key}. Must be a valid numeric Discord snowflake.")
                 elif key in ("welcome_buttons_json", "goodbye_buttons_json", "welcome_dm_buttons_json", "goodbye_dm_buttons_json"):
                     if val is not None and not isinstance(val, str):
                         import json

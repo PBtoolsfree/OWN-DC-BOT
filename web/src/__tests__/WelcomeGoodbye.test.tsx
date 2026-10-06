@@ -412,7 +412,7 @@ describe('Welcome & Goodbye Page - Part 21 Required 16 UI Tests', () => {
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Database error occurred');
+      expect(toast.error).toHaveBeenCalledWith('Failed to save settings: Database error occurred');
     });
   });
 
@@ -495,7 +495,194 @@ describe('Welcome & Goodbye Page - Part 21 Required 16 UI Tests', () => {
     expect(screen.getByDisplayValue('Official PB Gaming Hub')).toBeInTheDocument();
     expect(screen.getByText('Official PB Gaming Hub')).toBeInTheDocument();
   });
+
+  it('23. Save All Settings button executes updateGreetings API call', async () => {
+    vi.mocked(greetingsApi.updateGreetings).mockResolvedValueOnce({
+      success: true,
+      message: 'Greeting settings updated successfully',
+      settings: mockGreetingsData.settings,
+    });
+
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    fireEvent.change(titleInput, { target: { value: 'New Custom Title' } });
+
+    const saveAllBtn = await screen.findByRole('button', { name: /Save All Settings/i });
+    fireEvent.click(saveAllBtn);
+
+    await waitFor(() => {
+      expect(greetingsApi.updateGreetings).toHaveBeenCalled();
+    });
+  });
+
+  it('24. Successful save updates dirty state and displays success toast', async () => {
+    vi.mocked(greetingsApi.updateGreetings).mockResolvedValueOnce({
+      success: true,
+      message: 'Greeting settings updated successfully',
+      settings: {
+        ...mockGreetingsData.settings,
+        welcome_theme: 'gaming',
+        welcome_accent_color: '#10B981',
+      },
+    });
+
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const gamingBtn = screen.getByRole('button', { name: /Gaming/i });
+    fireEvent.click(gamingBtn);
+    const confirmBtn = await screen.findByRole('button', { name: /Apply Preset/i });
+    fireEvent.click(confirmBtn);
+
+    const saveAllBtn = await screen.findByRole('button', { name: /Save All Settings/i });
+    fireEvent.click(saveAllBtn);
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Settings saved successfully');
+    });
+  });
+
+  it('25. Failed save displays actionable backend error message', async () => {
+    vi.mocked(greetingsApi.updateGreetings).mockRejectedValueOnce(
+      new Error('database transaction lock timeout')
+    );
+
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    fireEvent.change(titleInput, { target: { value: 'Trigger DB Error' } });
+
+    const saveAllBtn = await screen.findByRole('button', { name: /Save All Settings/i });
+    fireEvent.click(saveAllBtn);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Failed to save settings: database transaction lock timeout');
+    });
+  });
+
+  it('26. API 422 validation failure displays exact field detail in toast', async () => {
+    vi.mocked(greetingsApi.updateGreetings).mockRejectedValueOnce({
+      message: "Invalid hex color 'bad' in welcome_accent_color. Must be #RGB or #RRGGBB.",
+      status: 422,
+    });
+
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const colorInput = screen.getByDisplayValue('#5865F2');
+    fireEvent.change(colorInput, { target: { value: 'bad' } });
+
+    const saveAllBtn = await screen.findByRole('button', { name: /Save All Settings/i });
+    fireEvent.click(saveAllBtn);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Failed to save settings: Invalid hex color 'bad' in welcome_accent_color. Must be #RGB or #RRGGBB."
+      );
+    });
+  });
+
+  it('27. API 500 server error displays error message without crashing', async () => {
+    vi.mocked(greetingsApi.updateGreetings).mockRejectedValueOnce({
+      message: 'Internal server error occurred while writing SQLite table',
+      status: 500,
+    });
+
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    fireEvent.change(titleInput, { target: { value: 'Trigger 500' } });
+
+    const saveAllBtn = await screen.findByRole('button', { name: /Save All Settings/i });
+    fireEvent.click(saveAllBtn);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        'Failed to save settings: Internal server error occurred while writing SQLite table'
+      );
+    });
+  });
+
+  it('28. Dirty state banner appears on edit and disappears after successful save', async () => {
+    vi.mocked(greetingsApi.updateGreetings).mockResolvedValueOnce({
+      success: true,
+      message: 'Greeting settings updated successfully',
+      settings: {
+        ...mockGreetingsData.settings,
+        welcome_title: 'Updated Saved Title',
+      },
+    });
+
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    expect(screen.queryByText(/You have unsaved changes in greeting/i)).not.toBeInTheDocument();
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    fireEvent.change(titleInput, { target: { value: 'Updated Saved Title' } });
+
+    expect(await screen.findByText(/You have unsaved changes in greeting/i)).toBeInTheDocument();
+
+    const saveAllBtn = screen.getByRole('button', { name: /Save All Settings/i });
+    fireEvent.click(saveAllBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/You have unsaved changes in greeting/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('29. Theme preset selection persists and syncs with formData', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const gamingBtn = screen.getByRole('button', { name: /Gaming/i });
+    fireEvent.click(gamingBtn);
+
+    const confirmBtn = await screen.findByRole('button', { name: /Apply Preset/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue(/Player \{user_mention\} has entered the arena!/i)).toBeInTheDocument();
+      expect(screen.getByDisplayValue('#10B981')).toBeInTheDocument();
+    });
+  });
+
+  it('30. Button modifications persist across save operations', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const rulesLabelInput = screen.getByDisplayValue('Read Rules');
+    fireEvent.change(rulesLabelInput, { target: { value: 'Server Guidelines' } });
+
+    const saveAllBtn = await screen.findByRole('button', { name: /Save All Settings/i });
+    fireEvent.click(saveAllBtn);
+
+    await waitFor(() => {
+      expect(greetingsApi.updateGreetings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          welcome_buttons_json: expect.arrayContaining([
+            expect.objectContaining({ label: 'Server Guidelines' }),
+          ]),
+        })
+      );
+    });
+  });
+
+  it('31. Live Discord Preview remains synchronized during form edits', async () => {
+    render(<WelcomeGoodbye />);
+    await screen.findByText('WELCOME SYSTEM');
+
+    const titleInput = screen.getByDisplayValue('👋 Welcome to {server_name}!');
+    fireEvent.change(titleInput, { target: { value: 'Live synchronized preview test title' } });
+
+    expect(screen.getByText('Live synchronized preview test title')).toBeInTheDocument();
+  });
 });
+
 
 
 

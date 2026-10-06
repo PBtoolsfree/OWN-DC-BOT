@@ -1219,5 +1219,393 @@ async def test_backend_22_audit_logging(app, auth_cookies):
         await session.close()
 
 
+# ==============================================================================
+# Premium Onboarding 2.0 Persistence & Specification Tests (1 to 20)
+# ==============================================================================
+
+@pytest.mark.asyncio
+async def test_spec_01_save_default_welcome_settings(app, auth_cookies):
+    """1. Save default welcome settings."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={
+                "welcome_theme": "default",
+                "welcome_accent_color": "#5865F2",
+                "welcome_title": DEFAULT_WELCOME_TITLE,
+                "welcome_enabled": True,
+            },
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["settings"]["welcome_theme"] == "default"
+        assert data["settings"]["welcome_accent_color"] == "#5865F2"
+
+
+@pytest.mark.asyncio
+async def test_spec_02_save_gaming_theme(app, auth_cookies):
+    """2. Save Gaming theme."""
+    transport = ASGITransport(app=app)
+    preset = THEME_PRESETS["gaming"]
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={
+                "welcome_theme": "gaming",
+                "welcome_title": preset["welcome_title"],
+                "welcome_description": preset["welcome_description"],
+                "welcome_accent_color": preset["welcome_accent_color"],
+            },
+        )
+        assert res.status_code == 200
+        s = res.json()["settings"]
+        assert s["welcome_theme"] == "gaming"
+        assert s["welcome_accent_color"] == preset["welcome_accent_color"]
+        assert s["welcome_title"] == preset["welcome_title"]
+
+
+@pytest.mark.asyncio
+async def test_spec_03_save_minimal_theme(app, auth_cookies):
+    """3. Save Minimal theme."""
+    transport = ASGITransport(app=app)
+    preset = THEME_PRESETS["minimal"]
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "minimal", "welcome_accent_color": preset["welcome_accent_color"]},
+        )
+        assert res.status_code == 200
+        assert res.json()["settings"]["welcome_theme"] == "minimal"
+
+
+@pytest.mark.asyncio
+async def test_spec_04_save_luxury_theme(app, auth_cookies):
+    """4. Save Luxury theme."""
+    transport = ASGITransport(app=app)
+    preset = THEME_PRESETS["luxury"]
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "luxury", "welcome_accent_color": preset["welcome_accent_color"]},
+        )
+        assert res.status_code == 200
+        assert res.json()["settings"]["welcome_theme"] == "luxury"
+
+
+@pytest.mark.asyncio
+async def test_spec_05_save_neon_theme(app, auth_cookies):
+    """5. Save Neon theme."""
+    transport = ASGITransport(app=app)
+    preset = THEME_PRESETS["neon"]
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "neon", "welcome_accent_color": preset["welcome_accent_color"]},
+        )
+        assert res.status_code == 200
+        assert res.json()["settings"]["welcome_theme"] == "neon"
+
+
+@pytest.mark.asyncio
+async def test_spec_06_save_accent_color(app, auth_cookies):
+    """6. Save accent color (3-digit, 6-digit, and normalized)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Standard 6-digit hex
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_accent_color": "#00FF99"},
+        )
+        assert res.status_code == 200
+        assert res.json()["settings"]["welcome_accent_color"] == "#00FF99"
+
+        # Auto-prefixed hex without #
+        res2 = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_accent_color": "FFAA00"},
+        )
+        assert res2.status_code == 200
+        assert res2.json()["settings"]["welcome_accent_color"] == "#FFAA00"
+
+
+@pytest.mark.asyncio
+async def test_spec_07_save_banner_url(app, auth_cookies):
+    """7. Save banner URL and banner mode."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={
+                "welcome_banner_mode": "custom",
+                "welcome_banner_url": "https://cdn.example.com/welcome-banner.png",
+            },
+        )
+        assert res.status_code == 200
+        s = res.json()["settings"]
+        assert s["welcome_banner_mode"] == "custom"
+        assert s["welcome_banner_url"] == "https://cdn.example.com/welcome-banner.png"
+
+
+@pytest.mark.asyncio
+async def test_spec_08_save_buttons(app, auth_cookies):
+    """8. Save buttons as JSON list or string."""
+    transport = ASGITransport(app=app)
+    buttons = [
+        {"id": "rules", "label": "Read Rules", "emoji": "📜", "url": "{rules_url}", "enabled": True},
+        {"id": "discord", "label": "Join Discord", "emoji": "🎮", "url": "https://discord.gg/pbhero", "enabled": True},
+    ]
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_buttons_json": buttons},
+        )
+        assert res.status_code == 200
+        btns_str = res.json()["settings"]["welcome_buttons_json"]
+        import json
+        parsed = json.loads(btns_str)
+        assert len(parsed) == 2
+        assert parsed[0]["label"] == "Read Rules"
+
+
+@pytest.mark.asyncio
+async def test_spec_09_save_invite_attribution_settings(app, auth_cookies):
+    """9. Save invite attribution settings."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_show_inviter": False, "welcome_show_invite_code": False},
+        )
+        assert res.status_code == 200
+        s = res.json()["settings"]
+        assert s["welcome_show_inviter"] is False
+        assert s["welcome_show_invite_code"] is False
+
+
+@pytest.mark.asyncio
+async def test_spec_10_save_all_settings_together(app, auth_cookies):
+    """10. Save all Premium Onboarding settings together."""
+    transport = ASGITransport(app=app)
+    buttons = [
+        {"id": "rules", "label": "Rules", "emoji": "📜", "url": "{rules_url}", "enabled": True},
+    ]
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={
+                "welcome_theme": "gaming",
+                "welcome_accent_color": "#22C55E",
+                "welcome_banner_mode": "custom",
+                "welcome_banner_url": "https://images.example.com/gaming.gif",
+                "welcome_buttons_json": buttons,
+                "welcome_author_text": "PB Hero Gaming Clan",
+                "welcome_author_icon_url": "https://images.example.com/clan.png",
+                "welcome_show_inviter": True,
+                "welcome_show_invite_code": True,
+            },
+        )
+        assert res.status_code == 200
+        s = res.json()["settings"]
+        assert s["welcome_theme"] == "gaming"
+        assert s["welcome_accent_color"] == "#22C55E"
+        assert s["welcome_author_text"] == "PB Hero Gaming Clan"
+
+
+@pytest.mark.asyncio
+async def test_spec_11_invalid_color(app, auth_cookies):
+    """11. Invalid color returns friendly 422 validation response."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_accent_color": "not-a-color"},
+        )
+        assert res.status_code == 422
+        assert "Invalid hex color" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_spec_12_invalid_url(app, auth_cookies):
+    """12. Invalid URL returns friendly 422 validation response."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_banner_url": "ftp://insecure.site/banner.jpg"},
+        )
+        assert res.status_code == 422
+        assert "Invalid or unsafe URL" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_spec_13_invalid_button_protocol(app, auth_cookies):
+    """13. Invalid button protocol (e.g. javascript:) returns 422."""
+    transport = ASGITransport(app=app)
+    bad_buttons = [
+        {"id": "exploit", "label": "Free Nitro", "url": "javascript:alert('pwn')", "enabled": True},
+    ]
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_buttons_json": bad_buttons},
+        )
+        assert res.status_code == 422
+        assert "Invalid buttons" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_spec_14_authentication_failure(app):
+    """14. Authentication failure returns 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            json={"welcome_theme": "gaming"},
+        )
+        assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_spec_15_database_persistence(app, auth_cookies):
+    """15. Database persistence verifies values written to SQLite."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "luxury", "welcome_accent_color": "#D97706"},
+        )
+
+    session = await get_session_direct()
+    try:
+        row = await ServerGreetingSettingsRepo.get_or_create(session, GUILD_ID)
+        assert row.welcome_theme == "luxury"
+        assert row.welcome_accent_color == "#D97706"
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_spec_16_reload_after_save(app, auth_cookies):
+    """16. Reload after save: GET returns persisted configuration."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "neon", "welcome_accent_color": "#EC4899"},
+        )
+        get_res = await client.get("/api/v1/greetings", cookies=auth_cookies)
+        assert get_res.status_code == 200
+        assert get_res.json()["settings"]["welcome_theme"] == "neon"
+        assert get_res.json()["settings"]["welcome_accent_color"] == "#EC4899"
+
+
+@pytest.mark.asyncio
+async def test_spec_17_existing_configuration_preserved(app, auth_cookies):
+    """17. Existing configuration preserved when partial update is applied."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Save custom goodbye title
+        await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"goodbye_title": "Custom Farewell to {display_name}"},
+        )
+        # Update only welcome theme
+        await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "minimal"},
+        )
+        # Verify goodbye title was not wiped
+        get_res = await client.get("/api/v1/greetings", cookies=auth_cookies)
+        s = get_res.json()["settings"]
+        assert s["welcome_theme"] == "minimal"
+        assert s["goodbye_title"] == "Custom Farewell to {display_name}"
+
+
+@pytest.mark.asyncio
+async def test_spec_18_partial_update(app, auth_cookies):
+    """18. Partial update: support aliases like theme and accent_color."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"theme": "gaming", "accent_color": "#10B981"},
+        )
+        assert res.status_code == 200
+        s = res.json()["settings"]
+        assert s["welcome_theme"] == "gaming"
+        assert s["welcome_accent_color"] == "#10B981"
+
+
+@pytest.mark.asyncio
+async def test_spec_19_transaction_rollback(app, auth_cookies):
+    """19. Transaction rollback: invalid request aborts without partial state corruption."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # Set a known baseline
+        await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "default", "welcome_accent_color": "#5865F2"},
+        )
+        # Send a request with both a valid theme and an invalid variable
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "neon", "welcome_description": "Bad var {malicious_token}"},
+        )
+        assert res.status_code == 422
+        # Verify baseline was not modified
+        get_res = await client.get("/api/v1/greetings", cookies=auth_cookies)
+        assert get_res.json()["settings"]["welcome_theme"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_spec_20_api_response_schema(app, auth_cookies):
+    """20. API response schema includes all required fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.put(
+            "/api/v1/greetings",
+            cookies=auth_cookies,
+            json={"welcome_theme": "gaming"},
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert "success" in body
+        assert "message" in body
+        assert "settings" in body
+        s = body["settings"]
+        required_fields = [
+            "welcome_theme", "welcome_accent_color", "welcome_banner_url", "welcome_banner_mode",
+            "welcome_buttons_json", "welcome_show_inviter", "welcome_show_invite_code",
+            "goodbye_theme", "goodbye_accent_color", "goodbye_buttons_json",
+            "welcome_dm_accent_color", "goodbye_dm_accent_color", "goodbye_dm_buttons_json",
+        ]
+        for f in required_fields:
+            assert f in s, f"Field '{f}' missing from response settings"
+
+
+
 
 

@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { ServerInviteSettings, GreetingChannelOption } from '../../types';
 import { greetingsApi } from '../../api/greetings';
 import { toast } from '../../hooks/useToast';
@@ -59,7 +59,7 @@ export const InviteManagerCard: React.FC<InviteManagerCardProps> = ({
       }
       onRefresh();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to generate invite');
+      toast.error(err.message || err.detail || err.response?.data?.detail || 'Failed to generate invite');
     } finally {
       setIsActionLoading(false);
     }
@@ -78,7 +78,7 @@ export const InviteManagerCard: React.FC<InviteManagerCardProps> = ({
       }
       onRefresh();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Verification request failed');
+      toast.error(err.message || err.detail || err.response?.data?.detail || 'Verification request failed');
     } finally {
       setIsActionLoading(false);
     }
@@ -92,7 +92,7 @@ export const InviteManagerCard: React.FC<InviteManagerCardProps> = ({
       toast.success(`Regenerated new invite: ${res.invite_code}`);
       onRefresh();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Regeneration failed');
+      toast.error(err.message || err.detail || err.response?.data?.detail || 'Regeneration failed');
     } finally {
       setIsActionLoading(false);
     }

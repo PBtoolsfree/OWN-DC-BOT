@@ -612,6 +612,7 @@ class ServerGreetingSettings(Base):
     goodbye_dm_banner_url = Column(String(1024), nullable=True)
     goodbye_dm_banner_mode = Column(String(32), default="none", nullable=False)
     goodbye_dm_accent_color = Column(String(16), default="#FEE75C", nullable=False)
+    goodbye_dm_buttons_json = Column(Text, nullable=True)
     goodbye_dm_author_text = Column(String(256), nullable=True)
     goodbye_dm_author_icon_url = Column(String(1024), nullable=True)
 

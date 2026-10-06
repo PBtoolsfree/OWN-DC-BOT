@@ -5,12 +5,16 @@
 export class ApiError extends Error {
   status: number;
   data: any;
+  detail: string;
+  response?: { data: { detail: string; error?: string } };
 
   constructor(message: string, status: number, data?: any) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.data = data;
+    this.detail = message;
+    this.response = { data: { detail: message, error: message } };
   }
 }
 
@@ -57,17 +61,21 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   if (!response.ok) {
     let errorDetail = 'An unexpected error occurred.';
+    let parsedData: any = null;
     try {
       const errJson = await response.json();
+      parsedData = errJson;
       if (errJson.detail) {
         errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+      } else if (errJson.message) {
+        errorDetail = errJson.message;
       } else if (errJson.error) {
         errorDetail = errJson.error;
       }
     } catch (_) {
       errorDetail = `Request failed with status ${response.status}`;
     }
-    throw new ApiError(errorDetail, response.status);
+    throw new ApiError(errorDetail, response.status, parsedData);
   }
 
   // Handle 204 or empty response

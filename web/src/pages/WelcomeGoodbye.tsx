@@ -167,7 +167,7 @@ export const WelcomeGoodbye: React.FC = () => {
       setChannels(chanRes);
       setRoles(roleRes);
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to load greeting configuration');
+      toast.error(err.message || err.detail || err.response?.data?.detail || 'Failed to load greeting configuration');
     } finally {
       setLoading(false);
     }
@@ -254,13 +254,23 @@ export const WelcomeGoodbye: React.FC = () => {
     }
     setSaving(true);
     try {
-      const res = await greetingsApi.updateGreetings(formData);
+      const payload: ServerGreetingSettings = {
+        ...formData,
+        welcome_buttons_json: getWelcomeButtons(),
+      };
+      const res = await greetingsApi.updateGreetings(payload);
       setFormData(res.settings);
       setInitialData(res.settings);
-      toast.success('Greetings settings saved successfully!');
-      loadData();
+      if (data) {
+        setData({ ...data, settings: res.settings });
+      }
+      toast.success('Settings saved successfully');
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to save settings');
+      const rawMsg = err.message || err.detail || err.response?.data?.detail || 'Failed to save settings';
+      const cleanMsg = rawMsg.startsWith('Failed to save settings')
+        ? rawMsg
+        : `Failed to save settings: ${rawMsg}`;
+      toast.error(cleanMsg);
     } finally {
       setSaving(false);
     }
@@ -273,7 +283,7 @@ export const WelcomeGoodbye: React.FC = () => {
       toast.success(res.message);
       loadData();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Test welcome message failed');
+      toast.error(err.message || err.detail || err.response?.data?.detail || 'Test welcome message failed');
     } finally {
       setTestingWelcome(false);
     }
@@ -286,7 +296,7 @@ export const WelcomeGoodbye: React.FC = () => {
       toast.success(res.message);
       loadData();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Test goodbye message failed');
+      toast.error(err.message || err.detail || err.response?.data?.detail || 'Test goodbye message failed');
     } finally {
       setTestingGoodbye(false);
     }
@@ -298,7 +308,7 @@ export const WelcomeGoodbye: React.FC = () => {
       toast.success(res.message);
       loadData();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Test DM failed');
+      toast.error(err.message || err.detail || err.response?.data?.detail || 'Test DM failed');
     }
   };
 
@@ -310,7 +320,7 @@ export const WelcomeGoodbye: React.FC = () => {
       toast.success(res.message);
       loadData();
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || `Failed to reset ${systemType}`);
+      toast.error(err.message || err.detail || err.response?.data?.detail || `Failed to reset ${systemType}`);
     }
   };
 
