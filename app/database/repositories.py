@@ -24,6 +24,10 @@ from app.database.models import (
     EventStatus,
     EventType,
     ExemptionRule,
+    FreeGameNotificationModel,
+    FreeGameOfferModel,
+    FreeGameSettings,
+    FreeGameSourceModel,
     InviteActivitySettings,
     InviteJoin,
     ModerationAction,
@@ -2657,4 +2661,310 @@ class InviteActivitySettingsRepo:
         row.updated_at = datetime.utcnow()
         await session.flush()
         return row
+
+
+# ─── Free Games & Deals Tracker Repositories ──────────────────────────────────
+
+class FreeGameSettingsRepo:
+    """Repository for Free Games & Deals Tracker configuration."""
+
+    @staticmethod
+    async def get_or_create(session: AsyncSession, guild_id: int) -> FreeGameSettings:
+        result = await session.execute(
+            select(FreeGameSettings).where(FreeGameSettings.guild_id == guild_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            row = FreeGameSettings(
+                guild_id=guild_id,
+                enabled=True,
+                destination_channel_id=None,
+                role_mention_id=None,
+                poll_interval_seconds=900,
+                enabled_sources_json='["epic", "steam", "gog", "google_play", "app_store"]',
+                offer_types_json='["free_to_keep"]',
+                ending_soon_enabled=False,
+                ending_soon_hours=24,
+                post_thumbnail=True,
+                post_description=True,
+                show_price=True,
+                show_expiry=True,
+            )
+            session.add(row)
+            await session.flush()
+        return row
+
+    @staticmethod
+    async def get(session: AsyncSession, guild_id: int) -> Optional[FreeGameSettings]:
+        result = await session.execute(
+            select(FreeGameSettings).where(FreeGameSettings.guild_id == guild_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def update(session: AsyncSession, guild_id: int, **kwargs) -> FreeGameSettings:
+        row = await FreeGameSettingsRepo.get_or_create(session, guild_id)
+        for k, v in kwargs.items():
+            if hasattr(row, k):
+                setattr(row, k, v)
+        row.updated_at = datetime.utcnow()
+        await session.flush()
+        return row
+
+
+class FreeGameOfferRepo:
+    """Repository for Free Game Offers."""
+
+    @staticmethod
+    async def get_by_unique_key(session: AsyncSession, unique_key: str) -> Optional[FreeGameOfferModel]:
+        result = await session.execute(
+            select(FreeGameOfferModel).where(FreeGameOfferModel.unique_key == unique_key)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_source_and_ext_id(session: AsyncSession, source: str, external_id: str) -> Optional[FreeGameOfferModel]:
+        result = await session.execute(
+            select(FreeGameOfferModel).where(
+                FreeGameOfferModel.source == source,
+                FreeGameOfferModel.external_id == external_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def upsert_offer(session: AsyncSession, offer_dict: Dict[str, Any]) -> Tuple[FreeGameOfferModel, bool]:
+        """Upsert offer by unique_key. Returns (offer, is_new)."""
+        unique_key = offer_dict.get("unique_key")
+        result = await session.execute(
+            select(FreeGameOfferModel).where(FreeGameOfferModel.unique_key == unique_key)
+        )
+        existing = result.scalar_one_or_none()
+        now = datetime.utcnow()
+
+        if existing:
+            existing.last_seen_at = now
+            # Update dynamic fields
+            for key in ("title", "description", "original_price", "current_price", "discount_percent",
+                        "claim_url", "thumbnail_url", "starts_at", "ends_at", "is_free", "raw_metadata_json"):
+                if key in offer_dict and offer_dict[key] is not None:
+                    setattr(existing, key, offer_dict[key])
+
+            # Re-activate expired offer if now active again with new dates
+            if existing.status == "EXPIRED" and offer_dict.get("is_free", True):
+                ends_at = offer_dict.get("ends_at")
+                if ends_at is None or ends_at > now:
+                    existing.status = "NEW"
+                    existing.last_posted_at = None
+                    existing.posted_message_id = None
+                    existing.ending_soon_posted_at = None
+
+            await session.flush()
+            return existing, False
+
+        new_offer = FreeGameOfferModel(
+            source=offer_dict["source"],
+            external_id=offer_dict["external_id"],
+            unique_key=unique_key,
+            title=offer_dict["title"],
+            description=offer_dict.get("description"),
+            store_name=offer_dict.get("store_name", offer_dict["source"]),
+            platform=offer_dict.get("platform", "PC"),
+            offer_type=offer_dict.get("offer_type", "free_to_keep"),
+            original_price=offer_dict.get("original_price"),
+            current_price=offer_dict.get("current_price", 0.0),
+            currency=offer_dict.get("currency", "USD"),
+            discount_percent=offer_dict.get("discount_percent", 100),
+            claim_url=offer_dict["claim_url"],
+            source_url=offer_dict.get("source_url"),
+            thumbnail_url=offer_dict.get("thumbnail_url"),
+            starts_at=offer_dict.get("starts_at"),
+            ends_at=offer_dict.get("ends_at"),
+            is_free=offer_dict.get("is_free", True),
+            status=offer_dict.get("status", "NEW"),
+            first_seen_at=now,
+            last_seen_at=now,
+            raw_metadata_json=offer_dict.get("raw_metadata_json"),
+        )
+        session.add(new_offer)
+        await session.flush()
+        return new_offer, True
+
+    @staticmethod
+    async def get_active_offers(session: AsyncSession, limit: int = 50) -> List[FreeGameOfferModel]:
+        now = datetime.utcnow()
+        result = await session.execute(
+            select(FreeGameOfferModel)
+            .where(
+                FreeGameOfferModel.status.in_(["NEW", "ACTIVE", "ENDING_SOON"]),
+                or_(FreeGameOfferModel.ends_at.is_(None), FreeGameOfferModel.ends_at > now)
+            )
+            .order_by(FreeGameOfferModel.first_seen_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_ending_soon_candidates(session: AsyncSession, hours_window: int = 24) -> List[FreeGameOfferModel]:
+        now = datetime.utcnow()
+        window_end = now + timedelta(hours=hours_window)
+        result = await session.execute(
+            select(FreeGameOfferModel).where(
+                FreeGameOfferModel.status == "ACTIVE",
+                FreeGameOfferModel.ends_at.isnot(None),
+                FreeGameOfferModel.ends_at > now,
+                FreeGameOfferModel.ends_at <= window_end,
+                FreeGameOfferModel.ending_soon_posted_at.is_(None),
+            )
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_expired_active_offers(session: AsyncSession) -> List[FreeGameOfferModel]:
+        now = datetime.utcnow()
+        result = await session.execute(
+            select(FreeGameOfferModel).where(
+                FreeGameOfferModel.status.in_(["NEW", "ACTIVE", "ENDING_SOON"]),
+                FreeGameOfferModel.ends_at.isnot(None),
+                FreeGameOfferModel.ends_at <= now,
+            )
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def mark_posted(session: AsyncSession, offer_id: int, channel_id: int, message_id: int) -> None:
+        result = await session.execute(
+            select(FreeGameOfferModel).where(FreeGameOfferModel.id == offer_id)
+        )
+        offer = result.scalar_one_or_none()
+        if offer:
+            offer.status = "ACTIVE"
+            offer.last_posted_at = datetime.utcnow()
+            offer.posted_channel_id = channel_id
+            offer.posted_message_id = message_id
+            await session.flush()
+
+    @staticmethod
+    async def mark_ending_soon_posted(session: AsyncSession, offer_id: int) -> None:
+        result = await session.execute(
+            select(FreeGameOfferModel).where(FreeGameOfferModel.id == offer_id)
+        )
+        offer = result.scalar_one_or_none()
+        if offer:
+            offer.status = "ENDING_SOON"
+            offer.ending_soon_posted_at = datetime.utcnow()
+            await session.flush()
+
+    @staticmethod
+    async def mark_expired(session: AsyncSession, offer_id: int) -> None:
+        result = await session.execute(
+            select(FreeGameOfferModel).where(FreeGameOfferModel.id == offer_id)
+        )
+        offer = result.scalar_one_or_none()
+        if offer:
+            offer.status = "EXPIRED"
+            await session.flush()
+
+
+class FreeGameSourceRepo:
+    """Repository for source health and performance tracking."""
+
+    @staticmethod
+    async def get_or_create(session: AsyncSession, source_name: str, category: str = "pc") -> FreeGameSourceModel:
+        result = await session.execute(
+            select(FreeGameSourceModel).where(FreeGameSourceModel.source_name == source_name)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            row = FreeGameSourceModel(
+                source_name=source_name,
+                category=category,
+                status="HEALTHY",
+                consecutive_failures=0,
+                offer_count=0,
+            )
+            session.add(row)
+            await session.flush()
+        return row
+
+    @staticmethod
+    async def get_all(session: AsyncSession) -> List[FreeGameSourceModel]:
+        result = await session.execute(select(FreeGameSourceModel).order_by(FreeGameSourceModel.source_name))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def record_success(
+        session: AsyncSession, source_name: str, offer_count: int, latency_ms: Optional[float] = None
+    ) -> FreeGameSourceModel:
+        row = await FreeGameSourceRepo.get_or_create(session, source_name)
+        row.status = "HEALTHY"
+        row.consecutive_failures = 0
+        row.last_checked_at = datetime.utcnow()
+        row.last_success_at = datetime.utcnow()
+        row.offer_count = offer_count
+        if latency_ms is not None:
+            row.response_latency_ms = round(latency_ms, 2)
+        row.updated_at = datetime.utcnow()
+        await session.flush()
+        return row
+
+    @staticmethod
+    async def record_failure(
+        session: AsyncSession, source_name: str, error_message: str, latency_ms: Optional[float] = None
+    ) -> FreeGameSourceModel:
+        row = await FreeGameSourceRepo.get_or_create(session, source_name)
+        row.consecutive_failures += 1
+        row.status = "DEGRADED" if row.consecutive_failures < 3 else "ERROR"
+        row.last_checked_at = datetime.utcnow()
+        row.last_error_at = datetime.utcnow()
+        row.last_error_message = error_message[:500]
+        if latency_ms is not None:
+            row.response_latency_ms = round(latency_ms, 2)
+        row.updated_at = datetime.utcnow()
+        await session.flush()
+        return row
+
+
+class FreeGameNotificationRepo:
+    """Audit log of delivered Discord notifications for free games."""
+
+    @staticmethod
+    async def record(
+        session: AsyncSession,
+        channel_id: int,
+        claim_url: str,
+        offer_id: Optional[int] = None,
+        notification_type: str = "NEW_OFFER",
+        message_id: Optional[int] = None,
+        status: str = "delivered",
+        error_message: Optional[str] = None,
+    ) -> FreeGameNotificationModel:
+        row = FreeGameNotificationModel(
+            offer_id=offer_id,
+            notification_type=notification_type,
+            channel_id=channel_id,
+            message_id=message_id,
+            claim_url=claim_url,
+            status=status,
+            error_message=error_message[:500] if error_message else None,
+            created_at=datetime.utcnow(),
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    @staticmethod
+    async def has_notification(
+        session: AsyncSession,
+        offer_id: int,
+        notification_type: Optional[str] = None,
+    ) -> bool:
+        """Check if an offer has already been notified."""
+        stmt = select(FreeGameNotificationModel).where(FreeGameNotificationModel.offer_id == offer_id)
+        if notification_type:
+            stmt = stmt.where(FreeGameNotificationModel.notification_type == notification_type)
+        stmt = stmt.where(FreeGameNotificationModel.status == "delivered")
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
 

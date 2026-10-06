@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands
 
 from app.config import Settings, get_settings
+from app.freegames.scheduler import FreeGamesScheduler
 from app.moderation.engine import ModerationEngine
 from app.youtube.scheduler import YouTubeScheduler
 
@@ -31,6 +32,7 @@ class PBHeroBot(commands.Bot):
         self.settings = settings or get_settings()
         self.start_time: Optional[datetime] = None
         self.youtube_scheduler: Optional[YouTubeScheduler] = None
+        self.freegames_scheduler: Optional[FreeGamesScheduler] = None
         self._guild: Optional[discord.Guild] = None
         self._ready_initialized: bool = False
 
@@ -105,6 +107,7 @@ class PBHeroBot(commands.Bot):
             "app.bot.cogs.admin",
             "app.bot.cogs.greetings",
             "app.bot.cogs.invites",
+            "app.bot.cogs.freegames",
         ]
 
         for module in cog_modules:
@@ -168,6 +171,13 @@ class PBHeroBot(commands.Bot):
         if not self.youtube_scheduler.is_running:
             await self.youtube_scheduler.start()
             logger.info("YouTube scheduler started")
+
+        # Start Free Games scheduler if not already running
+        if self.freegames_scheduler is None:
+            self.freegames_scheduler = FreeGamesScheduler(self)
+        if not self.freegames_scheduler.is_running:
+            await self.freegames_scheduler.start()
+            logger.info("FreeGames scheduler started")
 
         # Initialize greeting service
         from app.greetings.service import get_greeting_service
@@ -253,6 +263,9 @@ class PBHeroBot(commands.Bot):
 
         if self.youtube_scheduler:
             await self.youtube_scheduler.stop()
+
+        if self.freegames_scheduler:
+            await self.freegames_scheduler.stop()
 
         await super().close()
         set_bot_state(BotState.STOPPED)

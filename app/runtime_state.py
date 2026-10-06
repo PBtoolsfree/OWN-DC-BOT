@@ -86,6 +86,26 @@ def is_youtube_running() -> bool:
     return False
 
 
+def is_freegames_healthy() -> bool:
+    """Check if the Free Games scheduler is healthy on the authoritative bot instance."""
+    if not is_bot_ready() or _bot_instance is None:
+        return False
+    scheduler = getattr(_bot_instance, "freegames_scheduler", None)
+    if scheduler:
+        return bool(getattr(scheduler, "is_healthy", False))
+    return False
+
+
+def is_freegames_running() -> bool:
+    """Check if the Free Games scheduler is running on the authoritative bot instance."""
+    if not is_bot_ready() or _bot_instance is None:
+        return False
+    scheduler = getattr(_bot_instance, "freegames_scheduler", None)
+    if scheduler:
+        return bool(getattr(scheduler, "is_running", False))
+    return False
+
+
 def clear_bot_instance() -> None:
     """Clear authoritative bot instance and reset state to STOPPED."""
     global _bot_instance, _bot_state

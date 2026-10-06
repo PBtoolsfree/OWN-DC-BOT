@@ -13,6 +13,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -729,4 +730,100 @@ class InviteActivitySettings(Base):
     log_revoked = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+# ─── Free Games & Deals Tracker Models ──────────────────────────────────────────
+
+class FreeGameSettings(Base):
+    """Configuration for Free Games & Deals Tracker."""
+    __tablename__ = "free_game_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    enabled = Column(Boolean, default=True, nullable=False)
+    destination_channel_id = Column(BigInteger, nullable=True)
+    role_mention_id = Column(BigInteger, nullable=True)
+    poll_interval_seconds = Column(Integer, default=900, nullable=False)  # 15 minutes default
+    enabled_sources_json = Column(Text, default='["epic", "steam", "gog", "google_play", "app_store"]', nullable=False)
+    offer_types_json = Column(Text, default='["free_to_keep"]', nullable=False)
+    ending_soon_enabled = Column(Boolean, default=False, nullable=False)
+    ending_soon_hours = Column(Integer, default=24, nullable=False)
+    post_thumbnail = Column(Boolean, default=True, nullable=False)
+    post_description = Column(Boolean, default=True, nullable=False)
+    show_price = Column(Boolean, default=True, nullable=False)
+    show_expiry = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class FreeGameOfferModel(Base):
+    """Normalized store free game and deals offer."""
+    __tablename__ = "free_game_offers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(64), nullable=False, index=True)
+    external_id = Column(String(256), nullable=False, index=True)
+    unique_key = Column(String(512), unique=True, nullable=False, index=True)
+    title = Column(String(512), nullable=False)
+    description = Column(Text, nullable=True)
+    store_name = Column(String(128), nullable=False)
+    platform = Column(String(64), nullable=False)  # PC, Android, iOS, etc.
+    offer_type = Column(String(64), default="free_to_keep", nullable=False)  # free_to_keep, free_dlc, free_trial, free_to_play
+    original_price = Column(Float, nullable=True)
+    current_price = Column(Float, default=0.0, nullable=False)
+    currency = Column(String(16), default="USD", nullable=False)
+    discount_percent = Column(Integer, default=100, nullable=False)
+    claim_url = Column(String(1024), nullable=False)
+    source_url = Column(String(1024), nullable=True)
+    thumbnail_url = Column(String(1024), nullable=True)
+    starts_at = Column(DateTime, nullable=True)
+    ends_at = Column(DateTime, nullable=True, index=True)
+    is_free = Column(Boolean, default=True, nullable=False)
+    status = Column(String(32), default="NEW", nullable=False, index=True)  # NEW, ACTIVE, ENDING_SOON, EXPIRED, REMOVED
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_posted_at = Column(DateTime, nullable=True)
+    posted_message_id = Column(BigInteger, nullable=True)
+    posted_channel_id = Column(BigInteger, nullable=True)
+    ending_soon_posted_at = Column(DateTime, nullable=True)
+    raw_metadata_json = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_free_game_offers_source_ext", "source", "external_id"),
+        Index("ix_free_game_offers_status_ends", "status", "ends_at"),
+    )
+
+
+class FreeGameSourceModel(Base):
+    """Source health, metrics, and error state tracking."""
+    __tablename__ = "free_game_sources"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_name = Column(String(64), unique=True, nullable=False, index=True)
+    category = Column(String(32), default="pc", nullable=False)  # pc, mobile
+    status = Column(String(32), default="HEALTHY", nullable=False)  # HEALTHY, DEGRADED, ERROR
+    last_checked_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_error_at = Column(DateTime, nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    consecutive_failures = Column(Integer, default=0, nullable=False)
+    offer_count = Column(Integer, default=0, nullable=False)
+    response_latency_ms = Column(Float, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class FreeGameNotificationModel(Base):
+    """Audit log of delivered Discord notifications for free games."""
+    __tablename__ = "free_game_notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    offer_id = Column(Integer, ForeignKey("free_game_offers.id", ondelete="SET NULL"), nullable=True)
+    notification_type = Column(String(32), default="NEW_OFFER", nullable=False)  # NEW_OFFER, ENDING_SOON, TEST
+    channel_id = Column(BigInteger, nullable=False)
+    message_id = Column(BigInteger, nullable=True)
+    claim_url = Column(String(1024), nullable=False)
+    status = Column(String(32), default="delivered", nullable=False)  # delivered, failed
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
 

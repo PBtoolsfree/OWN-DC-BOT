@@ -4456,3 +4456,198 @@ async def revoke_invite(
 
     return res
 
+
+# ─── Free Games & Deals Tracker ───────────────────────────────────────────────
+
+@router.get("/freegames/settings")
+async def get_freegames_settings(
+    username: str = Depends(require_auth),
+):
+    """Retrieve Free Games & Deals Tracker configuration."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+    cfg = await service.get_settings()
+    return cfg.to_dict()
+
+
+@router.put("/freegames/settings")
+async def update_freegames_settings(
+    payload: Dict[str, Any] = Body(...),
+    username: str = Depends(require_auth),
+):
+    """Update Free Games & Deals Tracker configuration."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+
+    allowed_fields = {
+        "enabled",
+        "destination_channel_id",
+        "enabled_sources_json",
+        "offer_types_json",
+        "poll_interval_seconds",
+        "ending_soon_enabled",
+        "ending_soon_hours",
+        "role_mention_id",
+        "post_thumbnail",
+        "post_description",
+        "show_price",
+        "show_expiry",
+    }
+    updates = {}
+    for k, v in payload.items():
+        if k in allowed_fields:
+            if k in ("enabled_sources_json", "offer_types_json") and isinstance(v, list):
+                updates[k] = json.dumps(v)
+            else:
+                updates[k] = v
+
+    cfg = await service.update_settings(**updates)
+
+    session = await get_session_direct()
+    try:
+        await AuditLogRepo.log(session, username, "updated_freegames_settings")
+        await session.commit()
+    finally:
+        await session.close()
+
+    return {"success": True, "settings": cfg.to_dict()}
+
+
+@router.get("/freegames/offers")
+async def get_freegames_offers(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    username: str = Depends(require_auth),
+):
+    """Retrieve tracked free game offers (includes canonical claim_url)."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+
+    if status and status.upper() == "ACTIVE":
+        offers = await service.get_active_offers(limit=limit)
+    else:
+        session = await get_session_direct()
+        try:
+            from app.database.repositories import FreeGameOfferRepo
+            db_offers = await FreeGameOfferRepo.list_offers(session, status=status, limit=limit, offset=offset)
+            offers = [o.to_dict() for o in db_offers]
+        finally:
+            await session.close()
+
+    return {"offers": offers, "count": len(offers)}
+
+
+@router.get("/freegames/sources")
+async def get_freegames_sources(
+    username: str = Depends(require_auth),
+):
+    """Retrieve health and operational status for all source adapters."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+    sources = await service.get_sources_health()
+    return {"sources": sources}
+
+
+@router.get("/freegames/health")
+async def get_freegames_health(
+    username: str = Depends(require_auth),
+):
+    """Retrieve full health status of the Free Games Tracker subsystem."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import (
+        get_bot_instance,
+        is_freegames_healthy,
+        is_freegames_running,
+    )
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+    cfg = await service.get_settings()
+
+    channel_perms = {"status": "unconfigured"}
+    if bot and cfg.destination_channel_id:
+        ch = bot.get_channel(cfg.destination_channel_id)
+        _, channel_perms = service.check_channel_permissions(ch)
+
+    sources = await service.get_sources_health()
+    overall_healthy = is_freegames_healthy() if bot else True
+
+    return {
+        "healthy": overall_healthy,
+        "scheduler_running": is_freegames_running(),
+        "channel_permissions": channel_perms,
+        "sources": sources,
+    }
+
+
+@router.get("/freegames/stats")
+async def get_freegames_stats(
+    username: str = Depends(require_auth),
+):
+    """Retrieve Free Games Tracker aggregate statistics."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+    stats = await service.get_stats()
+    return stats
+
+
+@router.post("/freegames/sync")
+async def sync_freegames_offers(
+    username: str = Depends(require_auth),
+):
+    """Manually trigger offer synchronization across all enabled sources."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+    result = await service.sync_offers()
+
+    session = await get_session_direct()
+    try:
+        await AuditLogRepo.log(session, username, "forced_freegames_sync")
+        await session.commit()
+    finally:
+        await session.close()
+
+    return result
+
+
+@router.post("/freegames/test")
+async def test_freegames_notification(
+    username: str = Depends(require_auth),
+):
+    """Send a test notification embed with claim button without persisting to DB."""
+    from app.freegames.service import get_freegame_service
+    from app.runtime_state import get_bot_instance
+
+    bot = get_bot_instance()
+    service = get_freegame_service(bot)
+    result = await service.send_test_notification()
+
+    session = await get_session_direct()
+    try:
+        await AuditLogRepo.log(session, username, "dispatched_freegames_test")
+        await session.commit()
+    finally:
+        await session.close()
+
+    return result
+
+
