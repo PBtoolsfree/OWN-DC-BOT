@@ -14,6 +14,7 @@ import ModerationLogs from './pages/ModerationLogs';
 import ModeratorSettings from './pages/ModeratorSettings';
 import WelcomeGoodbye from './pages/WelcomeGoodbye';
 import InviteTracking from './pages/InviteTracking';
+import FreeGames from './pages/FreeGames';
 import Channels from './pages/Channels';
 import Security from './pages/Security';
 import System from './pages/System';
@@ -36,12 +37,15 @@ function App() {
           <Route path="moderator/profiles" element={<PolicyProfiles />} />
           <Route path="moderator/exemptions" element={<ExemptionsBypass />} />
           <Route path="moderator/automod" element={<AutomodRules />} />
-                    <Route path="moderator/warnings" element={<WarningsActions />} />
+          <Route path="moderator/warnings" element={<WarningsActions />} />
           <Route path="moderator/greetings" element={<WelcomeGoodbye />} />
           <Route path="moderator/welcome-goodbye" element={<Navigate to="/moderator/greetings" replace />} />
           <Route path="moderator/invites" element={<InviteTracking />} />
           <Route path="moderator/invite-tracking" element={<Navigate to="/moderator/invites" replace />} />
           <Route path="moderator/logs" element={<ModerationLogs />} />
+          <Route path="moderator/freegames" element={<FreeGames />} />
+          <Route path="moderator/free-games" element={<Navigate to="/moderator/freegames" replace />} />
+          <Route path="freegames" element={<Navigate to="/moderator/freegames" replace />} />
           <Route path="moderator/settings" element={<ModeratorSettings />} />
           <Route path="channels" element={<Channels />} />
           <Route path="security" element={<Security />} />

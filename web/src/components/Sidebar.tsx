@@ -22,6 +22,7 @@ import {
   AlertTriangle,
   UserPlus,
   Link2,
+  Gift,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -193,6 +194,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <NavLink to="/moderator/logs" className={subNavLinkClass} onClick={onCloseMobile}>
                 <ScrollText className="w-3.5 h-3.5" />
                 <span>Moderation Logs</span>
+              </NavLink>
+              <NavLink to="/moderator/freegames" className={subNavLinkClass} onClick={onCloseMobile}>
+                <Gift className="w-3.5 h-3.5 text-pink-400" />
+                <span>Free Games</span>
               </NavLink>
               <NavLink to="/moderator/settings" className={subNavLinkClass} onClick={onCloseMobile}>
                 <Sliders className="w-3.5 h-3.5" />

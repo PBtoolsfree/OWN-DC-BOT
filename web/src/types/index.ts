@@ -779,3 +779,93 @@ export interface InviteChannelOption {
   reason?: string | null;
 }
 
+// ─── Free Games & Deals Tracker Types ────────────────────────────────────────
+
+export interface FreeGameOffer {
+  id: number;
+  source: string;
+  external_id: string;
+  unique_key: string;
+  title: string;
+  description: string | null;
+  store_name: string;
+  platform: string;
+  offer_type: string;
+  original_price: number | null;
+  current_price: number;
+  currency: string;
+  discount_percent: number;
+  claim_url: string;
+  canonical_claim_url: string;
+  claim_url_status: string;
+  validated_at: string | null;
+  source_url: string | null;
+  thumbnail_url: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  is_free: boolean;
+  status: 'NEW' | 'ACTIVE' | 'ENDING_SOON' | 'EXPIRED' | 'REMOVED' | string;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  last_posted_at: string | null;
+  posted_message_id: number | null;
+  posted_channel_id: number | null;
+}
+
+export interface FreeGameSettings {
+  id?: number;
+  guild_id: number | string;
+  enabled: boolean;
+  destination_channel_id: number | string | null;
+  role_mention_id: number | string | null;
+  poll_interval_seconds: number;
+  enabled_sources_json: string | string[];
+  offer_types_json: string | string[];
+  ending_soon_enabled: boolean;
+  ending_soon_hours: number;
+  post_thumbnail: boolean;
+  post_description: boolean;
+  show_price: boolean;
+  show_expiry: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface FreeGameSourceHealth {
+  source?: string;
+  source_name: string;
+  category: string;
+  status: 'HEALTHY' | 'DEGRADED' | 'ERROR' | string;
+  offer_count: number;
+  latency_ms?: number | null;
+  response_latency_ms?: number | null;
+  last_checked_at?: string | null;
+  last_success_at?: string | null;
+  consecutive_failures?: number;
+  last_error_message?: string | null;
+}
+
+export interface FreeGameHealth {
+  healthy: boolean;
+  scheduler_running: boolean;
+  channel_permissions: {
+    status: string;
+    can_view?: boolean;
+    can_send?: boolean;
+    can_embed?: boolean;
+    warning?: string | null;
+    channel_id?: number | string;
+    channel_name?: string;
+  };
+  sources: FreeGameSourceHealth[];
+}
+
+export interface FreeGameStats {
+  total_offers: number;
+  active_offers: number;
+  posted_today?: number;
+  ending_soon?: number;
+  total_notifications?: number;
+}
+
+

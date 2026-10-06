@@ -33,6 +33,9 @@ describe('Sidebar Navigation Component', () => {
     expect(screen.getAllByText('Channels').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Security')).toBeInTheDocument();
     expect(screen.getByText('System')).toBeInTheDocument();
+    expect(screen.getByText('Free Games')).toBeInTheDocument();
+    const freeGamesLink = screen.getByText('Free Games').closest('a');
+    expect(freeGamesLink).toHaveAttribute('href', '/moderator/freegames');
     expect(screen.getByText(/sign out|logout/i)).toBeInTheDocument();
   });
 });

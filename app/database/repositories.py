@@ -2885,6 +2885,31 @@ class FreeGameOfferRepo:
         return result.scalar() or 0
 
     @staticmethod
+    async def count_posted_today(session: AsyncSession) -> int:
+        now = datetime.utcnow()
+        start_of_day = datetime(now.year, now.month, now.day)
+        result = await session.execute(
+            select(func.count(FreeGameOfferModel.id)).where(
+                FreeGameOfferModel.last_posted_at >= start_of_day
+            )
+        )
+        return result.scalar() or 0
+
+    @staticmethod
+    async def count_ending_soon(session: AsyncSession, hours_window: int = 48) -> int:
+        now = datetime.utcnow()
+        window_end = now + timedelta(hours=hours_window)
+        result = await session.execute(
+            select(func.count(FreeGameOfferModel.id)).where(
+                FreeGameOfferModel.status.in_(["ACTIVE", "ENDING_SOON"]),
+                FreeGameOfferModel.ends_at.isnot(None),
+                FreeGameOfferModel.ends_at > now,
+                FreeGameOfferModel.ends_at <= window_end,
+            )
+        )
+        return result.scalar() or 0
+
+    @staticmethod
     async def mark_expired(session: AsyncSession, offer_id: int) -> None:
         result = await session.execute(
             select(FreeGameOfferModel).where(FreeGameOfferModel.id == offer_id)

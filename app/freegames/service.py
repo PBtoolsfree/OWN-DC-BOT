@@ -566,10 +566,14 @@ class FreeGameService:
         try:
             total_offers = await FreeGameOfferRepo.count_total(session)
             active_offers = await FreeGameOfferRepo.count_active(session)
+            posted_today = await FreeGameOfferRepo.count_posted_today(session)
+            ending_soon = await FreeGameOfferRepo.count_ending_soon(session)
             total_notifs = await FreeGameNotificationRepo.count_delivered(session)
             return {
                 "total_offers": total_offers,
                 "active_offers": active_offers,
+                "posted_today": posted_today,
+                "ending_soon": ending_soon,
                 "total_notifications": total_notifs,
             }
         finally:
