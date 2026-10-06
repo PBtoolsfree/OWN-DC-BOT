@@ -3857,10 +3857,10 @@ async def test_greeting_message(
     payload: Optional[Dict[str, Any]] = Body(None),
     username: str = Depends(require_auth),
 ):
-    """Dispatch a test message (welcome, goodbye, welcome-dm, goodbye-dm)."""
+    """Dispatch a test message (welcome, goodbye, welcome-dm, goodbye-dm, simulate-leave)."""
     norm_type = system_type.lower().replace("_", "-")
-    if norm_type not in ("welcome", "goodbye", "welcome-dm", "goodbye-dm"):
-        raise HTTPException(status_code=400, detail="Invalid greeting type. Must be 'welcome', 'goodbye', 'welcome-dm', or 'goodbye-dm'.")
+    if norm_type not in ("welcome", "goodbye", "welcome-dm", "goodbye-dm", "leave", "simulate-leave"):
+        raise HTTPException(status_code=400, detail="Invalid greeting type. Must be 'welcome', 'goodbye', 'welcome-dm', 'goodbye-dm', or 'simulate-leave'.")
 
     from app.runtime_state import get_bot_instance
     bot = get_bot_instance()
@@ -3877,6 +3877,23 @@ async def test_greeting_message(
                     resolved_user_id = int(resolved_user_id)
                 except (ValueError, TypeError):
                     resolved_user_id = None
+
+        if norm_type in ("leave", "simulate-leave"):
+            target_user = bot.get_user(resolved_user_id) if resolved_user_id else None
+            if not target_user and resolved_user_id:
+                try:
+                    target_user = await bot.fetch_user(resolved_user_id)
+                except Exception:
+                    pass
+            if not target_user:
+                raise HTTPException(status_code=400, detail="Target user not found")
+            await service.handle_member_leave(target_user)
+            return {
+                "success": True,
+                "message": f"Simulated member leave for {target_user} ({target_user.id})",
+                "stats": service.get_stats(),
+            }
+
         result = await service.send_test_message(norm_type, target_user_id=resolved_user_id)
         return result
     except PermissionError as e:
