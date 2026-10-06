@@ -10,7 +10,7 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 
 import discord
@@ -146,7 +146,7 @@ class GreetingService:
                     counts["rules"] += 1
                 elif event_type in ("role", "ROLE_ASSIGNED"):
                     counts["roles"] += 1
-            elif status == "failed" and "DM" in event_type.upper():
+            elif (status == "failed" or "unavailable" in status.lower()) and "DM" in event_type.upper():
                 counts["dm_failures"] += 1
 
         return entry
@@ -625,23 +625,32 @@ class GreetingService:
     def render_goodbye_message(
         self,
         config: ServerGreetingSettings,
-        member: discord.Member,
+        member: Union[discord.Member, discord.User],
+        guild: Optional[discord.Guild] = None,
         invite_url: Optional[str] = None,
         is_test: bool = False,
     ) -> Tuple[Optional[str], Optional[discord.Embed], discord.AllowedMentions]:
-        guild = member.guild
+        if guild is None:
+            guild = getattr(member, "guild", None) or (self.bot.get_guild(settings.DISCORD_GUILD_ID) if self.bot else None)
+
+        guild_name = guild.name if guild else "Server"
+        guild_id_str = str(guild.id) if guild else str(settings.DISCORD_GUILD_ID)
+        member_count_str = str(guild.member_count or 1) if guild else "1"
+        username = getattr(member, "name", "User")
+        display_name = getattr(member, "display_name", username)
         left_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         context = {
-            "username": member.name,
-            "display_name": member.display_name,
-            "user_mention": f"@{member.name}",
+            "username": username,
+            "display_name": display_name,
+            "user_mention": f"@{username}",
             "user_id": str(member.id),
-            "server_name": guild.name,
-            "server_id": str(guild.id),
-            "member_count": str(guild.member_count or 1),
+            "server_name": guild_name,
+            "server_id": guild_id_str,
+            "member_count": member_count_str,
             "left_at": left_str,
-            "invite_url": invite_url,
+            "invite_url": invite_url or "",
+            "inviter": "Server",
         }
 
         title_raw = config.goodbye_title or DEFAULT_GOODBYE_TITLE
@@ -677,28 +686,30 @@ class GreetingService:
         accent_color = self.parse_accent_color(getattr(config, "goodbye_accent_color", None), 0xED4245)
         embed = discord.Embed(title=title, description=desc, color=accent_color)
 
-        self.apply_author(
-            embed,
-            getattr(config, "goodbye_author_text", None),
-            getattr(config, "goodbye_author_icon_url", None),
-            context,
-            guild,
-        )
+        if guild:
+            self.apply_author(
+                embed,
+                getattr(config, "goodbye_author_text", None),
+                getattr(config, "goodbye_author_icon_url", None),
+                context,
+                guild,
+            )
 
         if config.goodbye_show_timestamp:
             embed.timestamp = datetime.now(timezone.utc)
         if config.goodbye_show_avatar and getattr(member, "display_avatar", None):
             embed.set_thumbnail(url=member.display_avatar.url)
         if footer:
-            icon_url = guild.icon.url if (config.goodbye_show_server_icon and guild.icon) else None
+            icon_url = (guild.icon.url if (guild and guild.icon) else None) if config.goodbye_show_server_icon else None
             embed.set_footer(text=footer, icon_url=icon_url)
 
-        self.apply_banner(
-            embed,
-            getattr(config, "goodbye_banner_mode", "none"),
-            getattr(config, "goodbye_banner_url", None),
-            guild,
-        )
+        if guild:
+            self.apply_banner(
+                embed,
+                getattr(config, "goodbye_banner_mode", "none"),
+                getattr(config, "goodbye_banner_url", None),
+                guild,
+            )
 
         content = f"<@{member.id}>" if (config.goodbye_mention_user and not is_test) else None
         return content, embed, allowed_mentions
@@ -706,23 +717,63 @@ class GreetingService:
     def render_goodbye_dm(
         self,
         config: ServerGreetingSettings,
-        member: discord.Member,
+        member: Union[discord.Member, discord.User],
+        guild_or_links_or_url: Any = None,
         invite_url: Optional[str] = None,
         is_test: bool = False,
+        *,
+        guild: Optional[discord.Guild] = None,
     ) -> Tuple[Optional[str], Optional[discord.Embed], discord.AllowedMentions]:
-        guild = member.guild
+        actual_invite_url = invite_url
+        actual_guild = guild
+
+        if isinstance(guild_or_links_or_url, dict):
+            if not actual_invite_url:
+                actual_invite_url = guild_or_links_or_url.get("invite_url")
+        elif isinstance(guild_or_links_or_url, str):
+            if not actual_invite_url:
+                actual_invite_url = guild_or_links_or_url
+        elif guild_or_links_or_url is not None and not actual_guild:
+            actual_guild = guild_or_links_or_url
+
+        if actual_guild is None:
+            actual_guild = getattr(member, "guild", None) or (
+                self.bot.get_guild(settings.DISCORD_GUILD_ID) if self.bot else None
+            )
+
+        if isinstance(actual_guild, dict):
+            guild_name = actual_guild.get("name", "Server")
+            guild_id_str = str(actual_guild.get("id", settings.DISCORD_GUILD_ID))
+            member_count_str = str(actual_guild.get("member_count", 1))
+        else:
+            guild_name = getattr(actual_guild, "name", "Server") if actual_guild else "Server"
+            guild_id_str = str(getattr(actual_guild, "id", settings.DISCORD_GUILD_ID)) if actual_guild else str(settings.DISCORD_GUILD_ID)
+            member_count_str = str(getattr(actual_guild, "member_count", 1) or 1) if actual_guild else "1"
+
+        username = getattr(member, "name", "User")
+        display_name = getattr(member, "display_name", username)
         left_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        joined_str = (
+            member.joined_at.strftime("%Y-%m-%d %H:%M:%S")
+            if getattr(member, "joined_at", None)
+            else "Unknown"
+        )
+        rules_channel_id = getattr(config, "rules_channel_id", None)
+        rules_url = build_rules_url(int(guild_id_str), rules_channel_id) if rules_channel_id else ""
 
         context = {
-            "username": member.name,
-            "display_name": member.display_name,
-            "user_mention": f"@{member.name}",
+            "username": username,
+            "display_name": display_name,
+            "user_mention": f"@{username}",
             "user_id": str(member.id),
-            "server_name": guild.name,
-            "server_id": str(guild.id),
-            "member_count": str(guild.member_count or 1),
+            "server_name": guild_name,
+            "server_id": guild_id_str,
+            "member_count": member_count_str,
             "left_at": left_str,
-            "invite_url": invite_url,
+            "joined_at": joined_str,
+            "rules_url": rules_url,
+            "invite_url": actual_invite_url or "",
+            "inviter": "Server",
         }
 
         title_raw = config.goodbye_dm_title or DEFAULT_GOODBYE_DM_TITLE
@@ -746,28 +797,30 @@ class GreetingService:
         accent_color = self.parse_accent_color(getattr(config, "goodbye_dm_accent_color", None), 0xFEE75C)
         embed = discord.Embed(title=title, description=desc, color=accent_color)
 
-        self.apply_author(
-            embed,
-            getattr(config, "goodbye_dm_author_text", None),
-            getattr(config, "goodbye_dm_author_icon_url", None),
-            context,
-            guild,
-        )
+        if guild:
+            self.apply_author(
+                embed,
+                getattr(config, "goodbye_dm_author_text", None),
+                getattr(config, "goodbye_dm_author_icon_url", None),
+                context,
+                guild,
+            )
 
         if config.goodbye_dm_show_timestamp:
             embed.timestamp = datetime.now(timezone.utc)
         if config.goodbye_dm_show_avatar and getattr(member, "display_avatar", None):
             embed.set_thumbnail(url=member.display_avatar.url)
         if footer:
-            icon_url = guild.icon.url if (config.goodbye_dm_show_server_icon and guild.icon) else None
+            icon_url = (guild.icon.url if (guild and guild.icon) else None) if config.goodbye_dm_show_server_icon else None
             embed.set_footer(text=footer, icon_url=icon_url)
 
-        self.apply_banner(
-            embed,
-            getattr(config, "goodbye_dm_banner_mode", "none"),
-            getattr(config, "goodbye_dm_banner_url", None),
-            guild,
-        )
+        if guild:
+            self.apply_banner(
+                embed,
+                getattr(config, "goodbye_dm_banner_mode", "none"),
+                getattr(config, "goodbye_dm_banner_url", None),
+                guild,
+            )
 
         return None, embed, allowed_mentions
 
@@ -1118,18 +1171,80 @@ class GreetingService:
             except Exception as e:
                 logger.warning("Rules delivery error for %s: %s", member, e)
 
-    async def handle_member_leave(self, member: discord.Member) -> None:
-        if not member.guild or member.guild.id != settings.DISCORD_GUILD_ID:
+    async def handle_raw_member_leave(self, payload: discord.RawMemberRemoveEvent) -> None:
+        """Handle on_raw_member_remove gateway event (fallback for uncached departures)."""
+        guild_id = getattr(payload, "guild_id", settings.DISCORD_GUILD_ID)
+        user = getattr(payload, "user", None)
+        await self.handle_member_leave(user, guild_id=guild_id)
+
+    async def handle_member_leave(
+        self,
+        member_or_user: Union[discord.Member, discord.User],
+        guild_id: Optional[int] = None,
+    ) -> None:
+        """
+        Robust Leave Pipeline (Premium Onboarding 2.0).
+
+        Order of operations:
+        1. Identify guild & resolve User
+        2. Deduplication (guild_id + user_id)
+        3. Load goodbye configuration
+        4. Build template variables & embed
+        5. Attempt Goodbye DM FIRST
+        6. Record DM result with structured logs & update counters
+        7. Update membership state via tracker
+        8. Public goodbye message processing
+        """
+        # 1. Identify guild_id & user_id
+        target_guild_id = (
+            guild_id
+            or (getattr(member_or_user, "guild", None).id if getattr(member_or_user, "guild", None) else None)
+            or settings.DISCORD_GUILD_ID
+        )
+        if target_guild_id != settings.DISCORD_GUILD_ID:
             return
 
-        if self._is_duplicate_event("goodbye", member.guild.id, member.id):
-            logger.warning("Duplicate leave event ignored for %s in %s", member, member.guild.id)
+        user_id = getattr(member_or_user, "id", None)
+        if not user_id:
+            logger.warning("Leave event received without user ID: %s", member_or_user)
             return
 
+        # 2. Deterministic Deduplication (max 1 public goodbye, max 1 goodbye DM, max 1 audit event)
+        if self._is_duplicate_event("goodbye", target_guild_id, user_id, window_seconds=60.0):
+            logger.info("Duplicate leave event ignored for user=%s in guild=%s", user_id, target_guild_id)
+            return
+
+        logger.info("Goodbye event received: user=%s guild=%s", user_id, target_guild_id)
+
+        # 3. Resolve Discord User safely (Capture before member disappears)
+        guild = None
+        if isinstance(member_or_user, discord.Member) and getattr(member_or_user, "guild", None):
+            guild = member_or_user.guild
+        elif self.bot:
+            guild = self.bot.get_guild(target_guild_id) or getattr(self.bot, "guild", None)
+
+        user = None
+        if isinstance(member_or_user, (discord.User, discord.Member)):
+            user = member_or_user
+
+        if user is None and self.bot:
+            user = self.bot.get_user(user_id)
+
+        if user is None and self.bot:
+            try:
+                user = await self.bot.fetch_user(user_id)
+            except Exception as e:
+                logger.warning("Could not fetch user %s from Discord API: %s", user_id, e)
+
+        # Fallback dummy user if fetch failed so username/display_name exist
+        if user is None:
+            user = member_or_user
+
+        # 4. Load Goodbye configuration & permanent rejoin invite
         session = await get_session_direct()
         try:
-            config = await ServerGreetingSettingsRepo.get_or_create(session, member.guild.id)
-            invite_row = await ServerInviteSettingsRepo.get_or_create(session, member.guild.id)
+            config = await ServerGreetingSettingsRepo.get_or_create(session, target_guild_id)
+            invite_row = await ServerInviteSettingsRepo.get_or_create(session, target_guild_id)
             await session.commit()
         except Exception as e:
             logger.error("Failed to load settings on member leave: %s", e)
@@ -1139,51 +1254,133 @@ class GreetingService:
 
         invite_url = invite_row.invite_url if (invite_row and invite_row.is_active) else None
 
-        # 0. Invite Tracking - Record Member Leave
+        # 5. GOODBYE DM MUST BE ATTEMPTED FIRST (Before data / state is lost)
+        if config.goodbye_dm_enabled:
+            if getattr(user, "bot", False):
+                logger.info("Skipping Goodbye DM for bot user: %s (%s)", user, user_id)
+            else:
+                logger.info("Goodbye DM attempt: guild_id=%s user_id=%s", target_guild_id, user_id)
+                try:
+                    content, embed, mentions = self.render_goodbye_dm(
+                        config, user, guild=guild, invite_url=invite_url
+                    )
+
+                    # Build buttons view: configured buttons or default rejoin invite
+                    dm_view = None
+                    if getattr(config, "goodbye_dm_buttons_json", None):
+                        context_vars = {
+                            "username": getattr(user, "name", "User"),
+                            "display_name": getattr(user, "display_name", getattr(user, "name", "User")),
+                            "user_id": str(user_id),
+                            "server_name": getattr(guild, "name", "Server") if guild else "Server",
+                            "server_id": str(target_guild_id),
+                            "invite_url": invite_url,
+                        }
+                        dm_view = self.build_buttons_view(config.goodbye_dm_buttons_json, context_vars)
+
+                    if dm_view is None and invite_url and is_safe_url(invite_url):
+                        dm_view = discord.ui.View(timeout=None)
+                        dm_view.add_item(
+                            discord.ui.Button(
+                                style=discord.ButtonStyle.link,
+                                label="Rejoin Server",
+                                url=invite_url,
+                                emoji="🔗",
+                            )
+                        )
+
+                    await self.send_dm_safe(user, content, embed, mentions, view=dm_view)
+                    logger.info("Goodbye DM result: status=DELIVERED")
+                    self.record_activity(
+                        event_type="GOODBYE_DM_SENT",
+                        username=str(user),
+                        user_id=str(user_id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="delivered",
+                    )
+                except discord.Forbidden as e:
+                    reason = f"Forbidden (code {getattr(e, 'code', 'unknown')}: {getattr(e, 'text', 'DM unavailable')})"
+                    logger.warning("Goodbye DM result: status=DM_UNAVAILABLE reason=%s", reason)
+                    self.record_activity(
+                        event_type="GOODBYE_DM_FAILED",
+                        username=str(user),
+                        user_id=str(user_id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="DM unavailable",
+                        error_message=reason,
+                    )
+                except (discord.HTTPException, discord.NotFound, discord.InvalidData, asyncio.TimeoutError) as e:
+                    reason = f"{type(e).__name__}: {e}"
+                    logger.error("Goodbye DM result: status=FAILED reason=%s", reason)
+                    self.record_activity(
+                        event_type="GOODBYE_DM_FAILED",
+                        username=str(user),
+                        user_id=str(user_id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="failed",
+                        error_message=reason,
+                    )
+                except Exception as e:
+                    reason = f"Unexpected error: {e}"
+                    logger.exception("Goodbye DM result: status=FAILED reason=%s", reason)
+                    self.record_activity(
+                        event_type="GOODBYE_DM_FAILED",
+                        username=str(user),
+                        user_id=str(user_id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="failed",
+                        error_message=reason,
+                    )
+
+        # 6. Update Membership State in Invite Tracker
         try:
             from app.invites.tracker import get_invite_tracker
             tracker = get_invite_tracker(self.bot)
-            await tracker.handle_member_leave(member)
+            await tracker.handle_member_leave(member_or_user, guild_id=target_guild_id)
         except Exception as e:
-            logger.warning("Invite tracker leave error for %s: %s", member, e)
+            logger.warning("Invite tracker leave error for user=%s: %s", user_id, e)
 
-        # 1. Public Goodbye
-        if config.goodbye_enabled and config.goodbye_channel_id:
-            channel = member.guild.get_channel(config.goodbye_channel_id)
+        # 7. Public Goodbye Processing
+        if config.goodbye_enabled and config.goodbye_channel_id and guild:
+            channel = guild.get_channel(config.goodbye_channel_id)
             is_valid, perm_telemetry = self.check_channel_permissions(
                 channel, requires_embed=bool(config.goodbye_use_embed)
             )
             if is_valid and channel:
                 try:
                     content, embed, mentions = self.render_goodbye_message(
-                        config, member, invite_url=invite_url
+                        config, user, guild=guild, invite_url=invite_url
                     )
                     context_vars = {
-                        "username": member.name,
-                        "display_name": member.display_name,
-                        "user_id": str(member.id),
-                        "server_name": member.guild.name,
-                        "server_id": str(member.guild.id),
-                        "member_count": str(member.guild.member_count or 1),
+                        "username": getattr(user, "name", "User"),
+                        "display_name": getattr(user, "display_name", getattr(user, "name", "User")),
+                        "user_id": str(user_id),
+                        "server_name": guild.name,
+                        "server_id": str(guild.id),
+                        "member_count": str(guild.member_count or 1),
                         "invite_url": invite_url,
                     }
                     view = self.build_buttons_view(getattr(config, "goodbye_buttons_json", None), context_vars)
                     await self.send_greeting(channel, content, embed, mentions, view=view)
                     self.record_activity(
                         event_type="GOODBYE_SENT",
-                        username=str(member),
-                        user_id=str(member.id),
+                        username=str(user),
+                        user_id=str(user_id),
                         channel_id=channel.id,
                         channel_name=channel.name,
                         status="delivered",
                     )
-                    logger.info("Public goodbye delivered for %s to #%s", member, channel.name)
+                    logger.info("Public goodbye delivered for %s to #%s", user, channel.name)
                 except Exception as e:
                     logger.exception("Public goodbye send failed: %s", e)
                     self.record_activity(
                         event_type="GOODBYE_SENT",
-                        username=str(member),
-                        user_id=str(member.id),
+                        username=str(user),
+                        user_id=str(user_id),
                         channel_id=channel.id,
                         channel_name=channel.name,
                         status="failed",
@@ -1193,69 +1390,21 @@ class GreetingService:
                 warn = perm_telemetry.get("warning") or "Target channel unavailable"
                 self.record_activity(
                     event_type="GOODBYE_SENT",
-                    username=str(member),
-                    user_id=str(member.id),
+                    username=str(user),
+                    user_id=str(user_id),
                     channel_id=config.goodbye_channel_id,
                     channel_name=perm_telemetry.get("channel_name") or "Channel",
                     status="failed",
                     error_message=warn,
                 )
 
-        # 2. Goodbye Direct Message (DM)
-        if config.goodbye_dm_enabled:
-            try:
-                content, embed, mentions = self.render_goodbye_dm(
-                    config, member, invite_url=invite_url
-                )
-                rejoin_view = None
-                if invite_url and is_safe_url(invite_url):
-                    rejoin_view = discord.ui.View(timeout=None)
-                    rejoin_view.add_item(
-                        discord.ui.Button(
-                            style=discord.ButtonStyle.link,
-                            label="Rejoin Server",
-                            url=invite_url,
-                            emoji="🔗",
-                        )
-                    )
-                await self.send_dm_safe(member, content, embed, mentions, view=rejoin_view)
-                self.record_activity(
-                    event_type="GOODBYE_DM_SENT",
-                    username=str(member),
-                    user_id=str(member.id),
-                    channel_id=None,
-                    channel_name="Direct Message",
-                    status="delivered",
-                )
-                logger.info("Goodbye DM sent to %s", member)
-            except discord.Forbidden:
-                logger.info("Goodbye DM failed for %s: DM unavailable", member)
-                self.record_activity(
-                    event_type="GOODBYE_DM_FAILED",
-                    username=str(member),
-                    user_id=str(member.id),
-                    channel_id=None,
-                    channel_name="Direct Message",
-                    status="DM unavailable",
-                    error_message="DM unavailable",
-                )
-            except Exception as e:
-                logger.warning("Goodbye DM unexpected error for %s: %s", member, e)
-                self.record_activity(
-                    event_type="GOODBYE_DM_FAILED",
-                    username=str(member),
-                    user_id=str(member.id),
-                    channel_id=None,
-                    channel_name="Direct Message",
-                    status="failed",
-                    error_message="DM unavailable",
-                )
-
     # ========================================================
     # Test Dispatch (Premium Onboarding 2.0)
     # ========================================================
 
-    async def send_test_message(self, greeting_type: str) -> Dict[str, Any]:
+    async def send_test_message(
+        self, greeting_type: str, target_user_id: Optional[int] = None
+    ) -> Dict[str, Any]:
         if not self.bot or not self.bot.is_ready():
             raise RuntimeError("Bot is currently offline. Cannot send test Discord message.")
 
@@ -1370,7 +1519,7 @@ class GreetingService:
                 raise PermissionError(telemetry.get("warning") or "Missing required permissions.")
 
             content, embed, mentions = self.render_goodbye_message(
-                config, dummy, invite_url=invite_url, is_test=True
+                config, dummy, guild=guild, invite_url=invite_url, is_test=True
             )
             context_vars = {
                 "username": dummy.name,
@@ -1401,9 +1550,30 @@ class GreetingService:
             }
 
         elif greeting_type in ("welcome-dm", "welcome_dm"):
+            target_user = None
+            if target_user_id and self.bot:
+                target_user = self.bot.get_user(target_user_id)
+                if not target_user:
+                    try:
+                        target_user = await self.bot.fetch_user(target_user_id)
+                    except Exception:
+                        pass
+
+            if target_user is None and guild:
+                owner_id = getattr(guild, "owner_id", None)
+                if owner_id:
+                    target_user = guild.get_member(owner_id) or (self.bot.get_user(owner_id) if self.bot else None)
+                    if not target_user and self.bot:
+                        try:
+                            target_user = await self.bot.fetch_user(owner_id)
+                        except Exception:
+                            pass
+
+            recipient = target_user or dummy
+
             content, embed, mentions = self.render_welcome_dm(
                 config,
-                dummy,
+                recipient,
                 invite_url=invite_url,
                 rules_url=rules_url,
                 attribution=dummy_attribution,
@@ -1411,6 +1581,81 @@ class GreetingService:
                 rank="#3",
                 is_test=True,
             )
+
+            # View
+            dm_view = None
+            if getattr(config, "welcome_dm_buttons_json", None):
+                context_vars = {
+                    "username": getattr(recipient, "name", "User"),
+                    "display_name": getattr(recipient, "display_name", getattr(recipient, "name", "User")),
+                    "user_id": str(getattr(recipient, "id", "")),
+                    "server_name": guild.name if guild else "Server",
+                    "server_id": str(guild.id if guild else ""),
+                    "rules_url": rules_url,
+                    "invite_url": invite_url,
+                }
+                dm_view = self.build_buttons_view(config.welcome_dm_buttons_json, context_vars)
+
+            if target_user and hasattr(target_user, "send"):
+                try:
+                    await self.send_dm_safe(target_user, content, embed, mentions, view=dm_view)
+                    entry = self.record_activity(
+                        event_type="WELCOME_DM_SENT",
+                        username=str(target_user),
+                        user_id=str(target_user.id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="delivered",
+                        is_test=True,
+                    )
+                    return {
+                        "status": "ok",
+                        "delivery_status": "DELIVERED",
+                        "message": f"🧪 Test Welcome DM sent directly to @{target_user.name}",
+                        "channel_id": None,
+                        "channel_name": "Direct Message",
+                        "activity": entry,
+                    }
+                except discord.Forbidden as e:
+                    reason = f"DM unavailable: {getattr(e, 'text', 'User privacy settings block DMs')}"
+                    entry = self.record_activity(
+                        event_type="WELCOME_DM_FAILED",
+                        username=str(target_user),
+                        user_id=str(target_user.id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="DM unavailable",
+                        error_message=reason,
+                        is_test=True,
+                    )
+                    return {
+                        "status": "DM unavailable",
+                        "delivery_status": "DM_UNAVAILABLE",
+                        "message": f"⚠️ Test Welcome DM failed: {reason}",
+                        "channel_id": None,
+                        "channel_name": "Direct Message",
+                        "activity": entry,
+                    }
+                except Exception as e:
+                    entry = self.record_activity(
+                        event_type="WELCOME_DM_FAILED",
+                        username=str(target_user),
+                        user_id=str(target_user.id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="failed",
+                        error_message=str(e),
+                        is_test=True,
+                    )
+                    return {
+                        "status": "failed",
+                        "delivery_status": "FAILED",
+                        "message": f"❌ Test Welcome DM failed: {e}",
+                        "channel_id": None,
+                        "channel_name": "Direct Message",
+                        "activity": entry,
+                    }
+
             entry = self.record_activity(
                 event_type="WELCOME_DM_SENT",
                 username="TestUser (Test Preview)",
@@ -1422,6 +1667,7 @@ class GreetingService:
             )
             return {
                 "status": "ok",
+                "delivery_status": "PREVIEW_VERIFIED",
                 "message": "🧪 Test Welcome DM verified and preview rendered successfully",
                 "channel_id": None,
                 "channel_name": "Direct Message",
@@ -1429,9 +1675,115 @@ class GreetingService:
             }
 
         elif greeting_type in ("goodbye-dm", "goodbye_dm"):
+            target_user = None
+            if target_user_id and self.bot:
+                target_user = self.bot.get_user(target_user_id)
+                if not target_user:
+                    try:
+                        target_user = await self.bot.fetch_user(target_user_id)
+                    except Exception:
+                        pass
+
+            if target_user is None and guild:
+                owner_id = getattr(guild, "owner_id", None)
+                if owner_id:
+                    target_user = guild.get_member(owner_id) or (self.bot.get_user(owner_id) if self.bot else None)
+                    if not target_user and self.bot:
+                        try:
+                            target_user = await self.bot.fetch_user(owner_id)
+                        except Exception:
+                            pass
+
+            recipient = target_user or dummy
+
             content, embed, mentions = self.render_goodbye_dm(
-                config, dummy, invite_url=invite_url, is_test=True
+                config, recipient, guild=guild, invite_url=invite_url, is_test=True
             )
+
+            # View
+            dm_view = None
+            if getattr(config, "goodbye_dm_buttons_json", None):
+                context_vars = {
+                    "username": getattr(recipient, "name", "User"),
+                    "display_name": getattr(recipient, "display_name", getattr(recipient, "name", "User")),
+                    "user_id": str(getattr(recipient, "id", "")),
+                    "server_name": guild.name if guild else "Server",
+                    "server_id": str(guild.id if guild else ""),
+                    "invite_url": invite_url,
+                }
+                dm_view = self.build_buttons_view(config.goodbye_dm_buttons_json, context_vars)
+
+            if dm_view is None and invite_url and is_safe_url(invite_url):
+                dm_view = discord.ui.View(timeout=None)
+                dm_view.add_item(
+                    discord.ui.Button(
+                        style=discord.ButtonStyle.link,
+                        label="Rejoin Server",
+                        url=invite_url,
+                        emoji="🔗",
+                    )
+                )
+
+            if target_user and hasattr(target_user, "send"):
+                try:
+                    await self.send_dm_safe(target_user, content, embed, mentions, view=dm_view)
+                    entry = self.record_activity(
+                        event_type="GOODBYE_DM_SENT",
+                        username=str(target_user),
+                        user_id=str(target_user.id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="delivered",
+                        is_test=True,
+                    )
+                    return {
+                        "status": "ok",
+                        "delivery_status": "DELIVERED",
+                        "message": f"🧪 Test Goodbye DM sent directly to @{target_user.name}",
+                        "channel_id": None,
+                        "channel_name": "Direct Message",
+                        "activity": entry,
+                    }
+                except discord.Forbidden as e:
+                    reason = f"DM unavailable: {getattr(e, 'text', 'User privacy settings block DMs')}"
+                    entry = self.record_activity(
+                        event_type="GOODBYE_DM_FAILED",
+                        username=str(target_user),
+                        user_id=str(target_user.id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="DM unavailable",
+                        error_message=reason,
+                        is_test=True,
+                    )
+                    return {
+                        "status": "DM unavailable",
+                        "delivery_status": "DM_UNAVAILABLE",
+                        "message": f"⚠️ Test Goodbye DM failed: {reason}",
+                        "channel_id": None,
+                        "channel_name": "Direct Message",
+                        "activity": entry,
+                    }
+                except Exception as e:
+                    entry = self.record_activity(
+                        event_type="GOODBYE_DM_FAILED",
+                        username=str(target_user),
+                        user_id=str(target_user.id),
+                        channel_id=None,
+                        channel_name="Direct Message",
+                        status="failed",
+                        error_message=str(e),
+                        is_test=True,
+                    )
+                    return {
+                        "status": "failed",
+                        "delivery_status": "FAILED",
+                        "message": f"❌ Test Goodbye DM failed: {e}",
+                        "channel_id": None,
+                        "channel_name": "Direct Message",
+                        "activity": entry,
+                    }
+
             entry = self.record_activity(
                 event_type="GOODBYE_DM_SENT",
                 username="TestUser (Test Preview)",
@@ -1443,6 +1795,7 @@ class GreetingService:
             )
             return {
                 "status": "ok",
+                "delivery_status": "PREVIEW_VERIFIED",
                 "message": "🧪 Test Goodbye DM verified and preview rendered successfully",
                 "channel_id": None,
                 "channel_name": "Direct Message",

@@ -28,6 +28,7 @@ Tests all 22 required backend test specifications:
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1604,6 +1605,327 @@ async def test_spec_20_api_response_schema(app, auth_cookies):
         ]
         for f in required_fields:
             assert f in s, f"Field '{f}' missing from response settings"
+
+
+# ==============================================================================
+# Goodbye DM Pipeline Regression Tests (Urgent Bug Fix Verification)
+# ==============================================================================
+
+class MockRawMemberRemovePayload:
+    def __init__(self, guild_id: int, user: Any):
+        self.guild_id = guild_id
+        self.user = user
+
+
+@pytest.mark.asyncio
+async def test_goodbye_dm_pipeline_raw_remove_success():
+    """Verify raw member remove gateway event triggers DM delivery and public message."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.guild = guild
+    mock_bot.get_guild.return_value = guild
+
+    # Pure discord.User (not a Member, no .guild attribute)
+    user = MagicMock(spec=discord.User)
+    user.id = 77112233
+    user.name = "LeaverUser"
+    user.display_name = "LeaverUser"
+    user.mention = f"<@{user.id}>"
+    user.bot = False
+    user.send = AsyncMock()
+    mock_bot.get_user.return_value = user
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await ServerInviteSettingsRepo.update(
+            session,
+            GUILD_ID,
+            invite_url="https://discord.gg/permanent-rejoin",
+            is_active=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    payload = MockRawMemberRemovePayload(guild_id=GUILD_ID, user=user)
+    await service.handle_raw_member_leave(payload)
+
+    # 1. DM attempted FIRST and delivered
+    assert user.send.call_count == 1
+    call_args, call_kwargs = user.send.call_args
+    # Check embed or view contains rejoin invite
+    view = call_kwargs.get("view")
+    assert view is not None
+
+    # 2. Public goodbye delivered
+    assert channel.send.call_count == 1
+
+    # 3. Counters updated
+    metrics = service.get_stats()
+    assert metrics.get("goodbye_dms_today", 0) >= 1
+
+
+@pytest.mark.asyncio
+async def test_goodbye_dm_deduplication_member_and_raw_remove():
+    """Verify on_member_remove followed by on_raw_member_remove produces exactly 1 DM and 1 public message."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.get_guild.return_value = guild
+
+    member = make_mock_member(guild=guild, user_id=88223344, name="DedupeUser")
+    member.send = AsyncMock()
+    mock_bot.get_user.return_value = member
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    # 1. on_member_remove fires
+    await service.handle_member_leave(member)
+
+    # 2. on_raw_member_remove fires immediately after for same user/guild
+    payload = MockRawMemberRemovePayload(guild_id=GUILD_ID, user=member)
+    await service.handle_raw_member_leave(payload)
+
+    # Exactly 1 DM and 1 public message must be sent
+    assert member.send.call_count == 1
+    assert channel.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_goodbye_dm_cache_miss_fallback_fetch_user():
+    """Verify uncached member falls back to client.fetch_user before sending DM."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.guild = guild
+    mock_bot.get_guild.return_value = guild
+
+    # Cache miss: get_user returns None
+    mock_bot.get_user.return_value = None
+
+    fetched_user = MagicMock(spec=discord.User)
+    fetched_user.id = 99334455
+    fetched_user.name = "UncachedUser"
+    fetched_user.display_name = "UncachedUser"
+    fetched_user.bot = False
+    fetched_user.send = AsyncMock()
+
+    mock_bot.fetch_user = AsyncMock(return_value=fetched_user)
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    dummy_raw_user = MagicMock(spec=["id", "bot"])
+    dummy_raw_user.id = 99334455
+    dummy_raw_user.bot = False
+    payload = MockRawMemberRemovePayload(guild_id=GUILD_ID, user=dummy_raw_user)
+    await service.handle_raw_member_leave(payload)
+
+    assert mock_bot.fetch_user.called
+    assert fetched_user.send.call_count == 1
+    assert channel.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_goodbye_dm_privacy_forbidden_handling():
+    """Verify discord.Forbidden (no mutual guilds / privacy) is classified as DM_UNAVAILABLE and public goodbye continues."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.get_guild.return_value = guild
+
+    member = make_mock_member(guild=guild, user_id=44556677, name="PrivacyUser")
+    member.send = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "Cannot send messages to this user due to having no mutual guilds")
+    )
+    mock_bot.get_user.return_value = member
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    # Pre-record count
+    initial_failures = service.get_stats().get("dm_failures_today", 0)
+
+    # Must NOT raise exception
+    await service.handle_member_leave(member)
+
+    # Public goodbye MUST still be delivered
+    assert channel.send.call_count == 1
+
+    # dm_failures_today counter must be incremented
+    new_failures = service.get_stats().get("dm_failures_today", 0)
+    assert new_failures == initial_failures + 1
+
+    # Last activity recorded as DM unavailable
+    activities = service.get_recent_activity(limit=5)
+    dm_fail = next((a for a in activities if a["event_type"] == "GOODBYE_DM_FAILED"), None)
+    assert dm_fail is not None
+    assert dm_fail["status"] == "DM unavailable"
+
+
+@pytest.mark.asyncio
+async def test_goodbye_dm_bot_user_skipped():
+    """Verify bot accounts are safely skipped for Goodbye DM without crashing public goodbye."""
+    mock_bot = make_mock_bot()
+    service = GreetingService(bot=mock_bot)
+
+    guild = make_mock_guild()
+    channel = make_mock_channel(channel_id=123, guild=guild)
+    guild.get_channel = MagicMock(return_value=channel)
+    mock_bot.get_guild.return_value = guild
+
+    bot_member = make_mock_member(guild=guild, user_id=11223344, name="AnotherBot")
+    bot_member.bot = True
+    bot_member.send = AsyncMock()
+
+    session = await get_session_direct()
+    try:
+        await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_enabled=True,
+            goodbye_channel_id=123,
+            goodbye_dm_enabled=True,
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    await service.handle_member_leave(bot_member)
+
+    # Bot was NOT sent DM
+    assert bot_member.send.call_count == 0
+    # But public goodbye was sent
+    assert channel.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_goodbye_dm_template_with_pure_user():
+    """Verify render_goodbye_dm succeeds on a pure discord.User object lacking guild attributes."""
+    service = GreetingService()
+    guild = make_mock_guild()
+
+    user = MagicMock(spec=discord.User)
+    user.id = 55667788
+    user.name = "PureUser"
+    user.display_name = "Pure User"
+    user.joined_at = None
+
+    session = await get_session_direct()
+    try:
+        config = await ServerGreetingSettingsRepo.update(
+            session,
+            GUILD_ID,
+            goodbye_dm_use_embed=True,
+            goodbye_dm_description="Goodbye {username} from {server_name}! Rejoin at {invite_url}. Joined: {joined_at}",
+        )
+        content, embed, allowed = service.render_goodbye_dm(
+            config, user, guild=guild, invite_url="https://discord.gg/rejoin-test"
+        )
+        assert embed is not None
+        assert "Goodbye PureUser" in embed.description
+        assert "PB HERO SERVER" in embed.description
+        assert "https://discord.gg/rejoin-test" in embed.description
+        assert "Unknown" in embed.description
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_api_test_goodbye_dm_real_delivery(app, auth_cookies):
+    """Verify test endpoint /api/v1/greetings/test/goodbye-dm actually attempts DM and returns delivery_status."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        # 1. When bot is offline
+        res = await client.post("/api/v1/greetings/test/goodbye-dm", cookies=auth_cookies)
+        assert res.status_code == 503
+
+        # 2. Mock bot ready and server owner receiving DM
+        mock_bot = make_mock_bot()
+        owner = MagicMock(spec=discord.Member)
+        owner.id = 1033834663946498221
+        owner.name = "pbherogamer"
+        owner.display_name = "pbherogamer"
+        owner.send = AsyncMock()
+        mock_bot.guild.owner_id = owner.id
+        mock_bot.guild.get_member.return_value = owner
+        mock_bot.get_user.return_value = owner
+
+        with patch("app.runtime_state.get_bot_instance", return_value=mock_bot):
+            res = await client.post(
+                "/api/v1/greetings/test/goodbye-dm",
+                cookies=auth_cookies,
+                json={"target_user_id": owner.id},
+            )
+            assert res.status_code == 200
+            body = res.json()
+            assert body["delivery_status"] == "DELIVERED"
+            assert owner.send.call_count == 1
+
+        # 3. Privacy failure returned faithfully without faking success
+        owner.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "DMs disabled"))
+        with patch("app.runtime_state.get_bot_instance", return_value=mock_bot):
+            res = await client.post(
+                "/api/v1/greetings/test/goodbye-dm",
+                cookies=auth_cookies,
+                json={"target_user_id": owner.id},
+            )
+            assert res.status_code == 200
+            body = res.json()
+            assert body["delivery_status"] == "DM_UNAVAILABLE"
+            assert "DM unavailable" in body["message"]
+
 
 
 

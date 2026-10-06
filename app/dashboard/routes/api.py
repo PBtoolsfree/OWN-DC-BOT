@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import discord
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
@@ -3851,7 +3851,12 @@ async def regenerate_invite_endpoint(request: Request, username: str = Depends(r
 
 
 @router.post("/greetings/test/{system_type}")
-async def test_greeting_message(system_type: str, username: str = Depends(require_auth)):
+async def test_greeting_message(
+    system_type: str,
+    target_user_id: Optional[int] = None,
+    payload: Optional[Dict[str, Any]] = Body(None),
+    username: str = Depends(require_auth),
+):
     """Dispatch a test message (welcome, goodbye, welcome-dm, goodbye-dm)."""
     norm_type = system_type.lower().replace("_", "-")
     if norm_type not in ("welcome", "goodbye", "welcome-dm", "goodbye-dm"):
@@ -3864,7 +3869,15 @@ async def test_greeting_message(system_type: str, username: str = Depends(requir
 
     service = get_greeting_service(bot)
     try:
-        result = await service.send_test_message(norm_type)
+        resolved_user_id = target_user_id
+        if not resolved_user_id and payload and isinstance(payload, dict):
+            resolved_user_id = payload.get("target_user_id") or payload.get("user_id")
+            if resolved_user_id is not None:
+                try:
+                    resolved_user_id = int(resolved_user_id)
+                except (ValueError, TypeError):
+                    resolved_user_id = None
+        result = await service.send_test_message(norm_type, target_user_id=resolved_user_id)
         return result
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))

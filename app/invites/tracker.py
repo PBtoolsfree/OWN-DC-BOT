@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import discord
 from discord.ext import commands
@@ -711,17 +711,28 @@ class InviteTracker:
     # Member Leave Tracking
     # ========================================================
 
-    async def handle_member_leave(self, member: discord.Member) -> None:
+    async def handle_member_leave(
+        self, member: Union[discord.Member, discord.User], guild_id: Optional[int] = None
+    ) -> None:
         """
         Record member leave while PRESERVING original historical attribution.
 
         Updates is_still_member=False so analytics can report current vs former referrals.
         """
+        target_guild_id = (
+            guild_id
+            or (getattr(member, "guild", None).id if getattr(member, "guild", None) else None)
+            or self.guild_id
+        )
+        user_id = getattr(member, "id", None)
+        if not user_id or not target_guild_id:
+            return
+
         session = await get_session_direct()
         try:
-            await InviteJoinRepo.record_leave(session, member.guild.id, member.id)
+            await InviteJoinRepo.record_leave(session, target_guild_id, user_id)
             await session.commit()
-            logger.info("Recorded member leave for invite attribution history: %s (%d)", member, member.id)
+            logger.info("Recorded member leave for invite attribution history: %s (%d)", member, user_id)
         except Exception as e:
             logger.warning("Failed to record member leave in invite tracker: %s", e)
         finally:

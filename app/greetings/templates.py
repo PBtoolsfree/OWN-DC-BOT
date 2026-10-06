@@ -71,6 +71,8 @@ GOODBYE_DM_VARIABLES: Set[str] = {
     "server_id",
     "member_count",
     "left_at",
+    "joined_at",
+    "rules_url",
     "invite_url",
     "inviter",
 }
