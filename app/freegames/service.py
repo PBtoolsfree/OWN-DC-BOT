@@ -240,8 +240,9 @@ class FreeGameService:
         finally:
             await session.close()
 
-        # 4. If new offer and destination channel is configured, deliver Discord notification
-        if is_new and config.destination_channel_id and self.bot:
+        # 4. If new offer (or unposted NEW offer) and destination channel is configured, deliver Discord notification
+        needs_post = (is_new or (db_offer.status == "NEW" and not db_offer.posted_message_id))
+        if needs_post and config.destination_channel_id and self.bot:
             return await self._deliver_new_offer_notification(db_offer.id, offer, config)
         elif not is_new:
             logger.debug("FreeGames duplicate skipped: '%s' (%s)", offer.title, offer.unique_key)
