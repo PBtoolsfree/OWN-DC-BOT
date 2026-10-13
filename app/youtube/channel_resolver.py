@@ -180,6 +180,41 @@ def sanitize_channel_id(channel_id: str) -> str:
     return cleaned
 
 
+def normalize_channel_id(raw_id: Optional[str]) -> str:
+    """
+    Normalize YouTube channel ID string to canonical 24-character 'UC...' format.
+    - If already 'UC' followed by 22 chars, returns as-is (whitespace-trimmed).
+    - If full URL or query containing 'UC[22]', extracts and returns 'UC[22]'.
+    - If YouTube legacy Atom feed format with 22 chars omitting 'UC', prepends 'UC'.
+    - If empty or invalid, returns empty string or stripped original.
+    """
+    if not raw_id or not isinstance(raw_id, str):
+        return ""
+    clean = raw_id.strip()
+    if not clean:
+        return ""
+
+    if "channel_id=" in clean:
+        m = re.search(r"channel_id=(UC[\w-]{22})", clean)
+        if m:
+            return m.group(1)
+    if "/channel/" in clean:
+        m = re.search(r"/channel/(UC[\w-]{22})", clean)
+        if m:
+            return m.group(1)
+
+    if clean.startswith("UC") and len(clean) == 24 and bool(CHANNEL_ID_PATTERN.match(clean)):
+        return clean
+
+    # Legacy feed format: 22 chars without UC prefix
+    if len(clean) == 22 and not clean.startswith("UC") and re.match(r"^[\w-]{22}$", clean):
+        candidate = f"UC{clean}"
+        if bool(CHANNEL_ID_PATTERN.match(candidate)):
+            return candidate
+
+    return clean
+
+
 def build_poll_feed_url(channel_id: str) -> str:
     """
     Build the direct RSS/Atom polling feed URL for a validated YouTube channel ID.

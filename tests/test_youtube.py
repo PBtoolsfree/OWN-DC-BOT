@@ -41,6 +41,7 @@ from app.youtube.channel_resolver import (
     build_feed_url,
     build_legacy_feed_url,
     is_valid_channel_id,
+    normalize_channel_id,
     resolve_channel_id,
     sanitize_channel_id,
 )
@@ -49,6 +50,7 @@ from app.youtube.feed_parser import (
     FeedEntry,
     FeedResult,
     _parse_atom_xml,
+    extract_canonical_channel_id_from_feed,
     fetch_feed,
 )
 from app.youtube.live_detector import (
@@ -138,6 +140,78 @@ SAMPLE_HTML_ERROR_PAGE = """<!DOCTYPE html>
   <head><title>Error 404 (Not Found)!!1</title></head>
   <body><p>The requested URL /feeds/videos.xml was not found on this server.</p></body>
 </html>
+"""
+
+# Production YouTube Atom Feed fixtures where root <yt:channelId> and <id> omit 'UC' (22 chars),
+# while links, author, and entry <yt:channelId> retain the full canonical 24-character ID ('UC...').
+SAMPLE_REAL_ATOM_FEED_GAMER = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+  <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id={PB_HERO_GAMER_ID}"/>
+  <id>yt:channel:{PB_HERO_GAMER_ID[2:]}</id>
+  <yt:channelId>{PB_HERO_GAMER_ID[2:]}</yt:channelId>
+  <title>PB HERO GAMER</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/{PB_HERO_GAMER_ID}"/>
+  <author>
+    <name>PB HERO GAMER</name>
+    <uri>https://www.youtube.com/channel/{PB_HERO_GAMER_ID}</uri>
+  </author>
+  <entry>
+    <id>yt:video:vid_gamer_real_1</id>
+    <yt:videoId>vid_gamer_real_1</yt:videoId>
+    <yt:channelId>{PB_HERO_GAMER_ID}</yt:channelId>
+    <title>PB HERO GAMER New Upload</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=vid_gamer_real_1"/>
+    <published>2026-10-13T10:00:00+00:00</published>
+    <updated>2026-10-13T10:05:00+00:00</updated>
+    <media:group>
+      <media:title>PB HERO GAMER New Upload</media:title>
+      <media:thumbnail url="https://i.ytimg.com/vi/vid_gamer_real_1/hqdefault.jpg"/>
+      <media:description>Pro gameplay Free Fire clutch match.</media:description>
+    </media:group>
+  </entry>
+</feed>
+"""
+
+SAMPLE_REAL_ATOM_FEED_LIVE = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+  <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id={PB_HERO_LIVE_ID}"/>
+  <id>yt:channel:{PB_HERO_LIVE_ID[2:]}</id>
+  <yt:channelId>{PB_HERO_LIVE_ID[2:]}</yt:channelId>
+  <title>PB HERO LIVE</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/{PB_HERO_LIVE_ID}"/>
+  <author>
+    <name>PB HERO LIVE</name>
+    <uri>https://www.youtube.com/channel/{PB_HERO_LIVE_ID}</uri>
+  </author>
+  <entry>
+    <id>yt:video:vid_live_real_2</id>
+    <yt:videoId>vid_live_real_2</yt:videoId>
+    <yt:channelId>{PB_HERO_LIVE_ID}</yt:channelId>
+    <title>PB HERO LIVE Stream</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=vid_live_real_2"/>
+    <published>2026-10-13T11:00:00+00:00</published>
+    <updated>2026-10-13T11:05:00+00:00</updated>
+    <media:group>
+      <media:title>PB HERO LIVE Stream</media:title>
+      <media:thumbnail url="https://i.ytimg.com/vi/vid_live_real_2/hqdefault.jpg"/>
+      <media:description>Live subscriber custom room battle.</media:description>
+    </media:group>
+  </entry>
+</feed>
+"""
+
+SAMPLE_ROOT_ONLY_LEGACY_FEED = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns="http://www.w3.org/2005/Atom">
+  <id>yt:channel:{PB_HERO_GAMER_ID[2:]}</id>
+  <yt:channelId>{PB_HERO_GAMER_ID[2:]}</yt:channelId>
+  <title>PB HERO GAMER</title>
+</feed>
+"""
+
+SAMPLE_MALFORMED_XML_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns="http://www.w3.org/2005/Atom">
+  <title>PB HERO GAMER
+  <broken unclosed tag
 """
 
 
@@ -311,15 +385,158 @@ async def test_fetch_feed_rejects_static_websub_document():
     assert "Wrong endpoint" in res.error or "static WebSub topic document" in res.error
 
 
-# ─── 5. Channel ID Verification and Mismatch Protection ───────────────────────
+# ─── 5. Channel ID Verification, Normalization, and Mismatch Protection ───
+
+def test_normalize_channel_id_preserves_canonical_and_fixes_legacy_prefix():
+    """Verify normalize_channel_id preserves 24-char UC IDs and reconstructs legacy 22-char feed IDs."""
+    # Canonical 24-character IDs starting with UC must be preserved exactly
+    assert normalize_channel_id(PB_HERO_GAMER_ID) == PB_HERO_GAMER_ID
+    assert normalize_channel_id(PB_HERO_LIVE_ID) == PB_HERO_LIVE_ID
+
+    # Whitespace-padded IDs
+    assert normalize_channel_id(f"  {PB_HERO_GAMER_ID}  ") == PB_HERO_GAMER_ID
+    assert normalize_channel_id(f"\n{PB_HERO_LIVE_ID}\t") == PB_HERO_LIVE_ID
+
+    # Legacy 22-character IDs without UC prefix (YouTube feed-level format)
+    assert normalize_channel_id(PB_HERO_GAMER_ID[2:]) == PB_HERO_GAMER_ID
+    assert normalize_channel_id(PB_HERO_LIVE_ID[2:]) == PB_HERO_LIVE_ID
+    assert normalize_channel_id("-6WQfskutalsbKUw9ZDA7A") == "UC-6WQfskutalsbKUw9ZDA7A"
+    assert normalize_channel_id("b8xLLxhYdKGQLEGuAyBLUw") == "UCb8xLLxhYdKGQLEGuAyBLUw"
+
+    # URL extraction
+    assert normalize_channel_id(f"https://www.youtube.com/feeds/videos.xml?channel_id={PB_HERO_GAMER_ID}") == PB_HERO_GAMER_ID
+    assert normalize_channel_id(f"https://youtube.com/channel/{PB_HERO_LIVE_ID}") == PB_HERO_LIVE_ID
+
+    # Empty and None
+    assert normalize_channel_id("") == ""
+    assert normalize_channel_id(None) == ""
+
+
+def test_extract_canonical_channel_id_from_real_youtube_atom_structure():
+    """Verify extract_canonical_channel_id_from_feed extracts 24-char UC ID from feeds with legacy 22-char root tags."""
+    import feedparser
+    # Gamer feed with 22-char root tag
+    feed_gamer = feedparser.parse(SAMPLE_REAL_ATOM_FEED_GAMER)
+    extracted_gamer = extract_canonical_channel_id_from_feed(feed_gamer, SAMPLE_REAL_ATOM_FEED_GAMER)
+    assert extracted_gamer == PB_HERO_GAMER_ID
+    assert extracted_gamer.startswith("UC")
+    assert len(extracted_gamer) == 24
+
+    # Live feed with 22-char root tag
+    feed_live = feedparser.parse(SAMPLE_REAL_ATOM_FEED_LIVE)
+    extracted_live = extract_canonical_channel_id_from_feed(feed_live, SAMPLE_REAL_ATOM_FEED_LIVE)
+    assert extracted_live == PB_HERO_LIVE_ID
+    assert extracted_live.startswith("UC")
+    assert len(extracted_live) == 24
+
 
 @pytest.mark.asyncio
-async def test_parse_feed_channel_id_mismatch():
-    """Verify feed parser rejects feeds where returned channel ID does not match configured channel."""
-    success, name, entries, err = _parse_atom_xml(SAMPLE_ATOM_FEED_GAMER, PB_HERO_LIVE_ID)
+async def test_parse_real_production_feed_gamer_with_legacy_root_tag():
+    """Verify PB HERO GAMER feed with YouTube's 22-char root <yt:channelId> parses successfully with 0 errors."""
+    success, name, entries, err = _parse_atom_xml(SAMPLE_REAL_ATOM_FEED_GAMER, PB_HERO_GAMER_ID)
+    assert success is True
+    assert name == "PB HERO GAMER"
+    assert err is None
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.video_id == "vid_gamer_real_1"
+    assert entry.channel_id == PB_HERO_GAMER_ID
+    assert entry.channel_id.startswith("UC")
+    assert len(entry.channel_id) == 24
+
+
+@pytest.mark.asyncio
+async def test_parse_real_production_feed_live_with_legacy_root_tag():
+    """Verify PB HERO LIVE feed with YouTube's 22-char root <yt:channelId> parses successfully with 0 errors."""
+    success, name, entries, err = _parse_atom_xml(SAMPLE_REAL_ATOM_FEED_LIVE, PB_HERO_LIVE_ID)
+    assert success is True
+    assert name == "PB HERO LIVE"
+    assert err is None
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.video_id == "vid_live_real_2"
+    assert entry.channel_id == PB_HERO_LIVE_ID
+    assert entry.channel_id.startswith("UC")
+    assert len(entry.channel_id) == 24
+
+
+@pytest.mark.asyncio
+async def test_parse_root_only_legacy_feed_without_entries():
+    """Verify empty feed containing only 22-char root <yt:channelId> tag normalizes correctly to canonical ID."""
+    success, name, entries, err = _parse_atom_xml(SAMPLE_ROOT_ONLY_LEGACY_FEED, PB_HERO_GAMER_ID)
+    assert success is True
+    assert name == "PB HERO GAMER"
+    assert err is None
+    assert len(entries) == 0
+
+
+@pytest.mark.asyncio
+async def test_genuine_channel_id_mismatch_preserves_full_canonical_ids_in_error():
+    """Verify genuine channel ID mismatch preserves complete UC prefix in error message and rejects feed."""
+    # Feed is for Gamer, expected channel is Live
+    success, name, entries, err = _parse_atom_xml(SAMPLE_REAL_ATOM_FEED_GAMER, PB_HERO_LIVE_ID)
     assert success is False
     assert len(entries) == 0
-    assert "Feed channel ID mismatch" in err
+    assert err is not None
+    # Crucial: Error message must display both full canonical IDs with UC prefix
+    assert f"got '{PB_HERO_GAMER_ID}'" in err
+    assert f"expected '{PB_HERO_LIVE_ID}'" in err
+    assert "UC" in err
+
+
+@pytest.mark.asyncio
+async def test_genuine_channel_id_mismatch_with_legacy_root_only():
+    """Verify genuine mismatch with 22-char root tag is normalized and cleanly rejected."""
+    success, name, entries, err = _parse_atom_xml(SAMPLE_ROOT_ONLY_LEGACY_FEED, PB_HERO_LIVE_ID)
+    assert success is False
+    assert len(entries) == 0
+    assert err is not None
+    assert f"got '{PB_HERO_GAMER_ID}'" in err
+    assert f"expected '{PB_HERO_LIVE_ID}'" in err
+
+
+@pytest.mark.asyncio
+async def test_parse_atom_xml_skips_entry_with_mismatched_channel_id():
+    """Verify video entry with wrong channel ID is skipped while valid entries are kept."""
+    mixed_feed = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+  <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id={PB_HERO_GAMER_ID}"/>
+  <title>PB HERO GAMER</title>
+  <entry>
+    <yt:videoId>valid_1</yt:videoId>
+    <yt:channelId>{PB_HERO_GAMER_ID}</yt:channelId>
+    <title>Valid Entry</title>
+  </entry>
+  <entry>
+    <yt:videoId>mismatched_2</yt:videoId>
+    <yt:channelId>{PB_HERO_LIVE_ID}</yt:channelId>
+    <title>Mismatched Entry</title>
+  </entry>
+</feed>
+"""
+    success, name, entries, err = _parse_atom_xml(mixed_feed, PB_HERO_GAMER_ID)
+    assert success is True
+    assert len(entries) == 1
+    assert entries[0].video_id == "valid_1"
+    assert entries[0].channel_id == PB_HERO_GAMER_ID
+
+
+@pytest.mark.asyncio
+async def test_parse_atom_xml_malformed_xml_feed():
+    """Verify malformed unparseable XML is detected and returns clear error."""
+    success, name, entries, err = _parse_atom_xml(SAMPLE_MALFORMED_XML_FEED, PB_HERO_GAMER_ID)
+    assert success is False
+    assert len(entries) == 0
+    assert "Malformed XML feed" in err
+
+
+@pytest.mark.asyncio
+async def test_parse_atom_xml_completely_empty():
+    """Verify completely empty XML document is rejected cleanly."""
+    success, name, entries, err = _parse_atom_xml("", PB_HERO_GAMER_ID)
+    assert success is False
+    assert len(entries) == 0
+    assert "empty XML document" in err
 
 
 # ─── 6. HTTP Client: Status Code Handling, 404, 429, 5xx ─────────────────────

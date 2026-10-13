@@ -15,6 +15,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import re
 from typing import Optional, Tuple
 
 import feedparser
@@ -23,6 +24,7 @@ import httpx
 from app.youtube.channel_resolver import (
     build_poll_feed_url,
     build_feed_url,
+    normalize_channel_id,
     sanitize_channel_id,
 )
 
@@ -109,6 +111,76 @@ def _parse_datetime_str(date_str: str) -> Optional[datetime]:
         return None
 
 
+def extract_canonical_channel_id_from_feed(feed_obj, raw_xml: str = "") -> str:
+    """
+    Extract the canonical 24-character ('UC...') channel ID from Atom feed.
+
+    YouTube's Atom feeds present channel IDs across several locations:
+    1. Feed <link rel="self"> or <link rel="alternate"> href (channel_id=UC... or /channel/UC...)
+    2. Feed <author><uri> (https://www.youtube.com/channel/UC...)
+    3. Entries' <yt:channelId> (always 24-char UC... in video entries)
+    4. Feed-level <yt:channelId> and <id> (normalized to canonical UC format if 22-char legacy)
+    5. Raw XML regex fallback
+    """
+    if hasattr(feed_obj, "feed"):
+        # 1. Links (self and alternate)
+        for link in getattr(feed_obj.feed, "links", []):
+            href = link.get("href", "")
+            m = re.search(r"channel_id=(UC[\w-]{22})", href)
+            if m:
+                return m.group(1)
+            m = re.search(r"/channel/(UC[\w-]{22})", href)
+            if m:
+                return m.group(1)
+
+        # 2. Author URI
+        author_href = getattr(feed_obj.feed, "author_detail", {}).get("href", "")
+        if author_href:
+            m = re.search(r"/channel/(UC[\w-]{22})", author_href)
+            if m:
+                return m.group(1)
+
+    # 3. Entries' yt_channelid
+    for entry in getattr(feed_obj, "entries", []):
+        raw_cid = getattr(entry, "yt_channelid", "") or getattr(entry, "yt_channel_id", "") or ""
+        norm = normalize_channel_id(raw_cid)
+        if norm.startswith("UC") and len(norm) == 24:
+            return norm
+
+    # 4. Feed-level yt_channelid or id tag
+    if hasattr(feed_obj, "feed"):
+        raw_cid = getattr(feed_obj.feed, "yt_channelid", "") or getattr(feed_obj.feed, "yt_channel_id", "") or ""
+        if raw_cid:
+            norm = normalize_channel_id(raw_cid)
+            if norm.startswith("UC") and len(norm) == 24:
+                return norm
+
+        feed_id = getattr(feed_obj.feed, "id", "") or ""
+        if feed_id:
+            parts = str(feed_id).split(":")
+            if len(parts) >= 3:
+                norm = normalize_channel_id(parts[-1])
+                if norm.startswith("UC") and len(norm) == 24:
+                    return norm
+
+    # 5. Raw XML regex fallback
+    if raw_xml:
+        m = re.search(r"channel_id=(UC[\w-]{22})", raw_xml)
+        if m:
+            return m.group(1)
+        m = re.search(r"/channel/(UC[\w-]{22})", raw_xml)
+        if m:
+            return m.group(1)
+        m = re.search(r"<yt:channelId>(UC[\w-]{22})</yt:channelId>", raw_xml)
+        if m:
+            return m.group(1)
+        m = re.search(r"<yt:channelId>([\w-]{22})</yt:channelId>", raw_xml)
+        if m:
+            return f"UC{m.group(1)}"
+
+    return ""
+
+
 def _parse_atom_xml(
     xml_text: str,
     expected_channel_id: str,
@@ -121,11 +193,12 @@ def _parse_atom_xml(
         (success, channel_name, entries, error_message)
     """
     clean_text = xml_text.strip()
+    expected_clean = normalize_channel_id(expected_channel_id)
 
     # Detect HTML error pages returned instead of XML
     if clean_text.lower().startswith(("<!doctype html", "<html")) or "text/html" in content_type.lower():
         error_msg = "YouTube returned an HTML error page instead of XML Atom feed"
-        logger.warning("%s for channel %s", error_msg, expected_channel_id)
+        logger.warning("%s for channel %s", error_msg, expected_clean)
         return False, "", [], error_msg
 
     # Detect static WebSub topic document mistakenly returned or fetched instead of real video feed
@@ -134,7 +207,7 @@ def _parse_atom_xml(
             "Wrong endpoint: received static WebSub topic document instead of channel video feed. "
             "RSS polling must use https://www.youtube.com/feeds/videos.xml?channel_id=..."
         )
-        logger.error("%s (channel %s)", error_msg, expected_channel_id)
+        logger.error("%s (channel %s)", error_msg, expected_clean)
         return False, "", [], error_msg
 
     feed = feedparser.parse(clean_text)
@@ -142,30 +215,27 @@ def _parse_atom_xml(
     # Malformed XML with no feed or entries
     if feed.bozo and not getattr(feed, "entries", None) and not getattr(feed, "feed", None):
         bozo_msg = str(getattr(feed, "bozo_exception", "Malformed XML"))
-        logger.warning("Feed XML parse error for %s: %s", expected_channel_id, bozo_msg)
+        logger.warning("Feed XML parse error for %s: %s", expected_clean, bozo_msg)
         return False, "", [], f"Malformed XML feed: {bozo_msg}"
 
     # Feed-level metadata
     channel_name = ""
-    feed_channel_id = ""
     if hasattr(feed, "feed"):
         channel_name = getattr(feed.feed, "title", "") or ""
-        feed_channel_id = getattr(feed.feed, "yt_channelid", "") or ""
-        if not feed_channel_id and hasattr(feed.feed, "id"):
-            parts = str(feed.feed.id).split(":")
-            if len(parts) >= 3 and parts[-1].startswith("UC"):
-                feed_channel_id = parts[-1]
+
+    # Extract canonical channel ID from feed
+    feed_channel_id = extract_canonical_channel_id_from_feed(feed, clean_text)
 
     # Verify channel ID at feed level if present
-    if feed_channel_id and feed_channel_id != expected_channel_id:
-        err = f"Feed channel ID mismatch: got '{feed_channel_id}', expected '{expected_channel_id}'"
+    if feed_channel_id and feed_channel_id != expected_clean:
+        err = f"Feed channel ID mismatch: got '{feed_channel_id}', expected '{expected_clean}'"
         logger.error(err)
         return False, channel_name, [], err
 
     # Detect empty feed stub without title/metadata
     if not channel_name and not getattr(feed, "entries", None) and not feed_channel_id:
         err = "Invalid feed: received empty XML document with no channel metadata or entries"
-        logger.warning("%s for %s", err, expected_channel_id)
+        logger.warning("%s for %s", err, expected_clean)
         return False, "", [], err
 
     entries: list[FeedEntry] = []
@@ -182,11 +252,17 @@ def _parse_atom_xml(
             continue
 
         # Verify entry channel ID if present
-        entry_channel_id = getattr(entry, "yt_channelid", None) or expected_channel_id
-        if entry_channel_id and entry_channel_id != expected_channel_id:
+        raw_entry_cid = (
+            getattr(entry, "yt_channelid", None)
+            or getattr(entry, "yt_channel_id", None)
+            or feed_channel_id
+            or expected_clean
+        )
+        entry_channel_id = normalize_channel_id(raw_entry_cid)
+        if entry_channel_id and entry_channel_id != expected_clean:
             logger.warning(
                 "Skipping entry %s: channel ID '%s' does not match '%s'",
-                video_id, entry_channel_id, expected_channel_id
+                video_id, entry_channel_id, expected_clean
             )
             continue
 
@@ -226,7 +302,7 @@ def _parse_atom_xml(
             url=url,
             published=pub_dt,
             updated=upd_dt,
-            channel_id=expected_channel_id,
+            channel_id=expected_clean,
             channel_name=channel_name,
             thumbnail_url=thumbnail,
             description=description[:500] if description else "",
