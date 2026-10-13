@@ -164,8 +164,14 @@ async def send_notification(
     """
     try:
         channel = bot.get_channel(discord_channel_id)
+        if not channel and hasattr(bot, "fetch_channel"):
+            try:
+                channel = await bot.fetch_channel(discord_channel_id)
+            except Exception as e:
+                logger.warning("Could not fetch Discord channel %d from API: %s", discord_channel_id, e)
+
         if not channel:
-            logger.error("Discord channel %d not found", discord_channel_id)
+            logger.error("Discord channel %d not found (cache and API fetch failed)", discord_channel_id)
             return False
 
         # Fetch event-specific template from DB

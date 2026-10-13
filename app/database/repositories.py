@@ -286,6 +286,31 @@ class YouTubeEventRepo:
         return (result.scalar() or 0) > 0
 
     @staticmethod
+    async def get_by_key(session: AsyncSession, youtube_channel_id: str, video_id: str,
+                         event_type: EventType) -> Optional[YouTubeEvent]:
+        result = await session.execute(
+            select(YouTubeEvent).where(
+                YouTubeEvent.youtube_channel_id == youtube_channel_id,
+                YouTubeEvent.video_id == video_id,
+                YouTubeEvent.event_type == event_type,
+            )
+        )
+        return result.scalars().first()
+
+    @staticmethod
+    async def is_already_notified(session: AsyncSession, youtube_channel_id: str, video_id: str,
+                                  event_type: EventType) -> bool:
+        result = await session.execute(
+            select(func.count(YouTubeEvent.id)).where(
+                YouTubeEvent.youtube_channel_id == youtube_channel_id,
+                YouTubeEvent.video_id == video_id,
+                YouTubeEvent.event_type == event_type,
+                YouTubeEvent.status.in_([EventStatus.NOTIFIED, EventStatus.SKIPPED]),
+            )
+        )
+        return (result.scalar() or 0) > 0
+
+    @staticmethod
     async def create(session: AsyncSession, youtube_channel_id: str, video_id: str,
                      event_type: EventType, title: str = None, video_url: str = None,
                      published_at: datetime = None, status: EventStatus = EventStatus.DETECTED,
@@ -305,12 +330,61 @@ class YouTubeEventRepo:
         return event
 
     @staticmethod
+    async def record_or_update(session: AsyncSession, youtube_channel_id: str, video_id: str,
+                               event_type: EventType, title: str = None, video_url: str = None,
+                               published_at: datetime = None, status: EventStatus = EventStatus.DETECTED,
+                               live_state=None) -> YouTubeEvent:
+        event = await YouTubeEventRepo.get_by_key(session, youtube_channel_id, video_id, event_type)
+        if event:
+            if title:
+                event.title = title
+            if video_url:
+                event.video_url = video_url
+            if published_at:
+                event.published_at = published_at
+            if live_state:
+                event.live_state = live_state
+            await session.flush()
+            return event
+
+        return await YouTubeEventRepo.create(
+            session, youtube_channel_id, video_id, event_type,
+            title=title, video_url=video_url, published_at=published_at,
+            status=status, live_state=live_state,
+        )
+
+    @staticmethod
     async def mark_notified(session: AsyncSession, event_id: int) -> None:
         await session.execute(
             update(YouTubeEvent)
             .where(YouTubeEvent.id == event_id)
             .values(status=EventStatus.NOTIFIED, notified_at=datetime.utcnow())
         )
+
+    @staticmethod
+    async def mark_failed(session: AsyncSession, event_id: int) -> None:
+        await session.execute(
+            update(YouTubeEvent)
+            .where(YouTubeEvent.id == event_id)
+            .values(status=EventStatus.FAILED)
+        )
+
+    @staticmethod
+    async def mark_skipped(session: AsyncSession, event_id: int) -> None:
+        await session.execute(
+            update(YouTubeEvent)
+            .where(YouTubeEvent.id == event_id)
+            .values(status=EventStatus.SKIPPED)
+        )
+
+    @staticmethod
+    async def count_for_channel(session: AsyncSession, youtube_channel_id: str) -> int:
+        result = await session.execute(
+            select(func.count(YouTubeEvent.id)).where(
+                YouTubeEvent.youtube_channel_id == youtube_channel_id,
+            )
+        )
+        return result.scalar() or 0
 
     @staticmethod
     async def get_recent(session: AsyncSession, youtube_channel_id: str = None,

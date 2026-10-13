@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from app.database.models import EventType, VideoState, YouTubeChannel, YouTubeDestination
+from app.database.models import EventStatus, EventType, VideoState, YouTubeChannel, YouTubeDestination, YouTubeEvent
 from app.database.repositories import (
     YouTubeChannelRepo,
     YouTubeDestinationRepo,
@@ -45,7 +45,7 @@ from app.youtube.channel_resolver import (
     resolve_channel_id,
     sanitize_channel_id,
 )
-from app.youtube.dedupe import is_duplicate, mark_notified, record_event
+from app.youtube.dedupe import is_duplicate, mark_failed, mark_notified, mark_skipped, record_event
 from app.youtube.feed_parser import (
     FeedEntry,
     FeedResult,
@@ -57,8 +57,10 @@ from app.youtube.live_detector import (
     ChannelLiveResult,
     LiveStatus,
     check_channel_live_status,
+    classify_feed_entry,
 )
-from app.youtube.notifier import create_notification_embed, render_template_text
+from app.youtube.notifier import create_notification_embed, render_template_text, send_notification
+from app.youtube.scheduler import YouTubeScheduler
 
 
 # ─── Configured Production Channels ──────────────────────────────────────────
@@ -892,3 +894,274 @@ async def test_api_endpoints_use_polling_url(db_session):
             assert test_res["feed_url"] == f"https://www.youtube.com/feeds/videos.xml?channel_id={PB_HERO_GAMER_ID}"
             assert test_res["http_status"] == 200
             assert test_res["feed_status"] == "HEALTHY"
+
+
+# ─── 9. Scheduled Livestream Pipeline, Exact Video ID & Deduplication ─────────
+
+PROD_SCHEDULED_VIDEO_ID = "EvY9lx6YHvA"
+PROD_SCHEDULED_TITLE = "🔴 NEW ALIEN ARSENAL! 👽 SPIN ROYALE LIVE 🚀 | ScarFall 2.0 Season 09"
+
+
+@pytest.mark.asyncio
+async def test_classify_feed_entry_exact_scheduled_livestream_id():
+    """Verify classify_feed_entry accurately classifies scheduled live stream video and extracts start time."""
+    mock_live_status = LiveStatus(
+        video_id=PROD_SCHEDULED_VIDEO_ID,
+        is_upcoming=True,
+        live_state="upcoming",
+        title=PROD_SCHEDULED_TITLE,
+        scheduled_start="2026-10-13T14:30:00+00:00",
+    )
+
+    with patch("app.youtube.live_detector.check_live_status", new_callable=AsyncMock) as mock_check:
+        mock_check.return_value = mock_live_status
+        event_type, start = await classify_feed_entry(PROD_SCHEDULED_VIDEO_ID, PROD_SCHEDULED_TITLE)
+        assert event_type == EventType.SCHEDULED_LIVE
+        assert start == "2026-10-13T14:30:00+00:00"
+
+    # Also verify title keyword fallback if status check was unknown
+    with patch("app.youtube.live_detector.check_live_status", new_callable=AsyncMock) as mock_check:
+        mock_check.return_value = LiveStatus(video_id=PROD_SCHEDULED_VIDEO_ID, live_state="unknown")
+        event_type, start = await classify_feed_entry(PROD_SCHEDULED_VIDEO_ID, PROD_SCHEDULED_TITLE)
+        assert event_type == EventType.SCHEDULED_LIVE
+
+    # Verify regular upload classification
+    with patch("app.youtube.live_detector.check_live_status", new_callable=AsyncMock) as mock_check:
+        mock_check.return_value = LiveStatus(video_id="regular123", live_state="regular_video")
+        event_type, start = await classify_feed_entry("regular123", "Standard Gameplay Video")
+        assert event_type == EventType.UPLOAD
+        assert start is None
+
+
+@pytest.mark.asyncio
+async def test_scheduled_livestream_pipeline_delivers_exactly_one_notification(db_session):
+    """
+    CRITICAL REGRESSION TEST:
+    Prove that an eligible newly scheduled livestream (EvY9lx6YHvA) produces
+    EXACTLY ONE Discord notification in the scheduled pipeline, and subsequent cycles
+    are deduplicated without repeated broadcasts.
+    """
+    channel_id = PB_HERO_LIVE_ID
+    ch = await YouTubeChannelRepo.create(db_session, channel_id, "PB HERO LIVE")
+    ch.last_successful_parse_at = datetime.utcnow() - timedelta(minutes=5)
+    await db_session.flush()
+
+    dest = await YouTubeDestinationRepo.create(
+        db_session,
+        channel_id,
+        discord_channel_id=987654321,
+        upload_enabled=True,
+        scheduled_live_enabled=True,
+        live_started_enabled=True,
+    )
+    await db_session.commit()
+
+    entry = FeedEntry(
+        video_id=PROD_SCHEDULED_VIDEO_ID,
+        title=PROD_SCHEDULED_TITLE,
+        url=f"https://www.youtube.com/watch?v={PROD_SCHEDULED_VIDEO_ID}",
+        channel_id=channel_id,
+        channel_name="PB HERO LIVE",
+        published=datetime.utcnow() - timedelta(minutes=10),
+    )
+
+    feed_result = FeedResult(
+        success=True,
+        channel_id=channel_id,
+        channel_name="PB HERO LIVE",
+        feed_url=build_poll_feed_url(channel_id),
+        http_status=200,
+        entries=[entry],
+    )
+
+    mock_bot = MagicMock()
+    mock_discord_channel = AsyncMock()
+    mock_bot.get_channel.return_value = mock_discord_channel
+
+    scheduler = YouTubeScheduler(mock_bot)
+
+    with patch("app.youtube.scheduler.fetch_feed", new_callable=AsyncMock) as mock_fetch, \
+         patch("app.youtube.scheduler.classify_feed_entry", new_callable=AsyncMock) as mock_classify, \
+         patch("app.youtube.scheduler.send_notification", new_callable=AsyncMock) as mock_notify:
+
+        mock_fetch.return_value = feed_result
+        mock_classify.return_value = (EventType.SCHEDULED_LIVE, "2026-10-13T14:30:00+00:00")
+        mock_notify.return_value = True
+
+        # Cycle 1: newly detected scheduled livestream is processed
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        # Exactly 1 notification must be delivered with SCHEDULED_LIVE event type
+        assert mock_notify.call_count == 1
+        _, kwargs = mock_notify.call_args
+        assert kwargs["event_type"] == EventType.SCHEDULED_LIVE
+        assert kwargs["video_url"] == f"https://www.youtube.com/watch?v={PROD_SCHEDULED_VIDEO_ID}"
+        assert kwargs["scheduled_start"] == "2026-10-13T14:30:00+00:00"
+
+        # Verify recorded in DB as NOTIFIED
+        saved_event = await YouTubeEventRepo.get_by_key(
+            db_session, channel_id, PROD_SCHEDULED_VIDEO_ID, EventType.SCHEDULED_LIVE
+        )
+        assert saved_event is not None
+        assert saved_event.status == EventStatus.NOTIFIED
+
+        # Cycle 2: subsequent polling loop run must NOT broadcast again
+        mock_notify.reset_mock()
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        assert mock_notify.call_count == 0  # Deduplicated!
+
+
+@pytest.mark.asyncio
+async def test_delivery_transient_failure_retries_until_success(db_session):
+    """Verify that a transient Discord API delivery failure is marked FAILED and retried on next cycle."""
+    channel_id = PB_HERO_LIVE_ID
+    ch = await YouTubeChannelRepo.create(db_session, channel_id, "PB HERO LIVE")
+    ch.last_successful_parse_at = datetime.utcnow() - timedelta(minutes=5)
+    await db_session.flush()
+
+    dest = await YouTubeDestinationRepo.create(
+        db_session,
+        channel_id,
+        discord_channel_id=987654321,
+        upload_enabled=True,
+        scheduled_live_enabled=True,
+    )
+    await db_session.commit()
+
+    entry = FeedEntry(
+        video_id=PROD_SCHEDULED_VIDEO_ID,
+        title=PROD_SCHEDULED_TITLE,
+        url=f"https://www.youtube.com/watch?v={PROD_SCHEDULED_VIDEO_ID}",
+        channel_id=channel_id,
+        channel_name="PB HERO LIVE",
+        published=datetime.utcnow() - timedelta(minutes=5),
+    )
+
+    feed_result = FeedResult(
+        success=True,
+        channel_id=channel_id,
+        channel_name="PB HERO LIVE",
+        feed_url=build_poll_feed_url(channel_id),
+        http_status=200,
+        entries=[entry],
+    )
+
+    mock_bot = MagicMock()
+    scheduler = YouTubeScheduler(mock_bot)
+
+    with patch("app.youtube.scheduler.fetch_feed", new_callable=AsyncMock) as mock_fetch, \
+         patch("app.youtube.scheduler.classify_feed_entry", new_callable=AsyncMock) as mock_classify, \
+         patch("app.youtube.scheduler.send_notification", new_callable=AsyncMock) as mock_notify:
+
+        mock_fetch.return_value = feed_result
+        mock_classify.return_value = (EventType.SCHEDULED_LIVE, "2026-10-13T14:30:00+00:00")
+
+        # Cycle 1: Discord API fails (e.g. rate limit, channel not ready)
+        mock_notify.return_value = False
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        assert mock_notify.call_count == 1
+        failed_event = await YouTubeEventRepo.get_by_key(
+            db_session, channel_id, PROD_SCHEDULED_VIDEO_ID, EventType.SCHEDULED_LIVE
+        )
+        assert failed_event.status == EventStatus.FAILED
+
+        # Cycle 2: Discord API recovers and succeeds
+        mock_notify.reset_mock()
+        mock_notify.return_value = True
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        assert mock_notify.call_count == 1
+        notified_event = await YouTubeEventRepo.get_by_key(
+            db_session, channel_id, PROD_SCHEDULED_VIDEO_ID, EventType.SCHEDULED_LIVE
+        )
+        assert notified_event.status == EventStatus.NOTIFIED
+
+        # Cycle 3: Deduplication stops further sending
+        mock_notify.reset_mock()
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        assert mock_notify.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_startup_baselining_skips_historical_entries_without_broadcast(db_session):
+    """
+    Verify that an un-baselined channel marks all existing historical entries as SKIPPED
+    on initial setup without broadcasting notifications.
+    """
+    channel_id = PB_HERO_GAMER_ID
+    # Freshly created channel: last_successful_parse_at is None, 0 events recorded
+    ch = await YouTubeChannelRepo.create(db_session, channel_id, "PB HERO GAMER")
+    await db_session.flush()
+
+    dest = await YouTubeDestinationRepo.create(
+        db_session,
+        channel_id,
+        discord_channel_id=123456,
+        upload_enabled=True,
+    )
+    await db_session.commit()
+
+    # 3 historical entries in feed
+    historical_entries = [
+        FeedEntry(video_id=f"hist_{i}", title=f"Past Video {i}", url=f"https://yt.com/{i}", channel_id=channel_id, published=datetime.utcnow() - timedelta(hours=i+1))
+        for i in range(3)
+    ]
+    feed_result = FeedResult(
+        success=True,
+        channel_id=channel_id,
+        channel_name="PB HERO GAMER",
+        feed_url=build_poll_feed_url(channel_id),
+        http_status=200,
+        entries=historical_entries,
+    )
+
+    mock_bot = MagicMock()
+    scheduler = YouTubeScheduler(mock_bot)
+
+    with patch("app.youtube.scheduler.fetch_feed", new_callable=AsyncMock) as mock_fetch, \
+         patch("app.youtube.scheduler.classify_feed_entry", new_callable=AsyncMock) as mock_classify, \
+         patch("app.youtube.scheduler.send_notification", new_callable=AsyncMock) as mock_notify:
+
+        mock_fetch.return_value = feed_result
+        mock_classify.return_value = (EventType.UPLOAD, None)
+
+        # Baseline run on initial setup
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        # No notifications broadcast for historical backlog
+        assert mock_notify.call_count == 0
+
+        # All 3 historical entries recorded as SKIPPED
+        for i in range(3):
+            ev = await YouTubeEventRepo.get_by_key(db_session, channel_id, f"hist_{i}", EventType.UPLOAD)
+            assert ev is not None
+            assert ev.status == EventStatus.SKIPPED
+
+        # Now a genuine new 4th video arrives in the feed
+        new_entry = FeedEntry(
+            video_id="brand_new_vid",
+            title="Fresh Upload",
+            url="https://yt.com/new",
+            channel_id=channel_id,
+            published=datetime.utcnow() - timedelta(minutes=2),
+        )
+        feed_result.entries = [new_entry] + historical_entries
+        mock_notify.return_value = True
+
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        # Exactly 1 notification sent for the new video only!
+        assert mock_notify.call_count == 1
+        _, kwargs = mock_notify.call_args
+        assert kwargs["video_url"] == "https://yt.com/new"
+

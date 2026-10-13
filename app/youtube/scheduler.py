@@ -16,11 +16,16 @@ import httpx
 
 from app.config import get_settings
 from app.database.engine import get_session_direct
-from app.database.models import EventType, VideoState
-from app.database.repositories import YouTubeChannelRepo, YouTubeDestinationRepo
-from app.youtube.dedupe import is_duplicate, mark_notified, record_event
+from app.database.models import EventStatus, EventType, VideoState
+from app.database.repositories import YouTubeChannelRepo, YouTubeDestinationRepo, YouTubeEventRepo
+from app.youtube.channel_resolver import normalize_channel_id
+from app.youtube.dedupe import is_duplicate, mark_failed, mark_notified, mark_skipped, record_event
 from app.youtube.feed_parser import fetch_feed
-from app.youtube.live_detector import check_channel_live_status, check_live_status
+from app.youtube.live_detector import (
+    check_channel_live_status,
+    check_live_status,
+    classify_feed_entry,
+)
 from app.youtube.notifier import send_notification
 
 logger = logging.getLogger("pbhero.youtube")
@@ -190,6 +195,11 @@ class YouTubeScheduler:
             )
             return
 
+        # Baseline initialization check: if channel has never had a successful parse AND has no recorded events,
+        # baseline all historical entries as seen (EventStatus.SKIPPED) to avoid broadcasting historical videos on setup.
+        events_count = await YouTubeEventRepo.count_for_channel(session, channel.youtube_channel_id)
+        is_initial_baseline = (events_count == 0 and channel.last_successful_parse_at is None)
+
         # Update channel name if discovered
         if result.channel_name and result.channel_name != channel.channel_name:
             channel.channel_name = result.channel_name
@@ -202,46 +212,126 @@ class YouTubeScheduler:
             entry_count=len(result.entries),
         )
 
-        # Process entries (newest first, chronological notification delivery)
+        if not result.entries:
+            return
+
+        if is_initial_baseline:
+            logger.info(
+                "Initial baseline for channel %s (%s): marking %d existing feed entries as seen (no broadcasts)",
+                channel.youtube_channel_id, channel.channel_name, len(result.entries)
+            )
+            for entry in result.entries:
+                event_type, sched_start = await classify_feed_entry(entry.video_id, entry.title, self._http_client)
+                await record_event(
+                    session=session,
+                    channel_id=channel.youtube_channel_id,
+                    video_id=entry.video_id,
+                    event_type=event_type,
+                    title=entry.title,
+                    video_url=entry.url,
+                    published_at=entry.published,
+                    status=EventStatus.SKIPPED,
+                )
+            await session.commit()
+            return
+
+        # Process entries (oldest to newest for chronological delivery)
         cutoff = datetime.utcnow() - timedelta(hours=24)
+        destinations = await YouTubeDestinationRepo.get_for_channel(
+            session, channel.youtube_channel_id
+        )
 
         for entry in reversed(result.entries):
             # Skip entries older than 24h
-            if entry.published and entry.published < cutoff:
+            pub_time = entry.published or entry.updated
+            if pub_time and pub_time < cutoff:
+                logger.debug(
+                    "Candidate %s: skipping, published at %s is older than cutoff %s",
+                    entry.video_id, pub_time, cutoff
+                )
                 continue
 
             # Verify channel ID matches
-            if entry.channel_id and entry.channel_id != channel.youtube_channel_id:
+            clean_entry_cid = normalize_channel_id(entry.channel_id) if entry.channel_id else channel.youtube_channel_id
+            if clean_entry_cid and clean_entry_cid != channel.youtube_channel_id:
+                logger.warning(
+                    "Candidate %s: channel mismatch ('%s' != '%s'), skipping",
+                    entry.video_id, clean_entry_cid, channel.youtube_channel_id
+                )
                 continue
 
-            # Check for duplicate
-            if await is_duplicate(session, channel.youtube_channel_id, entry.video_id, EventType.UPLOAD):
+            # Classify the feed entry into scheduled live, upload, or premiere
+            event_type, sched_start = await classify_feed_entry(entry.video_id, entry.title, self._http_client)
+            logger.info(
+                "Candidate %s (%s): classified as %s (sched_start=%s)",
+                entry.video_id, (entry.title or "")[:40], event_type.value, sched_start
+            )
+
+            # Check if this event has already been successfully notified or marked as skipped
+            if await is_duplicate(session, channel.youtube_channel_id, entry.video_id, event_type):
+                logger.debug(
+                    "Candidate %s (%s): already notified for %s, skipping",
+                    entry.video_id, (entry.title or "")[:40], event_type.value
+                )
                 continue
 
-            # Record event
+            # Check which destinations want this event
+            eligible_destinations = []
+            for dest in destinations:
+                should_send = False
+                if event_type == EventType.SCHEDULED_LIVE:
+                    if dest.scheduled_live_enabled:
+                        should_send = True
+                    elif dest.upload_enabled:
+                        should_send = True
+                elif event_type == EventType.UPLOAD:
+                    if dest.upload_enabled:
+                        should_send = True
+                elif event_type == EventType.PREMIERE:
+                    if dest.premiere_enabled or dest.upload_enabled:
+                        should_send = True
+                elif event_type == EventType.LIVE_STARTED:
+                    if dest.live_started_enabled:
+                        should_send = True
+
+                if should_send:
+                    eligible_destinations.append(dest)
+                else:
+                    logger.debug(
+                        "Candidate %s (%s): destination %d has %s disabled, skipping",
+                        entry.video_id, event_type.value, dest.discord_channel_id, event_type.value
+                    )
+
+            if not eligible_destinations:
+                logger.info(
+                    "Candidate %s (%s): no destinations configured for %s, skipping",
+                    entry.video_id, event_type.value
+                )
+                continue
+
+            # Record event in DETECTED state
             event_id = await record_event(
                 session=session,
                 channel_id=channel.youtube_channel_id,
                 video_id=entry.video_id,
-                event_type=EventType.UPLOAD,
+                event_type=event_type,
                 title=entry.title,
                 video_url=entry.url,
                 published_at=entry.published,
+                status=EventStatus.DETECTED,
             )
 
-            # Get destinations
-            destinations = await YouTubeDestinationRepo.get_for_channel(
-                session, channel.youtube_channel_id
-            )
-
-            for dest in destinations:
-                if not dest.upload_enabled:
-                    continue
-
+            # Attempt notification delivery across destinations
+            all_sent = True
+            for dest in eligible_destinations:
+                logger.info(
+                    "Candidate %s (%s): sending %s notification to Discord channel %d",
+                    entry.video_id, (entry.title or "")[:40], event_type.value, dest.discord_channel_id
+                )
                 success = await send_notification(
                     bot=self.bot,
                     discord_channel_id=dest.discord_channel_id,
-                    event_type=EventType.UPLOAD,
+                    event_type=event_type,
                     title=entry.title,
                     video_url=entry.url,
                     channel_name=channel.channel_name,
@@ -250,10 +340,28 @@ class YouTubeScheduler:
                     role_id=dest.notification_role_id,
                     channel_id=channel.youtube_channel_id,
                     published_at=entry.published,
+                    scheduled_start=sched_start,
                 )
 
-                if success:
-                    await mark_notified(session, event_id)
+                if not success:
+                    all_sent = False
+                    logger.warning(
+                        "Candidate %s (%s): delivery failed to Discord channel %d",
+                        entry.video_id, event_type.value, dest.discord_channel_id
+                    )
+
+            if all_sent:
+                await mark_notified(session, event_id)
+                logger.info(
+                    "Candidate %s (%s): successfully notified all destinations (event_id=%d)",
+                    entry.video_id, event_type.value, event_id
+                )
+            else:
+                await mark_failed(session, event_id)
+                logger.warning(
+                    "Candidate %s (%s): delivery failed on at least one destination (event_id=%d); will retry next cycle",
+                    entry.video_id, event_type.value, event_id
+                )
 
     async def _check_live_states(self) -> None:
         """Check live states for monitored channels without affecting RSS feed health."""
@@ -345,6 +453,8 @@ class YouTubeScheduler:
 
                         if success:
                             await mark_notified(session, event_id)
+                        else:
+                            await mark_failed(session, event_id)
 
                 except Exception as e:
                     logger.error("Live check error for %s: %s", channel.youtube_channel_id, str(e))

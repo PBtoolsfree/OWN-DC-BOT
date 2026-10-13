@@ -23,6 +23,7 @@ from typing import Optional
 import httpx
 
 from app.config import get_settings
+from app.database.models import EventType
 from app.youtube.feed_parser import FeedEntry, fetch_feed
 
 logger = logging.getLogger("pbhero.youtube")
@@ -179,12 +180,125 @@ async def check_live_status_data_api(video_id: str, api_key: str, http_client: O
             await client.aclose()
 
 
+async def check_live_status_watch_page(
+    video_id: str,
+    http_client: Optional[httpx.AsyncClient] = None,
+) -> Optional[LiveStatus]:
+    """
+    Check video live status via public watch page HTML player response.
+    Requires no API key and does not trigger yt-dlp anti-bot verification blocks.
+    """
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    close_client = False
+    client = http_client
+    if client is None:
+        client = httpx.AsyncClient(timeout=15.0, follow_redirects=True)
+        close_client = True
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            return None
+
+        text = response.text
+        m = re.search(r"ytInitialPlayerResponse\s*=\s*({.+?});(?:var|\s*<)", text)
+        if not m:
+            m = re.search(r"ytInitialPlayerResponse\s*=\s*({.+?});", text)
+        if not m:
+            return None
+
+        data = json.loads(m.group(1))
+        play = data.get("playabilityStatus", {})
+        video_details = data.get("videoDetails", {})
+        microformat = data.get("microformat", {}).get("playerMicroformatRenderer", {})
+        live_details = microformat.get("liveBroadcastDetails", {})
+
+        title = video_details.get("title") or ""
+        is_live_now = live_details.get("isLiveNow", False)
+        start_timestamp = live_details.get("startTimestamp")
+        is_upcoming = video_details.get("isUpcoming", False) or play.get("status") == "LIVE_STREAM_OFFLINE"
+        is_live_content = video_details.get("isLiveContent", False)
+
+        if is_live_now:
+            return LiveStatus(
+                video_id=video_id,
+                is_live=True,
+                live_state="live",
+                title=title,
+                viewer_count=int(video_details.get("viewCount", 0)) if str(video_details.get("viewCount", "")).isdigit() else None,
+            )
+        elif is_upcoming or (is_live_content and start_timestamp):
+            return LiveStatus(
+                video_id=video_id,
+                is_upcoming=True,
+                live_state="upcoming",
+                title=title,
+                scheduled_start=start_timestamp,
+            )
+        elif play.get("status") == "OK" and not is_live_content:
+            return LiveStatus(
+                video_id=video_id,
+                is_live=False,
+                live_state="regular_video",
+                title=title,
+            )
+        return None
+    except Exception as e:
+        logger.debug("Watch page live check error for %s: %s", video_id, e)
+        return None
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def classify_feed_entry(
+    video_id: str,
+    title: str = "",
+    http_client: Optional[httpx.AsyncClient] = None,
+) -> tuple[EventType, Optional[str]]:
+    """
+    Classify an Atom RSS entry into an EventType and optional scheduled_start.
+    Accurately identifies:
+    - EventType.SCHEDULED_LIVE (scheduled/upcoming live stream)
+    - EventType.LIVE_STARTED (actively streaming now)
+    - EventType.PREMIERE (scheduled premiere)
+    - EventType.UPLOAD (standard uploaded video)
+
+    Returns: (event_type, scheduled_start)
+    """
+    status = await check_live_status(video_id, http_client=http_client)
+    if status.is_live or status.live_state == "live":
+        return EventType.LIVE_STARTED, None
+    elif status.is_upcoming or status.live_state == "upcoming":
+        return EventType.SCHEDULED_LIVE, status.scheduled_start
+    elif status.is_premiere or status.live_state == "premiere":
+        return EventType.PREMIERE, status.scheduled_start
+    elif status.live_state == "regular_video":
+        return EventType.UPLOAD, None
+
+    # Title keyword heuristics fallback if live state was unknown
+    title_lower = (title or "").lower()
+    keywords = ("live", "stream", "livestream", "custom room", "🔴", "scheduled")
+    if any(k in title_lower for k in keywords):
+        return EventType.SCHEDULED_LIVE, None
+    elif "premiere" in title_lower:
+        return EventType.PREMIERE, None
+
+    return EventType.UPLOAD, None
+
+
 async def check_live_status(video_id: str, http_client: Optional[httpx.AsyncClient] = None) -> LiveStatus:
     """
     Check the live status of a YouTube video.
 
-    Uses YouTube Data API v3 if API key is configured.
-    Otherwise uses yt-dlp with anti-bot circuit breaker.
+    1. Uses YouTube Data API v3 if API key is configured.
+    2. Inspects public watch page player metadata (fast, direct, no yt-dlp dependency, no API key).
+    3. Falls back to yt-dlp with anti-bot circuit breaker if watch page was inconclusive.
     """
     global _bot_blocked_until
 
@@ -196,7 +310,12 @@ async def check_live_status(video_id: str, http_client: Optional[httpx.AsyncClie
         if api_result is not None:
             return api_result
 
-    # 2. Check if yt-dlp is currently in anti-bot cooldown
+    # 2. Check public watch page player metadata
+    watch_res = await check_live_status_watch_page(video_id, http_client)
+    if watch_res is not None and watch_res.live_state != "unknown":
+        return watch_res
+
+    # 3. Check if yt-dlp is currently in anti-bot cooldown
     async with _bot_circuit_lock:
         if _bot_blocked_until and datetime.utcnow() < _bot_blocked_until:
             wait_remaining = int((_bot_blocked_until - datetime.utcnow()).total_seconds())
@@ -210,7 +329,7 @@ async def check_live_status(video_id: str, http_client: Optional[httpx.AsyncClie
                 error=f"YouTube anti-bot verification active (yt-dlp in {wait_remaining}s cooldown). Set YOUTUBE_API_KEY for guaranteed checks.",
             )
 
-    # 3. Fallback to yt-dlp
+    # 4. Fallback to yt-dlp
     url = f"https://www.youtube.com/watch?v={video_id}"
     logger.debug("Checking live status via yt-dlp for video: %s", video_id)
 
