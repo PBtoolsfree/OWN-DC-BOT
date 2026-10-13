@@ -136,8 +136,12 @@ async def resolve_channel_id(input_str: str, http_client: httpx.AsyncClient = No
     return None
 
 
-CANONICAL_FEED_BASE = "https://www.youtube.com/xml/feeds/videos.xml"
-LEGACY_FEED_BASE = "https://www.youtube.com/feeds/videos.xml"
+POLL_FEED_BASE = "https://www.youtube.com/feeds/videos.xml"
+WEBSUB_TOPIC_BASE = "https://www.youtube.com/xml/feeds/videos.xml"
+
+# Compatibility constants
+CANONICAL_FEED_BASE = POLL_FEED_BASE
+LEGACY_FEED_BASE = POLL_FEED_BASE
 
 
 def is_valid_channel_id(channel_id: Optional[str]) -> bool:
@@ -176,19 +180,33 @@ def sanitize_channel_id(channel_id: str) -> str:
     return cleaned
 
 
-def build_feed_url(channel_id: str) -> str:
+def build_poll_feed_url(channel_id: str) -> str:
     """
-    Build the canonical Atom feed URL for a validated YouTube channel ID.
-    Uses the recommended https://www.youtube.com/xml/feeds/videos.xml endpoint.
+    Build the direct RSS/Atom polling feed URL for a validated YouTube channel ID.
+    Returns: https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}
     """
     cid = sanitize_channel_id(channel_id)
-    return f"{CANONICAL_FEED_BASE}?channel_id={cid}"
+    return f"{POLL_FEED_BASE}?channel_id={cid}"
+
+
+def build_websub_topic_url(channel_id: str) -> str:
+    """
+    Build the WebSub subscription topic URL (used strictly for WebSub hubs, not polling).
+    Returns: https://www.youtube.com/xml/feeds/videos.xml?channel_id={channel_id}
+    """
+    cid = sanitize_channel_id(channel_id)
+    return f"{WEBSUB_TOPIC_BASE}?channel_id={cid}"
+
+
+def build_feed_url(channel_id: str) -> str:
+    """
+    Build the feed URL for RSS polling. Alias for build_poll_feed_url.
+    """
+    return build_poll_feed_url(channel_id)
 
 
 def build_legacy_feed_url(channel_id: str) -> str:
     """
-    Build the legacy Atom feed URL for a validated YouTube channel ID.
-    Used strictly as a single bounded fallback when the canonical endpoint fails.
+    Legacy feed URL builder. Alias for build_poll_feed_url.
     """
-    cid = sanitize_channel_id(channel_id)
-    return f"{LEGACY_FEED_BASE}?channel_id={cid}"
+    return build_poll_feed_url(channel_id)

@@ -110,10 +110,10 @@ class YouTubeChannelRepo:
     @staticmethod
     async def create(session: AsyncSession, youtube_channel_id: str, channel_name: str,
                      handle: str = None, feed_url: str = None) -> YouTubeChannel:
-        from app.youtube.channel_resolver import build_feed_url
+        from app.youtube.channel_resolver import build_poll_feed_url
         clean_channel_id = youtube_channel_id.strip()
         if not feed_url:
-            feed_url = build_feed_url(clean_channel_id)
+            feed_url = build_poll_feed_url(clean_channel_id)
         channel = YouTubeChannel(
             youtube_channel_id=clean_channel_id,
             channel_name=channel_name,
@@ -188,18 +188,18 @@ class YouTubeChannelRepo:
     @staticmethod
     async def repair_saved_feed_urls(session: AsyncSession) -> int:
         """
-        Idempotently repair stored YouTube feed URLs to canonical /xml/feeds/videos.xml.
+        Idempotently restore stored YouTube feed URLs to direct RSS polling endpoint /feeds/videos.xml.
         Preserves all existing channel IDs, destinations, notification settings, and enabled state.
         """
-        from app.youtube.channel_resolver import build_feed_url
+        from app.youtube.channel_resolver import build_poll_feed_url
         result = await session.execute(select(YouTubeChannel))
         channels = list(result.scalars().all())
         updated_count = 0
         for ch in channels:
             try:
-                canonical = build_feed_url(ch.youtube_channel_id)
-                if ch.feed_url != canonical:
-                    ch.feed_url = canonical
+                poll_url = build_poll_feed_url(ch.youtube_channel_id)
+                if ch.feed_url != poll_url:
+                    ch.feed_url = poll_url
                     ch.updated_at = datetime.utcnow()
                     updated_count += 1
             except Exception:

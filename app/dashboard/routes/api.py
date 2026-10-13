@@ -324,15 +324,15 @@ async def list_youtube_channels(username: str = Depends(require_auth)):
     """List all monitored YouTube channels."""
     session = await get_session_direct()
     try:
-        from app.youtube.channel_resolver import build_feed_url
+        from app.youtube.channel_resolver import build_poll_feed_url
         channels = await YouTubeChannelRepo.get_all(session)
         result = []
         for ch in channels:
             destinations = await YouTubeDestinationRepo.get_for_channel(session, ch.youtube_channel_id)
             canonical_feed = ch.feed_url
-            if not canonical_feed or "/xml/feeds/" not in canonical_feed:
+            if not canonical_feed or "/xml/feeds/" in canonical_feed:
                 try:
-                    canonical_feed = build_feed_url(ch.youtube_channel_id)
+                    canonical_feed = build_poll_feed_url(ch.youtube_channel_id)
                 except Exception:
                     canonical_feed = ch.feed_url
 
@@ -380,7 +380,7 @@ async def add_youtube_channel(request: Request, username: str = Depends(require_
         raise HTTPException(status_code=400, detail="YouTube channel and Discord channel are required")
 
     # Resolve channel ID
-    from app.youtube.channel_resolver import resolve_channel_id, build_feed_url
+    from app.youtube.channel_resolver import resolve_channel_id, build_poll_feed_url
 
     resolved = await resolve_channel_id(youtube_input)
     if not resolved:
@@ -408,7 +408,7 @@ async def add_youtube_channel(request: Request, username: str = Depends(require_
             # Create channel and destination
             channel = await YouTubeChannelRepo.create(
                 session, channel_id, channel_name, handle=handle,
-                feed_url=build_feed_url(channel_id),
+                feed_url=build_poll_feed_url(channel_id),
             )
             dest = await YouTubeDestinationRepo.create(
                 session, channel_id, int(discord_channel_id),
@@ -474,9 +474,9 @@ async def toggle_youtube_channel(channel_id: str, request: Request, username: st
 
 @router.post("/youtube/test/{channel_id}")
 async def test_youtube_channel(channel_id: str, username: str = Depends(require_auth)):
-    """Test YouTube channel feed using canonical endpoint and return rich diagnostics."""
+    """Test YouTube channel feed using direct RSS polling endpoint and return rich diagnostics."""
     from app.youtube.feed_parser import fetch_feed
-    from app.youtube.channel_resolver import build_feed_url
+    from app.youtube.channel_resolver import build_poll_feed_url
 
     clean_id = channel_id.strip()
     result = await fetch_feed(clean_id)
@@ -496,7 +496,7 @@ async def test_youtube_channel(channel_id: str, username: str = Depends(require_
                 ch.last_error = None
                 ch.consecutive_failures = 0
                 ch.feed_health = "HEALTHY"
-                ch.feed_url = result.feed_url or build_feed_url(clean_id)
+                ch.feed_url = result.feed_url or build_poll_feed_url(clean_id)
                 last_success_iso = now.isoformat()
             else:
                 ch.last_error = result.error
@@ -514,7 +514,7 @@ async def test_youtube_channel(channel_id: str, username: str = Depends(require_
     return {
         "success": result.success,
         "channel_name": result.channel_name,
-        "feed_url": result.feed_url or build_feed_url(clean_id),
+        "feed_url": result.feed_url or build_poll_feed_url(clean_id),
         "http_status": result.http_status,
         "content_type": result.content_type,
         "entry_count": len(result.entries),
@@ -533,7 +533,7 @@ async def test_youtube_channel(channel_id: str, username: str = Depends(require_
 @router.get("/youtube/channels/{channel_id}")
 async def get_youtube_channel(channel_id: str, username: str = Depends(require_auth)):
     """Get details of a single monitored YouTube channel with rich telemetry."""
-    from app.youtube.channel_resolver import build_feed_url
+    from app.youtube.channel_resolver import build_poll_feed_url
 
     session = await get_session_direct()
     try:
@@ -543,9 +543,9 @@ async def get_youtube_channel(channel_id: str, username: str = Depends(require_a
 
         destinations = await YouTubeDestinationRepo.get_for_channel(session, ch.youtube_channel_id)
         canonical_feed = ch.feed_url
-        if not canonical_feed or "/xml/feeds/" not in canonical_feed:
+        if not canonical_feed or "/xml/feeds/" in canonical_feed:
             try:
-                canonical_feed = build_feed_url(ch.youtube_channel_id)
+                canonical_feed = build_poll_feed_url(ch.youtube_channel_id)
             except Exception:
                 canonical_feed = ch.feed_url
 

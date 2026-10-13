@@ -73,7 +73,7 @@ class YouTubeScheduler:
                 repaired = await YouTubeChannelRepo.repair_saved_feed_urls(session)
                 if repaired > 0:
                     await session.commit()
-                    logger.info("Startup repair: migrated %d YouTube channel feed URLs to canonical endpoint", repaired)
+                    logger.info("Startup repair: restored %d YouTube channel feed URLs to direct RSS polling endpoint", repaired)
             finally:
                 await session.close()
         except Exception as e:

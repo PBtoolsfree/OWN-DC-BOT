@@ -21,8 +21,8 @@ import feedparser
 import httpx
 
 from app.youtube.channel_resolver import (
+    build_poll_feed_url,
     build_feed_url,
-    build_legacy_feed_url,
     sanitize_channel_id,
 )
 
@@ -128,6 +128,15 @@ def _parse_atom_xml(
         logger.warning("%s for channel %s", error_msg, expected_channel_id)
         return False, "", [], error_msg
 
+    # Detect static WebSub topic document mistakenly returned or fetched instead of real video feed
+    if "This is a static file" in clean_text or "should be used as a topic on the" in clean_text:
+        error_msg = (
+            "Wrong endpoint: received static WebSub topic document instead of channel video feed. "
+            "RSS polling must use https://www.youtube.com/feeds/videos.xml?channel_id=..."
+        )
+        logger.error("%s (channel %s)", error_msg, expected_channel_id)
+        return False, "", [], error_msg
+
     feed = feedparser.parse(clean_text)
 
     # Malformed XML with no feed or entries
@@ -152,6 +161,12 @@ def _parse_atom_xml(
         err = f"Feed channel ID mismatch: got '{feed_channel_id}', expected '{expected_channel_id}'"
         logger.error(err)
         return False, channel_name, [], err
+
+    # Detect empty feed stub without title/metadata
+    if not channel_name and not getattr(feed, "entries", None) and not feed_channel_id:
+        err = "Invalid feed: received empty XML document with no channel metadata or entries"
+        logger.warning("%s for %s", err, expected_channel_id)
+        return False, "", [], err
 
     entries: list[FeedEntry] = []
     for entry in getattr(feed, "entries", []):
@@ -248,9 +263,7 @@ async def fetch_feed(
     # 2. Acquire channel lock to prevent overlapping concurrent checks
     channel_lock = await _get_channel_lock(clean_channel_id)
     async with channel_lock:
-        canonical_url = build_feed_url(clean_channel_id)
-        legacy_url = build_legacy_feed_url(clean_channel_id)
-        current_target_url = canonical_url
+        target_url = build_poll_feed_url(clean_channel_id)
 
         close_client = False
         client = http_client
@@ -259,123 +272,103 @@ async def fetch_feed(
             close_client = True
 
         try:
-            fallback_attempted = False
+            last_error: Optional[str] = None
+            last_status: Optional[int] = None
+            content_type = ""
+            response_text = ""
 
-            while True:
-                last_error: Optional[str] = None
-                last_status: Optional[int] = None
-                content_type = ""
-                response_text = ""
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    logger.debug(
+                        "Fetching YouTube RSS feed for %s (attempt %d): %s",
+                        clean_channel_id, attempt + 1, target_url
+                    )
+                    response = await client.get(target_url, headers=DEFAULT_HEADERS)
+                    last_status = response.status_code
+                    content_type = response.headers.get("content-type", "")
 
-                for attempt in range(MAX_RETRIES + 1):
-                    try:
-                        logger.debug(
-                            "Fetching YouTube feed for %s (attempt %d): %s",
-                            clean_channel_id, attempt + 1, current_target_url
+                    # Handle status codes separately
+                    if response.status_code == 200:
+                        response_text = response.text
+                        fetched_at = datetime.utcnow()
+                        success, channel_name, entries, parse_error = _parse_atom_xml(
+                            response_text, clean_channel_id, content_type
                         )
-                        response = await client.get(current_target_url, headers=DEFAULT_HEADERS)
-                        last_status = response.status_code
-                        content_type = response.headers.get("content-type", "")
 
-                        # Handle status codes separately
-                        if response.status_code == 200:
-                            response_text = response.text
-                            fetched_at = datetime.utcnow()
-                            success, channel_name, entries, parse_error = _parse_atom_xml(
-                                response_text, clean_channel_id, content_type
+                        if success:
+                            logger.info(
+                                "Successfully parsed %d entries from feed for %s (%s)",
+                                len(entries), clean_channel_id, channel_name
                             )
-
-                            if success:
-                                logger.info(
-                                    "Successfully parsed %d entries from feed for %s (%s)",
-                                    len(entries), clean_channel_id, channel_name
-                                )
-                                return FeedResult(
-                                    success=True,
-                                    channel_id=clean_channel_id,
-                                    channel_name=channel_name,
-                                    entries=entries,
-                                    feed_url=current_target_url,
-                                    http_status=200,
-                                    content_type=content_type,
-                                    fetched_at=fetched_at,
-                                    parsed_at=datetime.utcnow(),
-                                )
-                            else:
-                                # Parsing failed or HTML returned
-                                last_error = parse_error
-                                break
-
-                        elif response.status_code == 304:
-                            logger.info("Feed not modified (304) for %s", clean_channel_id)
                             return FeedResult(
                                 success=True,
                                 channel_id=clean_channel_id,
-                                feed_url=current_target_url,
-                                http_status=304,
+                                channel_name=channel_name,
+                                entries=entries,
+                                feed_url=target_url,
+                                http_status=200,
                                 content_type=content_type,
-                                fetched_at=datetime.utcnow(),
+                                fetched_at=fetched_at,
                                 parsed_at=datetime.utcnow(),
                             )
-
-                        elif response.status_code == 404:
-                            last_error = f"HTTP 404: Channel feed not found at {current_target_url}"
-                            logger.warning(
-                                "HTTP 404 from feed endpoint for %s: %s",
-                                clean_channel_id, current_target_url
-                            )
-                            # Do not retry 404 on the same URL; break to fallback logic
-                            break
-
-                        elif response.status_code == 429:
-                            # Rate limited - check Retry-After
-                            retry_after_val = 60
-                            retry_after_hdr = response.headers.get("Retry-After")
-                            if retry_after_hdr and retry_after_hdr.isdigit():
-                                retry_after_val = int(retry_after_hdr)
-
-                            last_error = f"HTTP 429: Rate limited by YouTube (Retry-After: {retry_after_val}s)"
-                            logger.warning(
-                                "Rate limit 429 for %s. Retry-After=%ds", clean_channel_id, retry_after_val
-                            )
-
-                            if attempt < MAX_RETRIES and retry_after_val <= 5:
-                                await asyncio.sleep(retry_after_val)
-                                continue
-
-                            next_retry = datetime.utcnow() + timedelta(seconds=retry_after_val)
-                            return FeedResult(
-                                success=False,
-                                channel_id=clean_channel_id,
-                                feed_url=current_target_url,
-                                http_status=429,
-                                content_type=content_type,
-                                error=last_error,
-                                next_retry_at=next_retry,
-                                is_degraded=True,
-                            )
-
-                        elif response.status_code >= 500:
-                            last_error = f"HTTP {response.status_code}: YouTube service temporarily unavailable"
-                            logger.warning(
-                                "HTTP %d server error for %s (attempt %d)",
-                                response.status_code, clean_channel_id, attempt + 1
-                            )
-                            if attempt < MAX_RETRIES:
-                                backoff = INITIAL_BACKOFF * (2 ** attempt)
-                                await asyncio.sleep(backoff)
-                                continue
-                            break
-
                         else:
-                            last_error = f"HTTP {response.status_code}: Unexpected response"
+                            # Parsing failed, static WebSub stub, or HTML returned
+                            last_error = parse_error
                             break
 
-                    except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
-                        last_error = "Feed request timed out"
+                    elif response.status_code == 304:
+                        logger.info("Feed not modified (304) for %s", clean_channel_id)
+                        return FeedResult(
+                            success=True,
+                            channel_id=clean_channel_id,
+                            feed_url=target_url,
+                            http_status=304,
+                            content_type=content_type,
+                            fetched_at=datetime.utcnow(),
+                            parsed_at=datetime.utcnow(),
+                        )
+
+                    elif response.status_code == 404:
+                        last_error = f"HTTP 404: Channel feed not found or temporarily unavailable at {target_url}"
                         logger.warning(
-                            "Timeout fetching feed for %s (attempt %d): %s",
-                            clean_channel_id, attempt + 1, e
+                            "HTTP 404 from feed endpoint for %s: %s",
+                            clean_channel_id, target_url
+                        )
+                        break
+
+                    elif response.status_code == 429:
+                        # Rate limited - check Retry-After
+                        retry_after_val = 60
+                        retry_after_hdr = response.headers.get("Retry-After")
+                        if retry_after_hdr and retry_after_hdr.isdigit():
+                            retry_after_val = int(retry_after_hdr)
+
+                        last_error = f"HTTP 429: Rate limited by YouTube (Retry-After: {retry_after_val}s)"
+                        logger.warning(
+                            "Rate limit 429 for %s. Retry-After=%ds", clean_channel_id, retry_after_val
+                        )
+
+                        if attempt < MAX_RETRIES and retry_after_val <= 5:
+                            await asyncio.sleep(retry_after_val)
+                            continue
+
+                        next_retry = datetime.utcnow() + timedelta(seconds=retry_after_val)
+                        return FeedResult(
+                            success=False,
+                            channel_id=clean_channel_id,
+                            feed_url=target_url,
+                            http_status=429,
+                            content_type=content_type,
+                            error=last_error,
+                            next_retry_at=next_retry,
+                            is_degraded=True,
+                        )
+
+                    elif response.status_code >= 500:
+                        last_error = f"HTTP {response.status_code}: YouTube service temporarily unavailable"
+                        logger.warning(
+                            "HTTP %d server error for %s (attempt %d)",
+                            response.status_code, clean_channel_id, attempt + 1
                         )
                         if attempt < MAX_RETRIES:
                             backoff = INITIAL_BACKOFF * (2 ** attempt)
@@ -383,44 +376,45 @@ async def fetch_feed(
                             continue
                         break
 
-                    except httpx.HTTPError as e:
-                        last_error = f"Network error: {str(e)}"
-                        logger.warning(
-                            "Network error fetching feed for %s (attempt %d): %s",
-                            clean_channel_id, attempt + 1, e
-                        )
-                        if attempt < MAX_RETRIES:
-                            backoff = INITIAL_BACKOFF * (2 ** attempt)
-                            await asyncio.sleep(backoff)
-                            continue
+                    else:
+                        last_error = f"HTTP {response.status_code}: Unexpected response"
                         break
 
-                # 3. Check bounded fallback to legacy endpoint
-                if (
-                    allow_fallback
-                    and not fallback_attempted
-                    and current_target_url == canonical_url
-                ):
-                    fallback_attempted = True
-                    current_target_url = legacy_url
-                    logger.info(
-                        "Attempting single bounded fallback to legacy endpoint for %s: %s",
-                        clean_channel_id, legacy_url
+                except (httpx.TimeoutException, httpx.ConnectTimeout) as e:
+                    last_error = "Feed request timed out"
+                    logger.warning(
+                        "Timeout fetching feed for %s (attempt %d): %s",
+                        clean_channel_id, attempt + 1, e
                     )
-                    continue
+                    if attempt < MAX_RETRIES:
+                        backoff = INITIAL_BACKOFF * (2 ** attempt)
+                        await asyncio.sleep(backoff)
+                        continue
+                    break
 
-                # Both attempts / retries exhausted
-                logger.error("Feed fetch ultimately failed for %s: %s", clean_channel_id, last_error)
-                return FeedResult(
-                    success=False,
-                    channel_id=clean_channel_id,
-                    feed_url=current_target_url,
-                    http_status=last_status,
-                    content_type=content_type,
-                    error=last_error or "Unknown feed fetch failure",
-                    is_degraded=True,
-                    next_retry_at=datetime.utcnow() + timedelta(minutes=2),
-                )
+                except httpx.HTTPError as e:
+                    last_error = f"Network error: {str(e)}"
+                    logger.warning(
+                        "Network error fetching feed for %s (attempt %d): %s",
+                        clean_channel_id, attempt + 1, e
+                    )
+                    if attempt < MAX_RETRIES:
+                        backoff = INITIAL_BACKOFF * (2 ** attempt)
+                        await asyncio.sleep(backoff)
+                        continue
+                    break
+
+            logger.error("Feed fetch ultimately failed for %s: %s", clean_channel_id, last_error)
+            return FeedResult(
+                success=False,
+                channel_id=clean_channel_id,
+                feed_url=target_url,
+                http_status=last_status,
+                content_type=content_type,
+                error=last_error or "Unknown feed fetch failure",
+                is_degraded=True,
+                next_retry_at=datetime.utcnow() + timedelta(minutes=2),
+            )
 
         finally:
             if close_client:
