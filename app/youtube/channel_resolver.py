@@ -136,6 +136,59 @@ async def resolve_channel_id(input_str: str, http_client: httpx.AsyncClient = No
     return None
 
 
+CANONICAL_FEED_BASE = "https://www.youtube.com/xml/feeds/videos.xml"
+LEGACY_FEED_BASE = "https://www.youtube.com/feeds/videos.xml"
+
+
+def is_valid_channel_id(channel_id: Optional[str]) -> bool:
+    """Validate that the string is a valid YouTube channel ID (UC followed by 22 chars)."""
+    if not channel_id or not isinstance(channel_id, str):
+        return False
+    return bool(CHANNEL_ID_PATTERN.match(channel_id.strip()))
+
+
+def sanitize_channel_id(channel_id: str) -> str:
+    """
+    Sanitize and validate channel ID, ensuring no handles, URLs, or extra query params.
+    Raises ValueError if invalid.
+    """
+    if not channel_id:
+        raise ValueError("Channel ID cannot be empty.")
+
+    cleaned = channel_id.strip()
+
+    # Extract ID if a full URL or query was inadvertently passed
+    if "channel_id=" in cleaned:
+        match = re.search(r"channel_id=(UC[\w-]{22})", cleaned)
+        if match:
+            cleaned = match.group(1)
+    elif "/channel/" in cleaned:
+        match = re.search(r"/channel/(UC[\w-]{22})", cleaned)
+        if match:
+            cleaned = match.group(1)
+
+    if not CHANNEL_ID_PATTERN.match(cleaned):
+        raise ValueError(
+            f"Invalid YouTube channel ID: '{channel_id}'. "
+            "Channel ID must start with 'UC' followed by exactly 22 alphanumeric characters or hyphens/underscores."
+        )
+
+    return cleaned
+
+
 def build_feed_url(channel_id: str) -> str:
-    """Build the Atom feed URL for a channel ID."""
-    return f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    """
+    Build the canonical Atom feed URL for a validated YouTube channel ID.
+    Uses the recommended https://www.youtube.com/xml/feeds/videos.xml endpoint.
+    """
+    cid = sanitize_channel_id(channel_id)
+    return f"{CANONICAL_FEED_BASE}?channel_id={cid}"
+
+
+def build_legacy_feed_url(channel_id: str) -> str:
+    """
+    Build the legacy Atom feed URL for a validated YouTube channel ID.
+    Used strictly as a single bounded fallback when the canonical endpoint fails.
+    """
+    cid = sanitize_channel_id(channel_id)
+    return f"{LEGACY_FEED_BASE}?channel_id={cid}"

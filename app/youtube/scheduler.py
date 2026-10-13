@@ -20,7 +20,7 @@ from app.database.models import EventType, VideoState
 from app.database.repositories import YouTubeChannelRepo, YouTubeDestinationRepo
 from app.youtube.dedupe import is_duplicate, mark_notified, record_event
 from app.youtube.feed_parser import fetch_feed
-from app.youtube.live_detector import check_live_status
+from app.youtube.live_detector import check_channel_live_status, check_live_status
 from app.youtube.notifier import send_notification
 
 logger = logging.getLogger("pbhero.youtube")
@@ -31,7 +31,7 @@ class YouTubeScheduler:
     Background scheduler for YouTube feed monitoring.
 
     Polls YouTube Atom feeds at configurable intervals.
-    Uses yt-dlp for live state detection as secondary check.
+    Maintains complete isolation between feed health and live-status health.
     All notifications target the single configured Discord guild.
     """
 
@@ -66,14 +66,28 @@ class YouTubeScheduler:
         self._running = True
         self._http_client = httpx.AsyncClient(timeout=30.0)
 
-        # Start feed polling task
+        # 1. Perform safe, idempotent startup repair of saved YouTube feed URLs
+        try:
+            session = await get_session_direct()
+            try:
+                repaired = await YouTubeChannelRepo.repair_saved_feed_urls(session)
+                if repaired > 0:
+                    await session.commit()
+                    logger.info("Startup repair: migrated %d YouTube channel feed URLs to canonical endpoint", repaired)
+            finally:
+                await session.close()
+        except Exception as e:
+            logger.warning("Startup YouTube URL repair check encountered an issue: %s", e)
+
+        # 2. Start background tasks
         self._task = asyncio.create_task(self._feed_poll_loop())
-        # Start live detection task
         self._live_task = asyncio.create_task(self._live_check_loop())
 
-        logger.info("YouTube scheduler started (poll=%ds, live=%ds)",
-                     self.settings.YOUTUBE_POLL_INTERVAL,
-                     self.settings.YOUTUBE_LIVE_CHECK_INTERVAL)
+        logger.info(
+            "YouTube scheduler started (poll=%ds, live=%ds)",
+            self.settings.YOUTUBE_POLL_INTERVAL,
+            self.settings.YOUTUBE_LIVE_CHECK_INTERVAL,
+        )
 
     async def stop(self) -> None:
         """Stop the YouTube monitoring scheduler."""
@@ -100,7 +114,6 @@ class YouTubeScheduler:
 
     async def _feed_poll_loop(self) -> None:
         """Main feed polling loop."""
-        # Wait for bot to be ready
         await self.bot.wait_until_ready()
         await asyncio.sleep(5)  # Initial delay
 
@@ -113,7 +126,7 @@ class YouTubeScheduler:
             except Exception as e:
                 self._error_count += 1
                 self._healthy = self._error_count < 5
-                logger.error("Feed poll error (count=%d): %s", self._error_count, str(e))
+                logger.error("Feed poll loop error (count=%d): %s", self._error_count, str(e))
 
             await asyncio.sleep(self.settings.YOUTUBE_POLL_INTERVAL)
 
@@ -126,7 +139,7 @@ class YouTubeScheduler:
             try:
                 await self._check_live_states()
             except Exception as e:
-                logger.error("Live check error: %s", str(e))
+                logger.error("Live check loop error: %s", str(e))
 
             await asyncio.sleep(self.settings.YOUTUBE_LIVE_CHECK_INTERVAL)
 
@@ -145,11 +158,14 @@ class YouTubeScheduler:
                     await self._check_single_feed(session, channel)
                 except Exception as e:
                     logger.error("Error checking channel %s: %s", channel.youtube_channel_id, str(e))
-                    await YouTubeChannelRepo.update_check_status(
-                        session, channel.youtube_channel_id, success=False, error=str(e)
+                    await YouTubeChannelRepo.update_feed_status(
+                        session,
+                        channel.youtube_channel_id,
+                        success=False,
+                        error=str(e),
                     )
 
-                # Small delay between channels to be respectful
+                # Delay between channels to be respectful to rate limits
                 await asyncio.sleep(2)
 
             await session.commit()
@@ -164,8 +180,13 @@ class YouTubeScheduler:
         result = await fetch_feed(channel.youtube_channel_id, self._http_client)
 
         if not result.success:
-            await YouTubeChannelRepo.update_check_status(
-                session, channel.youtube_channel_id, success=False, error=result.error
+            await YouTubeChannelRepo.update_feed_status(
+                session,
+                channel.youtube_channel_id,
+                success=False,
+                http_status=result.http_status,
+                error=result.error,
+                next_retry_at=result.next_retry_at,
             )
             return
 
@@ -173,24 +194,31 @@ class YouTubeScheduler:
         if result.channel_name and result.channel_name != channel.channel_name:
             channel.channel_name = result.channel_name
 
-        await YouTubeChannelRepo.update_check_status(
-            session, channel.youtube_channel_id, success=True
+        await YouTubeChannelRepo.update_feed_status(
+            session,
+            channel.youtube_channel_id,
+            success=True,
+            http_status=result.http_status or 200,
+            entry_count=len(result.entries),
         )
 
-        # Process entries (newest first, but we want chronological notifications)
-        # Only process recent entries (last 24 hours) to avoid flooding on first run
+        # Process entries (newest first, chronological notification delivery)
         cutoff = datetime.utcnow() - timedelta(hours=24)
 
         for entry in reversed(result.entries):
-            # Skip old entries
+            # Skip entries older than 24h
             if entry.published and entry.published < cutoff:
+                continue
+
+            # Verify channel ID matches
+            if entry.channel_id and entry.channel_id != channel.youtube_channel_id:
                 continue
 
             # Check for duplicate
             if await is_duplicate(session, channel.youtube_channel_id, entry.video_id, EventType.UPLOAD):
                 continue
 
-            # Record and notify
+            # Record event
             event_id = await record_event(
                 session=session,
                 channel_id=channel.youtube_channel_id,
@@ -228,43 +256,61 @@ class YouTubeScheduler:
                     await mark_notified(session, event_id)
 
     async def _check_live_states(self) -> None:
-        """Check live states for recent videos using yt-dlp."""
+        """Check live states for monitored channels without affecting RSS feed health."""
         session = await get_session_direct()
         try:
             channels = await YouTubeChannelRepo.get_all(session, enabled_only=True)
 
             for channel in channels:
                 try:
-                    # Get recent feed entries to check for live
-                    result = await fetch_feed(channel.youtube_channel_id, self._http_client)
-                    if not result.success or not result.entries:
+                    live_res = await check_channel_live_status(
+                        channel.youtube_channel_id,
+                        http_client=self._http_client,
+                        max_candidates=3,
+                    )
+
+                    # Update live health telemetry in DB separately from feed health
+                    if live_res.status == "unknown":
+                        await YouTubeChannelRepo.update_live_status(
+                            session, channel.youtube_channel_id, live_health="UNKNOWN", error=live_res.error
+                        )
                         continue
-
-                    # Check only the most recent entry for live status
-                    latest = result.entries[0]
-                    live_status = await check_live_status(latest.video_id)
-
-                    if live_status.live_state == "live":
-                        event_type = EventType.LIVE_STARTED
-                    elif live_status.live_state == "upcoming":
-                        event_type = EventType.SCHEDULED_LIVE
-                    elif live_status.live_state == "premiere":
-                        event_type = EventType.PREMIERE
                     else:
+                        await YouTubeChannelRepo.update_live_status(
+                            session, channel.youtube_channel_id, live_health="HEALTHY"
+                        )
+
+                    # Determine event type
+                    event_type: Optional[EventType] = None
+                    if live_res.status == "live" and live_res.is_live:
+                        event_type = EventType.LIVE_STARTED
+                    elif live_res.status == "upcoming" and live_res.is_upcoming:
+                        event_type = EventType.SCHEDULED_LIVE
+                    elif live_res.status == "premiere" and live_res.is_premiere:
+                        event_type = EventType.PREMIERE
+
+                    if not event_type or not live_res.video_id:
                         continue
 
                     # Deduplicate
-                    if await is_duplicate(session, channel.youtube_channel_id, latest.video_id, event_type):
+                    if await is_duplicate(session, channel.youtube_channel_id, live_res.video_id, event_type):
                         continue
+
+                    video_url = f"https://www.youtube.com/watch?v={live_res.video_id}"
+                    video_state_map = {
+                        EventType.LIVE_STARTED: VideoState.LIVE,
+                        EventType.SCHEDULED_LIVE: VideoState.UPCOMING,
+                        EventType.PREMIERE: VideoState.PREMIERE,
+                    }
 
                     event_id = await record_event(
                         session=session,
                         channel_id=channel.youtube_channel_id,
-                        video_id=latest.video_id,
+                        video_id=live_res.video_id,
                         event_type=event_type,
-                        title=live_status.title or latest.title,
-                        video_url=latest.url,
-                        live_state=VideoState(live_status.live_state),
+                        title=live_res.title,
+                        video_url=video_url,
+                        live_state=video_state_map.get(event_type),
                     )
 
                     destinations = await YouTubeDestinationRepo.get_for_channel(
@@ -287,14 +333,14 @@ class YouTubeScheduler:
                             bot=self.bot,
                             discord_channel_id=dest.discord_channel_id,
                             event_type=event_type,
-                            title=live_status.title or latest.title,
-                            video_url=latest.url,
+                            title=live_res.title or "Live Stream",
+                            video_url=video_url,
                             channel_name=channel.channel_name,
-                            thumbnail_url=latest.thumbnail_url,
+                            thumbnail_url=f"https://i.ytimg.com/vi/{live_res.video_id}/hqdefault.jpg",
                             role_id=dest.notification_role_id,
                             channel_id=channel.youtube_channel_id,
-                            scheduled_start=live_status.scheduled_start,
-                            viewer_count=live_status.viewer_count,
+                            scheduled_start=live_res.scheduled_start,
+                            viewer_count=live_res.viewer_count,
                         )
 
                         if success:
@@ -303,7 +349,7 @@ class YouTubeScheduler:
                 except Exception as e:
                     logger.error("Live check error for %s: %s", channel.youtube_channel_id, str(e))
 
-                await asyncio.sleep(3)  # Stagger between channels
+                await asyncio.sleep(2)  # Delay between channels
 
             await session.commit()
         except Exception:

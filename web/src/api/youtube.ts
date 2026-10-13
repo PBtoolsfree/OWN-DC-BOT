@@ -32,7 +32,12 @@ export const youtubeApi = {
     apiClient.post<{
       success: boolean;
       channel_name?: string;
+      feed_url?: string;
+      http_status?: number | null;
+      content_type?: string;
       entry_count: number;
+      last_successful_check?: string | null;
+      feed_status?: string;
       error?: string | null;
       entries: Array<{ title: string; video_id: string; url: string; published?: string }>;
     }>(`/youtube/test/${id}`, {}),

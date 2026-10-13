@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # YouTube Monitoring
     YOUTUBE_POLL_INTERVAL: int = 60
     YOUTUBE_LIVE_CHECK_INTERVAL: int = 30
+    YOUTUBE_API_KEY: str = ""
 
     # Logging
     LOG_LEVEL: str = "INFO"

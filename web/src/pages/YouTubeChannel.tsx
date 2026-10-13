@@ -388,23 +388,81 @@ export default function YouTubeChannelDetails() {
           </div>
 
           {/* Telemetry card */}
-          <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-3">
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider border-b border-gray-800 pb-3">
-              Monitoring Health & Diagnostics
-            </h2>
+          <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+              <h2 className="text-sm font-bold text-white uppercase tracking-wider">
+                Monitoring Health & Diagnostics
+              </h2>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 uppercase font-semibold">Feed:</span>
+                <StatusBadge
+                  status={
+                    channel.feed_health === 'HEALTHY' || (!channel.last_error && !channel.feed_health)
+                      ? 'healthy'
+                      : channel.feed_health === 'DEGRADED'
+                      ? 'degraded'
+                      : channel.feed_health === 'UNKNOWN'
+                      ? 'inherit'
+                      : 'failed'
+                  }
+                  label={channel.feed_health || (!channel.last_error ? 'HEALTHY' : 'ERROR')}
+                />
+                <span className="text-[10px] text-gray-400 uppercase font-semibold ml-1">Live:</span>
+                <StatusBadge
+                  status={
+                    channel.live_health === 'HEALTHY'
+                      ? 'healthy'
+                      : channel.live_health === 'DEGRADED'
+                      ? 'degraded'
+                      : channel.live_health === 'UNKNOWN'
+                      ? 'inherit'
+                      : 'failed'
+                  }
+                  label={channel.live_health || 'UNKNOWN'}
+                />
+              </div>
+            </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
               <div className="bg-[#0B0E14] border border-gray-800 p-3 rounded-xl">
-                <span className="text-gray-500 block mb-0.5">Last Poll Check</span>
+                <span className="text-gray-500 block mb-0.5 text-[10px] uppercase font-semibold">Last Poll Attempt</span>
                 <span className="text-white font-medium">
                   {formatRelativeTime(channel.last_checked_at)}
                 </span>
               </div>
 
               <div className="bg-[#0B0E14] border border-gray-800 p-3 rounded-xl">
-                <span className="text-gray-500 block mb-0.5">Last Successful Feed</span>
+                <span className="text-gray-500 block mb-0.5 text-[10px] uppercase font-semibold">Last Feed Fetch</span>
                 <span className="text-emerald-400 font-medium">
                   {formatRelativeTime(channel.last_success_at)}
+                </span>
+              </div>
+
+              <div className="bg-[#0B0E14] border border-gray-800 p-3 rounded-xl">
+                <span className="text-gray-500 block mb-0.5 text-[10px] uppercase font-semibold">Last Successful Parse</span>
+                <span className="text-emerald-400 font-medium">
+                  {formatRelativeTime(channel.last_successful_parse_at || channel.last_success_at)}
+                </span>
+              </div>
+
+              <div className="bg-[#0B0E14] border border-gray-800 p-3 rounded-xl">
+                <span className="text-gray-500 block mb-0.5 text-[10px] uppercase font-semibold">HTTP Status Code</span>
+                <span className="text-white font-mono font-medium">
+                  {channel.last_http_status ? `HTTP ${channel.last_http_status}` : '200 (OK)'}
+                </span>
+              </div>
+
+              <div className="bg-[#0B0E14] border border-gray-800 p-3 rounded-xl">
+                <span className="text-gray-500 block mb-0.5 text-[10px] uppercase font-semibold">Consecutive Failures</span>
+                <span className={`font-mono font-medium ${channel.consecutive_failures ? 'text-rose-400' : 'text-gray-300'}`}>
+                  {channel.consecutive_failures || 0}
+                </span>
+              </div>
+
+              <div className="bg-[#0B0E14] border border-gray-800 p-3 rounded-xl">
+                <span className="text-gray-500 block mb-0.5 text-[10px] uppercase font-semibold">Next Scheduled Poll</span>
+                <span className="text-gray-300 font-medium">
+                  {formatRelativeTime(channel.next_retry_at) || 'In standard cycle (~60s)'}
                 </span>
               </div>
             </div>

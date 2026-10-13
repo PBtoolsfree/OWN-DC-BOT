@@ -32,7 +32,15 @@ export const YouTubeChannelCard: React.FC<YouTubeChannelCardProps> = ({
       .join(', ');
   };
 
-  const isHealthy = !channel.last_error;
+  const feedHealthStatus = channel.feed_health || (!channel.last_error ? 'HEALTHY' : 'ERROR');
+  const feedBadgeStatus =
+    feedHealthStatus === 'HEALTHY'
+      ? 'healthy'
+      : feedHealthStatus === 'DEGRADED'
+      ? 'degraded'
+      : feedHealthStatus === 'UNKNOWN'
+      ? 'inherit'
+      : 'failed';
 
   return (
     <div className="bg-[#151921] border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-all flex flex-col justify-between shadow-lg">
@@ -67,8 +75,8 @@ export const YouTubeChannelCard: React.FC<YouTubeChannelCardProps> = ({
               label={channel.enabled ? 'ACTIVE' : 'PAUSED'}
             />
             <StatusBadge
-              status={isHealthy ? 'healthy' : 'degraded'}
-              label={isHealthy ? 'HEALTHY' : 'ERROR'}
+              status={feedBadgeStatus}
+              label={feedHealthStatus}
             />
           </div>
         </div>
@@ -88,6 +96,14 @@ export const YouTubeChannelCard: React.FC<YouTubeChannelCardProps> = ({
               {formatRelativeTime(channel.last_checked_at)}
             </span>
           </div>
+        </div>
+
+        {/* Canonical Feed URL */}
+        <div className="text-[11px] text-gray-400 bg-[#0B0E14]/60 p-2.5 rounded-lg border border-gray-800/80">
+          <span className="text-gray-500 block text-[10px] uppercase font-semibold tracking-wider mb-0.5">Canonical Feed URL</span>
+          <span className="font-mono text-gray-300 truncate block text-[11px] select-all">
+            {channel.feed_url}
+          </span>
         </div>
 
         {channel.last_error && (

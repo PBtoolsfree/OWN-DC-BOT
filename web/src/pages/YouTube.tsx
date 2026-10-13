@@ -15,6 +15,8 @@ import { NotificationPreview } from '../components/NotificationPreview';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { EmptyState } from '../components/EmptyState';
+import { StatusBadge } from '../components/StatusBadge';
+import { formatRelativeTime } from '../utils/formatters';
 import { toast } from '../hooks/useToast';
 import {
   Youtube,
@@ -30,6 +32,7 @@ import {
   Radio,
   Clock,
   Sparkles,
+  AlertCircle,
 } from 'lucide-react';
 
 const VALID_TABS = ['channels', 'notifications', 'settings'] as const;
@@ -177,6 +180,13 @@ export default function YouTube() {
   const [testResult, setTestResult] = useState<{
     channelId: string;
     success: boolean;
+    channelName?: string;
+    feedUrl?: string;
+    httpStatus?: number | null;
+    contentType?: string;
+    entryCount?: number;
+    lastSuccessfulCheck?: string | null;
+    feedStatus?: string;
     entries: any[];
     error?: string | null;
   } | null>(null);
@@ -378,16 +388,58 @@ export default function YouTube() {
         setTestResult({
           channelId: id,
           success: true,
+          channelName: res.channel_name,
+          feedUrl: res.feed_url,
+          httpStatus: res.http_status,
+          contentType: res.content_type,
+          entryCount: res.entry_count,
+          lastSuccessfulCheck: res.last_successful_check,
+          feedStatus: res.feed_status || 'HEALTHY',
           entries: res.entries,
+          error: null,
         });
+        setChannels((prev) =>
+          prev.map((c) =>
+            c.youtube_channel_id === id
+              ? {
+                  ...c,
+                  feed_url: res.feed_url || c.feed_url,
+                  last_checked_at: res.last_successful_check || new Date().toISOString(),
+                  last_success_at: res.last_successful_check || new Date().toISOString(),
+                  feed_health: 'HEALTHY',
+                  last_error: null,
+                }
+              : c
+          )
+        );
       } else {
         toast.error(res.error || 'Feed check failed');
         setTestResult({
           channelId: id,
           success: false,
+          channelName: res.channel_name,
+          feedUrl: res.feed_url,
+          httpStatus: res.http_status,
+          contentType: res.content_type,
+          entryCount: 0,
+          lastSuccessfulCheck: res.last_successful_check,
+          feedStatus: res.feed_status || 'ERROR',
           entries: [],
           error: res.error,
         });
+        setChannels((prev) =>
+          prev.map((c) =>
+            c.youtube_channel_id === id
+              ? {
+                  ...c,
+                  feed_url: res.feed_url || c.feed_url,
+                  last_checked_at: new Date().toISOString(),
+                  feed_health: (res.feed_status as any) || 'ERROR',
+                  last_error: res.error,
+                }
+              : c
+          )
+        );
       }
     } catch (err: any) {
       toast.error(err.message || 'Failed to test feed');
@@ -498,11 +550,16 @@ export default function YouTube() {
 
           {/* Test feed drawer / card */}
           {testResult && (
-            <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-3">
+            <div className="bg-[#151921] border border-gray-800 rounded-2xl p-6 shadow-xl space-y-4">
               <div className="flex items-center justify-between border-b border-gray-800 pb-3">
-                <span className="text-xs font-bold text-white uppercase tracking-wider">
-                  Feed Test Result
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    Feed Test Result
+                  </span>
+                  {testResult.channelName && (
+                    <span className="text-xs text-gray-400 font-medium">({testResult.channelName})</span>
+                  )}
+                </div>
                 <button
                   onClick={() => setTestResult(null)}
                   className="text-xs text-gray-400 hover:text-white"
@@ -511,31 +568,88 @@ export default function YouTube() {
                 </button>
               </div>
 
+              {/* Telemetry metadata grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-[#0B0E14] p-3 rounded-xl border border-gray-800">
+                <div>
+                  <span className="text-gray-500 block text-[10px] uppercase font-semibold mb-1">Feed Status</span>
+                  <StatusBadge
+                    status={
+                      testResult.feedStatus === 'HEALTHY'
+                        ? 'healthy'
+                        : testResult.feedStatus === 'DEGRADED'
+                        ? 'degraded'
+                        : 'failed'
+                    }
+                    label={testResult.feedStatus || (testResult.success ? 'HEALTHY' : 'ERROR')}
+                  />
+                </div>
+                <div>
+                  <span className="text-gray-500 block text-[10px] uppercase font-semibold mb-1">Last Successful Check</span>
+                  <span className="text-emerald-400 font-medium">
+                    {testResult.lastSuccessfulCheck ? formatRelativeTime(testResult.lastSuccessfulCheck) : 'Never'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block text-[10px] uppercase font-semibold mb-1">HTTP Status / Content</span>
+                  <span className="text-gray-300 font-mono">
+                    {testResult.httpStatus ? `HTTP ${testResult.httpStatus}` : '—'} ({testResult.entryCount} entries)
+                  </span>
+                </div>
+              </div>
+
+              {/* Feed URL banner */}
+              {testResult.feedUrl && (
+                <div className="text-xs bg-[#0B0E14] p-3 rounded-xl border border-gray-800 flex flex-col gap-1">
+                  <span className="text-gray-500 text-[10px] uppercase font-semibold">Feed URL</span>
+                  <a
+                    href={testResult.feedUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[#5865F2] hover:underline font-mono text-[11px] break-all flex items-center gap-1"
+                  >
+                    <span>{testResult.feedUrl}</span>
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                  </a>
+                </div>
+              )}
+
               {testResult.success ? (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-xs text-emerald-400">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Feed parsed successfully. Showing latest video entries:</span>
+                    <span>Feed parsed successfully. Recent video entries:</span>
                   </div>
-                  <div className="divide-y divide-gray-800 bg-[#0B0E14] rounded-xl p-3 border border-gray-800 text-xs">
-                    {testResult.entries.map((e, idx) => (
-                      <div key={idx} className="py-2 flex items-center justify-between">
-                        <span className="font-medium text-white truncate pr-4">{e.title}</span>
-                        <a
-                          href={e.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[#5865F2] hover:underline flex items-center gap-1 shrink-0"
-                        >
-                          <span>Watch</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
-                    ))}
-                  </div>
+                  {testResult.entries.length === 0 ? (
+                    <div className="text-xs text-gray-500 italic p-3 bg-[#0B0E14] rounded-xl border border-gray-800">
+                      Feed is active and valid, but currently contains 0 video entries.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-gray-800 bg-[#0B0E14] rounded-xl p-3 border border-gray-800 text-xs">
+                      {testResult.entries.map((e, idx) => (
+                        <div key={idx} className="py-2 flex items-center justify-between">
+                          <span className="font-medium text-white truncate pr-4">{e.title}</span>
+                          <a
+                            href={e.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#5865F2] hover:underline flex items-center gap-1 shrink-0"
+                          >
+                            <span>Watch</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div className="text-xs text-rose-400">Error: {testResult.error}</div>
+                <div className="text-xs text-rose-400 bg-rose-500/10 p-3 rounded-xl border border-rose-500/20">
+                  <div className="font-bold flex items-center gap-1.5 mb-1">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>Feed Parsing / Retrieval Error</span>
+                  </div>
+                  <span className="font-mono text-[11px] text-rose-300">{testResult.error}</span>
+                </div>
               )}
             </div>
           )}

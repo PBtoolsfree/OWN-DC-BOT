@@ -127,7 +127,13 @@ class YouTubeChannel(Base):
     feed_url = Column(String(512), nullable=False)
     last_checked_at = Column(DateTime, nullable=True)
     last_success_at = Column(DateTime, nullable=True)
+    last_successful_parse_at = Column(DateTime, nullable=True)
+    last_http_status = Column(Integer, nullable=True)
     last_error = Column(Text, nullable=True)
+    consecutive_failures = Column(Integer, default=0, nullable=False)
+    feed_health = Column(String(32), default="UNKNOWN", nullable=False)
+    live_health = Column(String(32), default="UNKNOWN", nullable=False)
+    next_retry_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

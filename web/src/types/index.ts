@@ -54,7 +54,13 @@ export interface YouTubeChannel {
   feed_url: string;
   last_checked_at?: string | null;
   last_success_at?: string | null;
+  last_successful_parse_at?: string | null;
+  last_http_status?: number | null;
   last_error?: string | null;
+  consecutive_failures?: number;
+  feed_health?: 'HEALTHY' | 'DEGRADED' | 'ERROR' | 'UNKNOWN';
+  live_health?: 'HEALTHY' | 'DEGRADED' | 'ERROR' | 'UNKNOWN';
+  next_retry_at?: string | null;
   destinations: YouTubeDestination[];
 }
 

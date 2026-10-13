@@ -110,13 +110,18 @@ class YouTubeChannelRepo:
     @staticmethod
     async def create(session: AsyncSession, youtube_channel_id: str, channel_name: str,
                      handle: str = None, feed_url: str = None) -> YouTubeChannel:
+        from app.youtube.channel_resolver import build_feed_url
+        clean_channel_id = youtube_channel_id.strip()
         if not feed_url:
-            feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={youtube_channel_id}"
+            feed_url = build_feed_url(clean_channel_id)
         channel = YouTubeChannel(
-            youtube_channel_id=youtube_channel_id,
+            youtube_channel_id=clean_channel_id,
             channel_name=channel_name,
             handle=handle,
             feed_url=feed_url,
+            feed_health="UNKNOWN",
+            live_health="UNKNOWN",
+            consecutive_failures=0,
         )
         session.add(channel)
         await session.flush()
@@ -125,17 +130,83 @@ class YouTubeChannelRepo:
     @staticmethod
     async def update_check_status(session: AsyncSession, youtube_channel_id: str,
                                    success: bool, error: str = None) -> None:
-        values = {"last_checked_at": datetime.utcnow()}
-        if success:
-            values["last_success_at"] = datetime.utcnow()
-            values["last_error"] = None
-        else:
-            values["last_error"] = error
-        await session.execute(
-            update(YouTubeChannel)
-            .where(YouTubeChannel.youtube_channel_id == youtube_channel_id)
-            .values(**values)
+        """Legacy helper maintained for backward compatibility."""
+        await YouTubeChannelRepo.update_feed_status(
+            session=session,
+            youtube_channel_id=youtube_channel_id,
+            success=success,
+            http_status=200 if success else None,
+            error=error,
         )
+
+    @staticmethod
+    async def update_feed_status(
+        session: AsyncSession,
+        youtube_channel_id: str,
+        success: bool,
+        http_status: Optional[int] = None,
+        error: Optional[str] = None,
+        entry_count: int = 0,
+        next_retry_at: Optional[datetime] = None,
+    ) -> None:
+        """Update rich feed health telemetry without disabling the channel."""
+        ch = await YouTubeChannelRepo.get_by_channel_id(session, youtube_channel_id)
+        if not ch:
+            return
+        now = datetime.utcnow()
+        ch.last_checked_at = now
+        ch.last_http_status = http_status or (200 if success else None)
+        if success:
+            ch.last_success_at = now
+            ch.last_successful_parse_at = now
+            ch.last_error = None
+            ch.consecutive_failures = 0
+            ch.feed_health = "HEALTHY"
+            ch.next_retry_at = None
+        else:
+            ch.last_error = error
+            ch.consecutive_failures = (ch.consecutive_failures or 0) + 1
+            # Transient degradation vs persistent error
+            ch.feed_health = "DEGRADED" if ch.consecutive_failures < 3 else "ERROR"
+            ch.next_retry_at = next_retry_at
+        ch.updated_at = now
+
+    @staticmethod
+    async def update_live_status(
+        session: AsyncSession,
+        youtube_channel_id: str,
+        live_health: str,
+        error: Optional[str] = None,
+    ) -> None:
+        """Update live detector health telemetry separately from RSS feed health."""
+        ch = await YouTubeChannelRepo.get_by_channel_id(session, youtube_channel_id)
+        if not ch:
+            return
+        ch.live_health = live_health
+        ch.updated_at = datetime.utcnow()
+
+    @staticmethod
+    async def repair_saved_feed_urls(session: AsyncSession) -> int:
+        """
+        Idempotently repair stored YouTube feed URLs to canonical /xml/feeds/videos.xml.
+        Preserves all existing channel IDs, destinations, notification settings, and enabled state.
+        """
+        from app.youtube.channel_resolver import build_feed_url
+        result = await session.execute(select(YouTubeChannel))
+        channels = list(result.scalars().all())
+        updated_count = 0
+        for ch in channels:
+            try:
+                canonical = build_feed_url(ch.youtube_channel_id)
+                if ch.feed_url != canonical:
+                    ch.feed_url = canonical
+                    ch.updated_at = datetime.utcnow()
+                    updated_count += 1
+            except Exception:
+                pass
+        if updated_count > 0:
+            await session.flush()
+        return updated_count
 
     @staticmethod
     async def toggle_enabled(session: AsyncSession, youtube_channel_id: str, enabled: bool) -> None:

@@ -324,20 +324,34 @@ async def list_youtube_channels(username: str = Depends(require_auth)):
     """List all monitored YouTube channels."""
     session = await get_session_direct()
     try:
+        from app.youtube.channel_resolver import build_feed_url
         channels = await YouTubeChannelRepo.get_all(session)
         result = []
         for ch in channels:
             destinations = await YouTubeDestinationRepo.get_for_channel(session, ch.youtube_channel_id)
+            canonical_feed = ch.feed_url
+            if not canonical_feed or "/xml/feeds/" not in canonical_feed:
+                try:
+                    canonical_feed = build_feed_url(ch.youtube_channel_id)
+                except Exception:
+                    canonical_feed = ch.feed_url
+
             result.append({
                 "id": ch.id,
                 "youtube_channel_id": ch.youtube_channel_id,
                 "channel_name": ch.channel_name,
                 "handle": ch.handle,
                 "enabled": ch.enabled,
-                "feed_url": ch.feed_url,
+                "feed_url": canonical_feed,
                 "last_checked_at": ch.last_checked_at.isoformat() if ch.last_checked_at else None,
                 "last_success_at": ch.last_success_at.isoformat() if ch.last_success_at else None,
+                "last_successful_parse_at": ch.last_successful_parse_at.isoformat() if getattr(ch, "last_successful_parse_at", None) else None,
+                "last_http_status": getattr(ch, "last_http_status", None),
                 "last_error": ch.last_error,
+                "consecutive_failures": getattr(ch, "consecutive_failures", 0) or 0,
+                "feed_health": getattr(ch, "feed_health", None) or ("HEALTHY" if not ch.last_error else "ERROR"),
+                "live_health": getattr(ch, "live_health", "UNKNOWN") or "UNKNOWN",
+                "next_retry_at": ch.next_retry_at.isoformat() if getattr(ch, "next_retry_at", None) else None,
                 "destinations": [{
                     "id": d.id,
                     "discord_channel_id": str(d.discord_channel_id),
@@ -460,14 +474,52 @@ async def toggle_youtube_channel(channel_id: str, request: Request, username: st
 
 @router.post("/youtube/test/{channel_id}")
 async def test_youtube_channel(channel_id: str, username: str = Depends(require_auth)):
-    """Test YouTube channel feed."""
+    """Test YouTube channel feed using canonical endpoint and return rich diagnostics."""
     from app.youtube.feed_parser import fetch_feed
+    from app.youtube.channel_resolver import build_feed_url
 
-    result = await fetch_feed(channel_id)
+    clean_id = channel_id.strip()
+    result = await fetch_feed(clean_id)
+
+    # Persist check status to DB if channel is monitored
+    last_success_iso = None
+    session = await get_session_direct()
+    try:
+        ch = await YouTubeChannelRepo.get_by_channel_id(session, clean_id)
+        if ch:
+            now = datetime.utcnow()
+            ch.last_checked_at = now
+            ch.last_http_status = result.http_status or (200 if result.success else None)
+            if result.success:
+                ch.last_success_at = now
+                ch.last_successful_parse_at = now
+                ch.last_error = None
+                ch.consecutive_failures = 0
+                ch.feed_health = "HEALTHY"
+                ch.feed_url = result.feed_url or build_feed_url(clean_id)
+                last_success_iso = now.isoformat()
+            else:
+                ch.last_error = result.error
+                ch.consecutive_failures = (ch.consecutive_failures or 0) + 1
+                ch.feed_health = "DEGRADED" if ch.consecutive_failures < 3 else "ERROR"
+                if ch.last_success_at:
+                    last_success_iso = ch.last_success_at.isoformat()
+            await session.commit()
+    finally:
+        await session.close()
+
+    if not last_success_iso and result.success:
+        last_success_iso = datetime.utcnow().isoformat()
+
     return {
         "success": result.success,
         "channel_name": result.channel_name,
+        "feed_url": result.feed_url or build_feed_url(clean_id),
+        "http_status": result.http_status,
+        "content_type": result.content_type,
         "entry_count": len(result.entries),
+        "last_successful_check": last_success_iso,
+        "feed_status": "HEALTHY" if result.success else ("DEGRADED" if result.is_degraded else "ERROR"),
         "error": result.error,
         "entries": [{
             "title": e.title,
@@ -480,7 +532,9 @@ async def test_youtube_channel(channel_id: str, username: str = Depends(require_
 
 @router.get("/youtube/channels/{channel_id}")
 async def get_youtube_channel(channel_id: str, username: str = Depends(require_auth)):
-    """Get details of a single monitored YouTube channel."""
+    """Get details of a single monitored YouTube channel with rich telemetry."""
+    from app.youtube.channel_resolver import build_feed_url
+
     session = await get_session_direct()
     try:
         ch = await YouTubeChannelRepo.get_by_channel_id(session, channel_id)
@@ -488,16 +542,29 @@ async def get_youtube_channel(channel_id: str, username: str = Depends(require_a
             raise HTTPException(status_code=404, detail="Channel not found")
 
         destinations = await YouTubeDestinationRepo.get_for_channel(session, ch.youtube_channel_id)
+        canonical_feed = ch.feed_url
+        if not canonical_feed or "/xml/feeds/" not in canonical_feed:
+            try:
+                canonical_feed = build_feed_url(ch.youtube_channel_id)
+            except Exception:
+                canonical_feed = ch.feed_url
+
         return {
             "id": ch.id,
             "youtube_channel_id": ch.youtube_channel_id,
             "channel_name": ch.channel_name,
             "handle": ch.handle,
             "enabled": ch.enabled,
-            "feed_url": ch.feed_url,
+            "feed_url": canonical_feed,
             "last_checked_at": ch.last_checked_at.isoformat() if ch.last_checked_at else None,
             "last_success_at": ch.last_success_at.isoformat() if ch.last_success_at else None,
+            "last_successful_parse_at": ch.last_successful_parse_at.isoformat() if getattr(ch, "last_successful_parse_at", None) else None,
+            "last_http_status": getattr(ch, "last_http_status", None),
             "last_error": ch.last_error,
+            "consecutive_failures": getattr(ch, "consecutive_failures", 0) or 0,
+            "feed_health": getattr(ch, "feed_health", None) or ("HEALTHY" if not ch.last_error else "ERROR"),
+            "live_health": getattr(ch, "live_health", "UNKNOWN") or "UNKNOWN",
+            "next_retry_at": ch.next_retry_at.isoformat() if getattr(ch, "next_retry_at", None) else None,
             "destinations": [{
                 "id": d.id,
                 "discord_channel_id": str(d.discord_channel_id),
@@ -581,6 +648,8 @@ async def test_youtube_live(channel_id: str, username: str = Depends(require_aut
             "scheduled_start": live_result.scheduled_start,
             "viewer_count": live_result.viewer_count,
             "error": live_result.error,
+            "api_key_configured": getattr(live_result, "api_key_configured", False),
+            "bot_blocked": getattr(live_result, "bot_blocked", False),
         }
     except Exception as e:
         logger.error("Error during test_youtube_live for %s: %s", channel_id, str(e), exc_info=True)
@@ -596,6 +665,8 @@ async def test_youtube_live(channel_id: str, username: str = Depends(require_aut
             "scheduled_start": None,
             "viewer_count": None,
             "error": str(e),
+            "api_key_configured": False,
+            "bot_blocked": False,
         }
 
 
