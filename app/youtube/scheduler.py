@@ -50,6 +50,7 @@ class YouTubeScheduler:
         self._healthy = True
         self._last_check: Optional[datetime] = None
         self._error_count = 0
+        self._delivery_failures: dict[tuple[str, str, EventType], dict] = {}
 
     @property
     def is_running(self) -> bool:
@@ -161,14 +162,20 @@ class YouTubeScheduler:
             for channel in channels:
                 try:
                     await self._check_single_feed(session, channel)
+                    await session.commit()
                 except Exception as e:
+                    await session.rollback()
                     logger.error("Error checking channel %s: %s", channel.youtube_channel_id, str(e))
-                    await YouTubeChannelRepo.update_feed_status(
-                        session,
-                        channel.youtube_channel_id,
-                        success=False,
-                        error=str(e),
-                    )
+                    try:
+                        await YouTubeChannelRepo.update_feed_status(
+                            session,
+                            channel.youtube_channel_id,
+                            success=False,
+                            error=str(e),
+                        )
+                        await session.commit()
+                    except Exception:
+                        await session.rollback()
 
                 # Delay between channels to be respectful to rate limits
                 await asyncio.sleep(2)
@@ -193,6 +200,7 @@ class YouTubeScheduler:
                 error=result.error,
                 next_retry_at=result.next_retry_at,
             )
+            await session.commit()
             return
 
         # Baseline initialization check: if channel has never had a successful parse AND has no recorded events,
@@ -213,6 +221,7 @@ class YouTubeScheduler:
         )
 
         if not result.entries:
+            await session.commit()
             return
 
         if is_initial_baseline:
@@ -275,6 +284,32 @@ class YouTubeScheduler:
                 )
                 continue
 
+            # Check failure backoff state to prevent uncontrolled retry loops
+            fail_key = (channel.youtube_channel_id, entry.video_id, event_type)
+            fail_record = self._delivery_failures.get(fail_key)
+            if fail_record:
+                attempts = fail_record.get("attempts", 0)
+                last_try = fail_record.get("last_attempt", datetime.min)
+                is_permanent = fail_record.get("permanent", False)
+                # Bounded backoff:
+                # Permanent validation errors (e.g. HTTP 400 50035): backoff 10m, 30m, 2h, capped at 4 attempts
+                # Transient errors: immediate retry on next cycle (0s), then backoff 180s, 600s, 1800s
+                backoff_schedule = [600, 1800, 7200] if is_permanent else [0, 180, 600, 1800]
+                delay_sec = backoff_schedule[min(attempts - 1, len(backoff_schedule) - 1)]
+                now = datetime.utcnow()
+                if (now - last_try).total_seconds() < delay_sec:
+                    logger.debug(
+                        "Candidate %s (%s): in backoff (%d attempts, delay=%ds, permanent=%s), skipping for now",
+                        entry.video_id, event_type.value, attempts, delay_sec, is_permanent
+                    )
+                    continue
+                if is_permanent and attempts >= 4:
+                    logger.warning(
+                        "Candidate %s (%s): delivery permanently failed %d times; suppressing retries until restart or fix",
+                        entry.video_id, event_type.value, attempts
+                    )
+                    continue
+
             # Check which destinations want this event
             eligible_destinations = []
             for dest in destinations:
@@ -320,15 +355,18 @@ class YouTubeScheduler:
                 published_at=entry.published,
                 status=EventStatus.DETECTED,
             )
+            # Commit immediately to release SQLite write lock before Discord network call
+            await session.commit()
 
             # Attempt notification delivery across destinations
             all_sent = True
+            has_permanent_error = False
             for dest in eligible_destinations:
                 logger.info(
                     "Candidate %s (%s): sending %s notification to Discord channel %d",
                     entry.video_id, (entry.title or "")[:40], event_type.value, dest.discord_channel_id
                 )
-                success = await send_notification(
+                res = await send_notification(
                     bot=self.bot,
                     discord_channel_id=dest.discord_channel_id,
                     event_type=event_type,
@@ -343,24 +381,35 @@ class YouTubeScheduler:
                     scheduled_start=sched_start,
                 )
 
-                if not success:
+                if not res:
                     all_sent = False
+                    if getattr(res, "is_permanent", False):
+                        has_permanent_error = True
                     logger.warning(
-                        "Candidate %s (%s): delivery failed to Discord channel %d",
-                        entry.video_id, event_type.value, dest.discord_channel_id
+                        "Candidate %s (%s): delivery failed to Discord channel %d (permanent=%s)",
+                        entry.video_id, event_type.value, dest.discord_channel_id, getattr(res, "is_permanent", False)
                     )
 
             if all_sent:
                 await mark_notified(session, event_id)
+                await session.commit()
+                self._delivery_failures.pop(fail_key, None)
                 logger.info(
                     "Candidate %s (%s): successfully notified all destinations (event_id=%d)",
                     entry.video_id, event_type.value, event_id
                 )
             else:
                 await mark_failed(session, event_id)
+                await session.commit()
+                prev_attempts = fail_record.get("attempts", 0) if fail_record else 0
+                self._delivery_failures[fail_key] = {
+                    "attempts": prev_attempts + 1,
+                    "last_attempt": datetime.utcnow(),
+                    "permanent": has_permanent_error,
+                }
                 logger.warning(
-                    "Candidate %s (%s): delivery failed on at least one destination (event_id=%d); will retry next cycle",
-                    entry.video_id, event_type.value, event_id
+                    "Candidate %s (%s): delivery failed on at least one destination (event_id=%d, permanent=%s); will retry with backoff",
+                    entry.video_id, event_type.value, event_id, has_permanent_error
                 )
 
     async def _check_live_states(self) -> None:
@@ -420,6 +469,7 @@ class YouTubeScheduler:
                         video_url=video_url,
                         live_state=video_state_map.get(event_type),
                     )
+                    await session.commit()
 
                     destinations = await YouTubeDestinationRepo.get_for_channel(
                         session, channel.youtube_channel_id
@@ -453,12 +503,16 @@ class YouTubeScheduler:
 
                         if success:
                             await mark_notified(session, event_id)
+                            await session.commit()
                         else:
                             await mark_failed(session, event_id)
+                            await session.commit()
 
                 except Exception as e:
+                    await session.rollback()
                     logger.error("Live check error for %s: %s", channel.youtube_channel_id, str(e))
 
+                await session.commit()
                 await asyncio.sleep(2)  # Delay between channels
 
             await session.commit()

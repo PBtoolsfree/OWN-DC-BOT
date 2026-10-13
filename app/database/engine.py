@@ -33,17 +33,17 @@ async def init_engine(database_url: str | None = None) -> None:
         url,
         echo=False,
         pool_pre_ping=True,
-        connect_args={"check_same_thread": False} if "sqlite" in url else {},
+        connect_args={"check_same_thread": False, "timeout": 30.0} if "sqlite" in url else {},
     )
 
-    # Enable WAL mode for SQLite
+    # Enable WAL mode for SQLite with 30s busy timeout
     if "sqlite" in url:
         @event.listens_for(_engine.sync_engine, "connect")
         def _set_sqlite_wal(dbapi_conn, _connection_record):
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA busy_timeout=30000")
             cursor.close()
 
     _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)

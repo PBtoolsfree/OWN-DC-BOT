@@ -23,9 +23,11 @@ Covers all production requirements:
 """
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import httpx
 import pytest
 
@@ -1164,4 +1166,261 @@ async def test_startup_baselining_skips_historical_entries_without_broadcast(db_
         assert mock_notify.call_count == 1
         _, kwargs = mock_notify.call_args
         assert kwargs["video_url"] == "https://yt.com/new"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_live_payload_accepted_by_mocked_discord_channel(db_session):
+    """Verify valid scheduled-live payload is created and sent to Discord without invalid fields."""
+    mock_bot = MagicMock()
+    mock_channel = AsyncMock()
+    mock_bot.get_channel.return_value = mock_channel
+
+    res = await send_notification(
+        bot=mock_bot,
+        discord_channel_id=123456789,
+        event_type=EventType.SCHEDULED_LIVE,
+        title="PB HERO is LIVE",
+        video_url=f"https://www.youtube.com/watch?v={PROD_SCHEDULED_VIDEO_ID}",
+        channel_name="PB HERO LIVE",
+        thumbnail_url=f"https://i.ytimg.com/vi/{PROD_SCHEDULED_VIDEO_ID}/hqdefault.jpg",
+        description="Stream description for upcoming broadcast",
+        role_id=999888,
+        channel_id=PB_HERO_LIVE_ID,
+        scheduled_start="2026-10-13T14:30:00+00:00",
+    )
+    assert bool(res) is True
+    assert mock_channel.send.called
+
+    _, send_kwargs = mock_channel.send.call_args
+    assert send_kwargs.get("content") == "<@&999888>"
+    embed = send_kwargs.get("embed")
+    assert embed is not None
+
+    embed_dict = embed.to_dict()
+    # Author URL must be a valid channel URL with NO spaces
+    assert embed_dict["author"]["url"] == f"https://www.youtube.com/channel/{PB_HERO_LIVE_ID}"
+    assert " " not in embed_dict["author"]["url"]
+
+    # Scheduled Start field must be present and formatted as a Discord timestamp
+    assert "fields" in embed_dict
+    assert len(embed_dict["fields"]) == 1
+    assert embed_dict["fields"][0]["name"] == "⏰ Scheduled Start"
+    assert "<t:" in embed_dict["fields"][0]["value"]
+
+    # Image URL must be valid with NO spaces
+    assert embed_dict["image"]["url"] == f"https://i.ytimg.com/vi/{PROD_SCHEDULED_VIDEO_ID}/hqdefault.jpg"
+    assert " " not in embed_dict["image"]["url"]
+
+    # Allowed mentions must only permit role 999888
+    allowed_mentions = send_kwargs.get("allowed_mentions")
+    assert allowed_mentions is not None
+    m_dict = allowed_mentions.to_dict()
+    assert m_dict.get("roles") == [999888]
+    assert m_dict.get("parse") == []
+
+
+@pytest.mark.asyncio
+async def test_missing_scheduled_start_omits_field_and_produces_valid_payload(db_session):
+    """When scheduled_start is missing, omit the field completely instead of generating invalid data."""
+    mock_bot = MagicMock()
+    mock_channel = AsyncMock()
+    mock_bot.get_channel.return_value = mock_channel
+
+    res = await send_notification(
+        bot=mock_bot,
+        discord_channel_id=123456789,
+        event_type=EventType.SCHEDULED_LIVE,
+        title="PB HERO Stream",
+        video_url=f"https://www.youtube.com/watch?v={PROD_SCHEDULED_VIDEO_ID}",
+        channel_name="PB HERO LIVE",
+        channel_id=PB_HERO_LIVE_ID,
+        scheduled_start=None,  # Missing!
+    )
+    assert bool(res) is True
+    assert mock_channel.send.called
+
+    _, send_kwargs = mock_channel.send.call_args
+    embed = send_kwargs.get("embed")
+    embed_dict = embed.to_dict()
+
+    # Field must be omitted when scheduled_start is missing
+    assert "fields" not in embed_dict
+
+    # Author URL must not have spaces
+    assert " " not in embed_dict["author"]["url"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_fields_logged_without_exposing_secrets(caplog):
+    """For discord.py HTTPException, structured error body is safely logged without exposing secrets."""
+    mock_bot = MagicMock()
+    mock_channel = AsyncMock()
+    mock_bot.get_channel.return_value = mock_channel
+
+    # Simulate Discord 400 50035 Invalid Form Body exception
+    resp_mock = MagicMock()
+    resp_mock.status = 400
+    resp_mock.reason = "Bad Request"
+    discord_err = discord.HTTPException(
+        resp_mock,
+        {
+            "code": 50035,
+            "message": "Invalid Form Body",
+            "errors": {
+                "embeds": {
+                    "0": {
+                        "author": {
+                            "url": {
+                                "_errors": [{"code": "URL_TYPE_INVALID_URL", "message": "Not a well formed URL."}]
+                            }
+                        }
+                    }
+                }
+            },
+        },
+    )
+    mock_channel.send.side_effect = discord_err
+
+    secret_token = "DISCORD_SUPER_SECRET_BOT_TOKEN_12345"
+    with caplog.at_level(logging.ERROR):
+        res = await send_notification(
+            bot=mock_bot,
+            discord_channel_id=123456789,
+            event_type=EventType.SCHEDULED_LIVE,
+            title="PB HERO Stream",
+            video_url="https://youtube.com/watch?v=123",
+            channel_name="PB HERO LIVE",
+            channel_id=PB_HERO_LIVE_ID,
+        )
+
+    assert bool(res) is False
+    assert res.is_permanent is True
+    # Verify the logged text identifies the invalid field path and reason
+    assert "embeds.0.author.url: Not a well formed URL" in caplog.text
+    # Verify sensitive token is never present in the log
+    assert secret_token not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_http_400_validation_failure_does_not_retry_infinitely(db_session):
+    """Permanent HTTP 400 errors must not create an uncontrolled retry loop."""
+    channel_id = PB_HERO_LIVE_ID
+    ch = await YouTubeChannelRepo.create(db_session, channel_id, "PB HERO LIVE")
+    ch.last_successful_parse_at = datetime.utcnow() - timedelta(minutes=5)
+    await db_session.flush()
+
+    await YouTubeDestinationRepo.create(
+        db_session,
+        channel_id,
+        discord_channel_id=987654321,
+        upload_enabled=True,
+        scheduled_live_enabled=True,
+    )
+    await db_session.commit()
+
+    entry = FeedEntry(
+        video_id="perm_fail_vid",
+        title="Bad Stream",
+        url="https://www.youtube.com/watch?v=perm_fail_vid",
+        channel_id=channel_id,
+        published=datetime.utcnow() - timedelta(minutes=10),
+    )
+    feed_result = FeedResult(
+        success=True,
+        channel_id=channel_id,
+        channel_name="PB HERO LIVE",
+        feed_url=build_poll_feed_url(channel_id),
+        http_status=200,
+        entries=[entry],
+    )
+
+    mock_bot = MagicMock()
+    mock_discord_channel = AsyncMock()
+    mock_bot.get_channel.return_value = mock_discord_channel
+    scheduler = YouTubeScheduler(mock_bot)
+
+    from app.youtube.notifier import NotificationResult
+
+    with patch("app.youtube.scheduler.fetch_feed", new_callable=AsyncMock) as mock_fetch, \
+         patch("app.youtube.scheduler.classify_feed_entry", new_callable=AsyncMock) as mock_classify, \
+         patch("app.youtube.scheduler.send_notification", new_callable=AsyncMock) as mock_notify:
+
+        mock_fetch.return_value = feed_result
+        mock_classify.return_value = (EventType.SCHEDULED_LIVE, "2026-10-13T14:30:00+00:00")
+        # Simulate permanent 400 validation error
+        mock_notify.return_value = NotificationResult(success=False, is_permanent=True, error="Invalid Form Body")
+
+        # Cycle 1: First attempt fails permanently
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        assert mock_notify.call_count == 1
+
+        # Event must remain FAILED, NOT marked NOTIFIED
+        saved_ev = await YouTubeEventRepo.get_by_key(db_session, channel_id, "perm_fail_vid", EventType.SCHEDULED_LIVE)
+        assert saved_ev is not None
+        assert saved_ev.status == EventStatus.FAILED
+
+        # Cycle 2: Immediate subsequent poll run must be suppressed by backoff, NOT retried
+        mock_notify.reset_mock()
+        await scheduler._check_single_feed(db_session, ch)
+        await db_session.commit()
+
+        # No call made because it is in backoff window!
+        assert mock_notify.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_database_operations_do_not_lock(async_engine):
+    """Concurrent scheduler operations (e.g. YouTube + FreeGames) must not cause SQLite database locked errors."""
+    import asyncio
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    session_factory = async_sessionmaker(
+        bind=async_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+    # First ensure PB HERO LIVE channel and FreeGameSource exist in database
+    async with session_factory() as setup_sess:
+        await YouTubeChannelRepo.create(setup_sess, PB_HERO_LIVE_ID, "PB HERO LIVE")
+        from app.database.repositories import FreeGameSourceRepo
+        await FreeGameSourceRepo.get_or_create(setup_sess, "epic")
+        await setup_sess.commit()
+
+    async def worker_youtube(worker_id: int):
+        for i in range(5):
+            async with session_factory() as sess:
+                await YouTubeEventRepo.record_or_update(
+                    sess,
+                    youtube_channel_id=PB_HERO_LIVE_ID,
+                    video_id=f"concurrent_yt_{worker_id}_{i}",
+                    event_type=EventType.UPLOAD,
+                    title=f"Concurrent Video {i}",
+                    status=EventStatus.DETECTED,
+                )
+                await sess.commit()
+            await asyncio.sleep(0.01)
+
+    async def worker_freegames(worker_id: int):
+        for i in range(5):
+            async with session_factory() as sess:
+                from app.database.repositories import FreeGameSourceRepo
+                await FreeGameSourceRepo.record_success(sess, "epic", i, 120.5)
+                await sess.commit()
+            await asyncio.sleep(0.01)
+
+    # Run 4 concurrent workers simultaneously
+    tasks = [
+        worker_youtube(1),
+        worker_youtube(2),
+        worker_freegames(1),
+        worker_freegames(2),
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # None of the tasks should raise sqlite3.OperationalError: database is locked
+    for r in results:
+        assert not isinstance(r, Exception), f"Concurrent task failed with: {r}"
 
